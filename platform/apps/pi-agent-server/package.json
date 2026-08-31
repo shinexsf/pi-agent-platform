@@ -1,0 +1,40 @@
+{
+  "name": "@pi-agent-platform/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./im-gateway/index": "./src/im-gateway/index.ts",
+    "./im-gateway/channel-registry": "./src/im-gateway/channel-registry.ts",
+    "./im-gateway/logger": "./src/im-gateway/logger.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pi-agent-platform/shared-types": "workspace:*",
+    "@pi-agent-platform/api-types": "workspace:*",
+    "@pi-agent-platform/ipc-protocol": "workspace:*",
+    "@pi-agent-platform/sdk-integration": "workspace:*",
+    "@pi-agent-platform/channel-types": "workspace:*",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0",
+    "drizzle-orm": "^0.36.0",
+    "better-sqlite3": "^11.5.0",
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "vitest": "^2.0.0"
+  }
+}

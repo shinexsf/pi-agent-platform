@@ -1,0 +1,298 @@
+@import 'tailwindcss';
+
+/*
+ * JCEF 内聊天页面样式 —— 跟旧插件 JcefChatPanel 的 LIGHT_CSS / DARK_CSS 保持一致。
+ * 视觉风格不变，只把硬编码颜色改成 CSS variables（Kotlin 端通过 bridge 注入）。
+ *
+ * 旧插件参考：reference/projects/personal-agent-manage/agent-manage-plugin/
+ *   src/main/kotlin/com/personalagent/agent/ui/JcefChatPanel.kt
+ *   §LIGHT_CSS / DARK_CSS
+ */
+
+:root {
+  /* 默认（亮主题）—— 由 useIdeTheme() 在 IDE 注入时覆盖 */
+  --bg-primary: #ffffff;
+  --text-primary: #24292e;
+  --text-secondary: #888888;
+  --border: #e1e4e8;
+
+  /* 消息气泡 */
+  --user-bubble-bg: #3574F0;
+  --user-bubble-text: #ffffff;
+
+  /* tool card 状态色（跟旧插件一致） */
+  --tool-running-bg: #FFF8E1;
+  --tool-running-border: #FFC107;
+  --tool-done-bg: #E8F5E9;
+  --tool-done-border: #4CAF50;
+  --tool-error-bg: #FFEBEE;
+  --tool-error-border: #F44336;
+  --tool-result-bg: rgba(0, 0, 0, 0.08);  /* 内部 tool result 块背景（亮主题）*/
+  /* error 状态下的内部块背景（红 100，比外层 error-bg 稍深一点形成层次）。
+   * 由 .tool-card.status-error 通过 CSS 变量重绑触发。 */
+  --tool-result-bg-error: #FFCDD2;
+  /* running 状态下的内部块背景（amber 200，比外层 tool-running-bg 稍深）。
+   * 修复前这里漏掉，running 卡片内部还是绿色 done 调，跟外层黄撞色。 */
+  --tool-result-bg-running: #FFE082;
+
+  /* error 消息 */
+  --error-bg: #FFEBEE;
+  --error-border: #F44336;
+
+  /* 链接 */
+  --link: #3574F0;
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
+
+  /* markdown hr */
+  --hr-color: #d0d7de;
+
+  /* highlight.js syntax colors (light = github palette) */
+  --hljs-color: #333;
+  --hljs-bg: #f8f8f8;
+  --hljs-comment: #998;
+  --hljs-keyword: #333;
+  --hljs-number: #008080;
+  --hljs-string: #d14;
+  --hljs-title: #900;
+  --hljs-type: #458;
+  --hljs-tag: #000080;
+  --hljs-regexp: #009926;
+  --hljs-symbol: #990073;
+  --hljs-builtin: #0086b3;
+  --hljs-meta: #999;
+  --hljs-deletion-bg: #fdd;
+  --hljs-addition-bg: #dfd;
+}
+
+/* 暗主题（IDE 注入 data-mode="dark" 后应用；tool card 用深色背景高对比） */
+:root[data-mode="dark"] {
+  --bg-primary: #191A1C;
+  --text-primary: #d4d4d4;
+  --text-secondary: #9da0a4;
+  --border: #3c3f41;
+
+  /* tool card：暗主题用深色背景 + 亮色边框 */
+  --tool-running-bg: #3A2A1F;
+  --tool-running-border: #FFA726;
+  --tool-done-bg: #1B3A1B;       /* 深绿（tool 请求卡片背景）*/
+  --tool-done-border: #66BB6A;
+  --tool-error-bg: #3D1F1F;
+  --tool-error-border: #EF5350;
+  --tool-result-bg: #274427;      /* 内部 tool result 块背景 */
+  /* 暗主题 error 内部块：稍亮于外层 error-bg，形成同色系层次。
+   * 旧版本这里漏掉，failed 卡片内部还是绿色 `#274427`，跟外层红 `#3D1F1F`
+   * 撞色（虽然代码逻辑上是 failed，但视觉上像"内绿外红"两个不同状态叠在一起）。 */
+  --tool-result-bg-error: #4D2A2A;
+  /* 暗主题 running 内部块：同色系深棕黄，比外层 running-bg `#3A2A1F` 亮一档。
+   * 跟亮色逻辑对称——修复前 running 卡片内部仍是 done 绿。 */
+  --tool-result-bg-running: #5C3F1F;
+
+  --error-bg: #3D1F1F;
+  --error-border: #EF5350;
+  --link: #6FA8FF;
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+
+  /* markdown hr — 比 --border 略亮一档，跟 IDE 滚动条同色系 */
+  --hr-color: #474749;
+
+  /* highlight.js syntax colors (dark = a11y-dark adapted palette) */
+  --hljs-color: #f8f8f2;
+  --hljs-bg: #2b2b2b;
+  --hljs-comment: #d4d0ab;
+  --hljs-keyword: #dcc6e0;
+  --hljs-number: #f5ab35;
+  --hljs-string: #abe338;
+  --hljs-title: #00e0e0;
+  --hljs-type: #f5ab35;
+  --hljs-tag: #ffa07a;
+  --hljs-regexp: #ffa07a;
+  --hljs-symbol: #abe338;
+  --hljs-builtin: #f5ab35;
+  --hljs-meta: #f5ab35;
+  --hljs-deletion-bg: #4a1f1f;
+  --hljs-addition-bg: #1f4a1f;
+}
+
+/* 浏览器 fallback：没有 data-mode 但用户系统是暗色 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) {
+    --bg-primary: #191A1C;
+    --text-primary: #d4d4d4;
+    --text-secondary: #9da0a4;
+    --border: #3c3f41;
+    --tool-running-bg: #4A3A1F;
+    --tool-running-border: #FFA726;
+    --tool-done-bg: #1B4D2E;
+    --tool-done-border: #66BB6A;
+    --tool-error-bg: #4D1F1F;
+    --tool-error-border: #EF5350;
+    --tool-result-bg-error: #5C3535;
+    --tool-result-bg-running: #6B4722;
+    --link: #6FA8FF;
+    --hr-color: #474749;
+    /* hljs dark fallback values — same palette as :root[data-mode="dark"] above */
+    --hljs-color: #f8f8f2;
+    --hljs-bg: #2b2b2b;
+    --hljs-comment: #d4d0ab;
+    --hljs-keyword: #dcc6e0;
+    --hljs-number: #f5ab35;
+    --hljs-string: #abe338;
+    --hljs-title: #00e0e0;
+    --hljs-type: #f5ab35;
+    --hljs-tag: #ffa07a;
+    --hljs-regexp: #ffa07a;
+    --hljs-symbol: #abe338;
+    --hljs-builtin: #f5ab35;
+    --hljs-meta: #f5ab35;
+    --hljs-deletion-bg: #4a1f1f;
+    --hljs-addition-bg: #1f4a1f;
+  }
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+/* 自定义滚动条（跟旧插件一致） */
+::-webkit-scrollbar {
+  width: 8px;
+  /* Default webkit horizontal scrollbar height is much thicker (~16px on
+     Windows Chrome). Pin it to match the vertical track so wide content
+     (overflowing code blocks, table wrappers) gets a slim scrollbar. */
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Markdown 渲染 */
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+}
+:not(pre) > code {
+  background: rgba(128, 128, 128, 0.15);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+pre {
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+}
+blockquote {
+  border-left: 3px solid var(--border);
+  margin: 8px 0;
+  padding-left: 12px;
+  color: var(--text-secondary);
+}
+table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+th {
+  background: rgba(128, 128, 128, 0.08);
+}
+ul, ol {
+  padding-left: 24px;
+}
+
+/* highlight.js token colors. Class names are emitted into raw HTML via v-html
+   from markdown-it, so they're not in this component's scoped tree and CANNOT
+   use :deep. Rules must be global (in style.css) and use CSS variables so
+   light/dark themes each get their palette. Colors mirror github.css (light)
+   and a11y-dark.css (dark) — see :root / :root[data-mode="dark"] above. */
+.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0.5em;
+  color: var(--hljs-color);
+  background: var(--hljs-bg);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: var(--hljs-keyword);
+  font-weight: bold;
+}
+.hljs-subst { font-weight: normal; }
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: var(--hljs-number);
+}
+.hljs-string,
+.hljs-doctag {
+  color: var(--hljs-string);
+}
+.hljs-title,
+.hljs-section,
+.hljs-selector-id {
+  color: var(--hljs-title);
+  font-weight: bold;
+}
+.hljs-type,
+.hljs-class .hljs-title {
+  color: var(--hljs-type);
+  font-weight: bold;
+}
+.hljs-tag,
+.hljs-name,
+.hljs-attribute {
+  color: var(--hljs-tag);
+}
+.hljs-regexp,
+.hljs-link {
+  color: var(--hljs-regexp);
+}
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--hljs-symbol);
+}
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--hljs-builtin);
+}
+.hljs-meta {
+  color: var(--hljs-meta);
+  font-weight: bold;
+}
+.hljs-deletion { background: var(--hljs-deletion-bg); }
+.hljs-addition { background: var(--hljs-addition-bg); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }

@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>com.piagent.idea</id>
+    <name>Pi</name>
+    <vendor>pi-agent-platform</vendor>
+
+    <description><![CDATA[
+        pi-agent-idea plugin for IntelliJ IDEA.
+        Connects to pi-agent-server for Agent/Session management, embeds Vue UI via JCEF.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                id="pi-agent-idea"
+                anchor="right"
+                icon="icons/pi.png"
+                displayName="Pi"
+                factoryClass="com.piagent.idea.ui.ChatToolWindowFactory"/>
+
+        <applicationService
+                serviceImplementation="com.piagent.idea.settings.PluginSettings"/>
+
+        <projectConfigurable
+                groupId="tools"
+                displayName="pi-agent-idea"
+                id="pi-agent-idea.settings"
+                instance="com.piagent.idea.settings.SettingsConfigurable"/>
+    </extensions>
+
+    <actions>
+    </actions>
+</idea-plugin>

@@ -1,0 +1,22 @@
+{
+  "name": "@pi-agent-platform/platform-root",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js monorepo root for pi-agent-platform",
+  "type": "module",
+  "scripts": {
+    "dev:server": "pnpm --filter @pi-agent-platform/session-worker build && pnpm --filter @pi-agent-platform/server dev",
+    "dev:web": "pnpm --filter @pi-agent-platform/web dev",
+    "dev:ide": "pnpm --filter @pi-agent-platform/ide dev",
+    "build": "pnpm -r build",
+    "build:web": "pnpm --filter @pi-agent-platform/web build && node scripts/copy-spa.mjs --src=apps/pi-agent-web/dist --dst=apps/pi-agent-server/public/web",
+    "build:ide": "pnpm --filter @pi-agent-platform/ide build && node scripts/copy-spa.mjs --src=apps/pi-agent-ide/dist --dst=apps/pi-agent-server/public/ide",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

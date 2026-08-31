@@ -1,0 +1,11 @@
+packages:
+  - 'apps/*'
+  - 'workers/*'
+  - 'packages/*'
+  - 'channels/*'
+allowBuilds:
+  '@google/genai': true
+  better-sqlite3: true
+  esbuild: true
+  protobufjs: true
+  vue-demi: true

@@ -1,0 +1,17 @@
+/.idea/
+/.pi/
+/openspec/
+/reference/projects/
+node_modules/
+/tmp/
+/pi-agent-idea/.gradle/
+/pi-agent-idea/.intellijPlatform/
+/pi-agent-idea/build/
+/platform/apps/pi-agent-server/data.db
+/platform/apps/pi-agent-server/data.db-shm
+/platform/apps/pi-agent-server/data.db-wal
+/platform/apps/pi-agent-web/dist/
+/platform/apps/pi-agent-ide/dist/
+/nul
+/platform/apps/pi-agent-server/public/ide/
+/platform/apps/pi-agent-server/public/web/
