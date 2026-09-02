@@ -56,7 +56,7 @@ export function buildImGatewayChildren(pages: ChannelAdminPage[]): RouteRecordRa
   const children: RouteRecordRaw[] = [];
   for (const page of pages) {
     children.push({
-      path: '/' + page.channelType,
+      path: page.channelType,
       component: page.component,
       meta: {
         navLabel: page.navItem.label,
@@ -68,7 +68,7 @@ export function buildImGatewayChildren(pages: ChannelAdminPage[]): RouteRecordRa
     if (page.subRoutes) {
       for (const sub of page.subRoutes) {
         children.push({
-          path: '/' + page.channelType + sub.path,
+          path: page.channelType + sub.path,
           component: sub.component,
           meta: sub.meta ?? {},
         });
@@ -84,7 +84,7 @@ export function buildImGatewayRoute(pages: ChannelAdminPage[]): RouteRecordRaw {
     path: '/im',
     component: () => import('./ImGatewayLayout.vue'),
     children: [
-      { path: '', redirect: pages[0] ? '/' + pages[0].channelType : '/agents' },
+      { path: '', redirect: pages[0] ? `/im/${pages[0].channelType}` : '/agents' },
       ...buildImGatewayChildren(pages),
     ],
   };

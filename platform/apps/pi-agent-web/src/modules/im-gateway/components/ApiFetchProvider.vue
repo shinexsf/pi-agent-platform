@@ -5,16 +5,13 @@
  * Channel pages use `useChannelAdminHost()` to get apiFetch which automatically
  * pre-pends the channel-type prefix from the route.
  */
-import { provide, onMounted, ref } from 'vue';
+import { provide } from 'vue';
 import type { ChannelAdminHost, ToastOptions, ConfirmDialogOptions } from '@pi-agent-platform/channel-types';
 import { ChannelAdminHostKey } from '../channel-admin';
 
 const props = defineProps<{
   channelType: string;
 }>();
-
-const ready = ref(false);
-const error = ref<string | null>(null);
 
 const host: ChannelAdminHost = {
   apiFetch: async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown) => {
@@ -61,20 +58,12 @@ function interpolate(template: string, params?: Record<string, unknown>): string
 }
 
 provide(ChannelAdminHostKey, host);
-
-onMounted(() => {
-  ready.value = true;
-});
 </script>
 
 <template>
-  <div class="api-fetch-provider">
-    <div v-if="error" class="error">{{ error }}</div>
-    <slot v-else />
-  </div>
+  <div class="api-fetch-provider"><slot /></div>
 </template>
 
 <style scoped>
 .api-fetch-provider { display: contents; }
-.error { background: #fee; color: #c00; padding: 12px; border-radius: 6px; }
 </style>

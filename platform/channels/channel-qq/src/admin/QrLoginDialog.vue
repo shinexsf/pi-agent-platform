@@ -46,9 +46,11 @@ interface AgentRow {
 }
 const agents = ref<AgentRow[]>([]);
 const agentsLoading = ref(false);
+const agentsError = ref<string | null>(null);
 
 async function loadAgents(): Promise<void> {
   agentsLoading.value = true;
+  agentsError.value = null;
   try {
     // /api/agents is top-level (not under /api/im/<type>/), so we must use raw fetch
     // instead of host.apiFetch (which prefixes with /api/im/<type>).
@@ -60,8 +62,9 @@ async function loadAgents(): Promise<void> {
     } else if (list && Array.isArray((list as { agents?: AgentRow[] }).agents)) {
       agents.value = (list as { agents?: AgentRow[] }).agents ?? [];
     }
-  } catch (err) {
-    console.warn('[qq-dialog] failed to load agents', err);
+  } catch {
+    agents.value = [];
+    agentsError.value = '无法加载 Agent 列表。请关闭窗口后重新打开。';
   } finally {
     agentsLoading.value = false;
   }
@@ -70,9 +73,6 @@ async function loadAgents(): Promise<void> {
 // Scan phase state
 const channelId = ref<string | null>(null);
 const qrUrl = ref<string | null>(null);
-// Raw value emitted by SDK (often a URL string, sometimes data URL / base64).
-const qrRaw = ref<string | null>(null);
-const qrRawKind = ref<'url' | 'data' | 'base64' | 'unknown'>('unknown');
 const state = ref<'waiting' | 'qr-shown' | 'scanned' | 'expired' | 'connected' | 'error'>('waiting');
 const errorMsg = ref<string | null>(null);
 const events = ref<Array<{ kind: string; message?: string; timestamp: string; data?: unknown }>>([]);
@@ -159,8 +159,8 @@ async function handleSubmitSetup(): Promise<void> {
     channelId.value = res.channelId;
     phase.value = 'scan';
     startSseThenStart();
-  } catch (err) {
-    errorMsg.value = String(err);
+  } catch {
+    errorMsg.value = '无法创建 QQ 机器人。请检查服务连接后重试。';
   }
 }
 
@@ -180,13 +180,10 @@ function startSseThenStart(): void {
 
       if (event.kind === 'qr-url') {
         const url = (event.data as { qrUrl?: string } | undefined)?.qrUrl;
-        const raw = (event.data as { qrRawPreview?: string } | undefined)?.qrRawPreview;
         if (url) {
-          qrRaw.value = raw ?? url;
           // Render via qrcode lib (handles all 3 SDK formats)
           toRenderableQr(url).then((res) => {
             qrUrl.value = res.dataUrl;
-            qrRawKind.value = res.kind;
           });
           state.value = 'qr-shown';
         }
@@ -197,14 +194,14 @@ function startSseThenStart(): void {
       } else if (event.kind === 'connected') {
         state.value = 'connected';
         phase.value = 'connected';
-        host()?.showToast({ message: '登录成功!', variant: 'success' });
+        host()?.showToast({ message: 'QQ 机器人已连接。', variant: 'success' });
         setTimeout(() => {
           emit('update:open', false);
           emit('connected');
         }, 1500);
       } else if (event.kind === 'error' || event.kind === 'start-failed') {
         state.value = 'error';
-        errorMsg.value = event.message ?? '登录失败';
+        errorMsg.value = 'QQ 登录失败。请查看事件记录后重试。';
       }
     },
   });
@@ -212,8 +209,8 @@ function startSseThenStart(): void {
   // 2. Trigger SDK login (small delay to ensure SSE handler is attached)
   setTimeout(() => {
     if (!channelId.value) return;
-    host()?.apiFetch('POST', `/channels/${channelId.value}/start-qr`).catch((err) => {
-      errorMsg.value = String(err);
+    host()?.apiFetch('POST', `/channels/${channelId.value}/start-qr`).catch(() => {
+      errorMsg.value = '无法启动 QQ 扫码授权。请关闭窗口后重试。';
       state.value = 'error';
     });
   }, 100);
@@ -242,34 +239,35 @@ onBeforeUnmount(() => stopStream?.());
 <template>
   <Teleport to="body">
     <div v-if="open" class="qr-overlay" @click.self="close">
-      <div class="qr-dialog">
+      <div class="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qq-qr-title">
         <div class="dialog-header">
-          <h3>
-            <span v-if="channelType === 'wechat'">📱 扫码登录新微信机器人</span>
-            <span v-else>🤖 创建 QQ 机器人</span>
+          <h3 id="qq-qr-title">
+            <span v-if="channelType === 'wechat'">扫码添加微信机器人</span>
+            <span v-else>扫码添加 QQ 机器人</span>
           </h3>
-          <button class="btn-close" @click="close">×</button>
+          <button class="btn-close" type="button" aria-label="关闭" @click="close">×</button>
         </div>
 
         <!-- Phase 1: Setup form -->
         <div v-if="phase === 'setup'" class="setup-form">
           <p v-if="channelType === 'wechat'" class="hint">
-            填写机器人信息 → 点击 "开始扫码" → 用 iOS 微信扫码 → 完成
+            填写机器人信息，然后使用 iOS 微信扫描二维码。
           </p>
           <p v-else class="hint">
-            选择 Agent → 点击 "扫码添加机器人" → 用<b>手机 QQ</b>扫 QR → 在手机上点授权 → 机器人名字会自动从 QQ 拉取
+            选择默认 Agent，然后使用手机 QQ 扫描二维码并完成授权。机器人名称会从 QQ 自动获取。
           </p>
 
           <label>
-            <span>Default Agent <em>*</em></span>
+            <span>默认 Agent <em>*</em></span>
             <select v-model="form.defaultAgentId" :disabled="agentsLoading">
-              <option value="" disabled>{{ agentsLoading ? '加载中…' : agents.length === 0 ? '暂无 Agent,请先创建' : '选择 Agent' }}</option>
+              <option value="" disabled>{{ agentsLoading ? '正在加载 Agent…' : agentsError ? '无法加载 Agent 列表' : agents.length === 0 ? '暂无 Agent，请先创建' : '选择 Agent' }}</option>
               <option v-for="a in agents" :key="a.id" :value="a.id">
                 {{ a.name }} — {{ a.model }}{{ a.description ? ` (${a.description})` : '' }}
               </option>
             </select>
           </label>
 
+          <div v-if="agentsError" class="error">{{ agentsError }}</div>
           <div v-if="errorMsg" class="error">{{ errorMsg }}</div>
 
           <div class="actions">
@@ -283,7 +281,7 @@ onBeforeUnmount(() => stopStream?.());
         <!-- Phase 2: Scan panel -->
         <div v-else-if="phase === 'scan' || phase === 'connected'" class="scan-panel">
           <p v-if="channelType === 'wechat'" class="hint">
-            ⚠️ 仅 iOS 微信支持扫码
+            目前仅支持使用 iOS 微信扫码登录。
           </p>
 
           <div class="scan-grid">
@@ -291,33 +289,33 @@ onBeforeUnmount(() => stopStream?.());
             <div class="qr-side">
               <div v-if="state === 'waiting'" class="state waiting">
                 <div class="spinner" />
-                <p>等待 SDK 生成 QR...</p>
+                <p>正在生成二维码…</p>
               </div>
 
               <div v-else-if="state === 'qr-shown' || state === 'scanned'" class="state">
-                <img v-if="qrUrl" :src="qrUrl" alt="QR code" class="qr-image" />
-                <p v-if="state === 'scanned'" class="status scanned">已扫码,等待确认...</p>
-                <small v-else-if="channelType === 'wechat'">用手机微信扫描 ({{ qrRawKind }})</small>
-                <small v-else>用手机 QQ 扫码授权 ({{ qrRawKind }})</small>
+                <img v-if="qrUrl" :src="qrUrl" alt="QQ 授权二维码" class="qr-image" />
+                <p v-if="state === 'scanned'" class="status scanned">已扫码，请在手机上确认授权。</p>
+                <small v-else-if="channelType === 'wechat'">请使用手机微信扫描二维码。</small>
+                <small v-else>请使用手机 QQ 扫描二维码并授权。</small>
               </div>
 
               <div v-else-if="state === 'expired'" class="state expired">
-                <p>QR 码已过期</p>
+                <p>二维码已过期，请关闭窗口后重新开始。</p>
               </div>
 
               <div v-else-if="state === 'connected'" class="state connected">
-                <p>✅ 登录成功</p>
+                <p>授权成功，正在完成配置…</p>
               </div>
 
               <div v-else-if="state === 'error'" class="state error">
-                <p>❌ {{ errorMsg ?? '登录失败' }}</p>
+                <p>{{ errorMsg ?? '授权失败。请查看事件记录后重试。' }}</p>
               </div>
             </div>
 
             <!-- Live event log -->
             <div class="log-side">
-              <h5>实时事件 ({{ events.length }})</h5>
-              <div v-if="events.length === 0" class="log-empty">暂无事件 (SDK 正在初始化...)</div>
+              <h5>事件记录（{{ events.length }}）</h5>
+              <div v-if="events.length === 0" class="log-empty">暂时没有事件，正在初始化授权服务…</div>
               <ul v-else class="log-list">
                 <li v-for="(ev, i) in events" :key="i" :class="`kind-${ev.kind}`">
                   <span class="time">{{ fmtTime(ev.timestamp) }}</span>
@@ -335,7 +333,7 @@ onBeforeUnmount(() => stopStream?.());
 
         <!-- Error fallback -->
         <div v-else-if="phase === 'error'" class="error-panel">
-          <p>❌ {{ errorMsg }}</p>
+          <p>{{ errorMsg }}</p>
           <button @click="reset">重试</button>
         </div>
       </div>

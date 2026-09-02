@@ -10,6 +10,7 @@ const QqChannelAdminPage: ChannelAdminPage = {
     path: '/im/qq',
     label: 'QQ Channel',
     order: 30,
+    icon: 'qq',
   },
   component: () => import('./QqChannelsPage.vue'),
 };

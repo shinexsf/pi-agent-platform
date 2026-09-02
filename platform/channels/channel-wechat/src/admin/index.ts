@@ -12,6 +12,7 @@ const WechatChannelAdminPage: ChannelAdminPage = {
     path: '/im/wechat',
     label: 'WeChat Channel',
     order: 40,
+    icon: 'wechat',
   },
   component: () => import('./WechatChannelsPage.vue'),
 };

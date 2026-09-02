@@ -4,10 +4,11 @@
  *
  * Reads all Vue Router routes, filters those with `meta.navLabel`, sorts by
  * `meta.navOrder` (default 100). Renders one link per entry with the label
- * (and optional lucide icon — text fallback if icon not installed).
+ * alongside one shared, authored SVG icon family.
  */
 import { computed } from 'vue';
-import { useRoute, useRouter, type RouteRecordNormalized } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import AppIcon from '../../../components/ui/AppIcon.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -41,17 +42,27 @@ function isPathActive(path: string): boolean {
   if (path === '/') return route.path === '/';
   return route.path === path || route.path.startsWith(`${path}/`);
 }
+
+function iconName(entry: NavEntry): string {
+  if (entry.icon && !/[\p{Extended_Pictographic}]/u.test(entry.icon)) return entry.icon;
+  if (entry.path.includes('/wechat')) return 'wechat';
+  if (entry.path.includes('/qq')) return 'qq';
+  if (entry.path.includes('/sessions')) return 'sessions';
+  return 'agents';
+}
 </script>
 
 <template>
-  <nav class="top-nav">
+  <nav class="top-nav" aria-label="Primary navigation">
     <router-link
       v-for="entry in navEntries"
       :key="entry.path"
       :to="entry.path"
       :class="['nav-link', { active: entry.isActive }]"
+      :style="entry.isActive ? { viewTransitionName: 'nav-active' } : undefined"
+      :aria-current="entry.isActive ? 'page' : undefined"
     >
-      <span v-if="entry.icon" class="nav-icon">{{ entry.icon }}</span>
+      <AppIcon :name="iconName(entry)" :size="17" />
       <span class="nav-label">{{ entry.label }}</span>
     </router-link>
   </nav>
@@ -60,38 +71,52 @@ function isPathActive(path: string): boolean {
 <style scoped>
 .top-nav {
   display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 4px;
-  padding: 0 16px;
-  height: 48px;
-  background: #f9fafb;
-  border-bottom: 1px solid #e5e7eb;
+  justify-content: center;
+  gap: 5px;
   overflow-x: auto;
   white-space: nowrap;
+  scrollbar-width: none;
+}
+.top-nav::-webkit-scrollbar {
+  display: none;
 }
 .nav-link {
   display: inline-flex;
+  min-height: 38px;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 6px;
-  color: #4b5563;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  color: var(--text-secondary);
   text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.1s ease;
+  font-size: 0.79rem;
+  font-weight: 650;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 .nav-link:hover {
-  background: #f3f4f6;
-  color: #111827;
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .nav-link.active {
-  background: #3b82f6;
-  color: white;
-}
-.nav-icon {
-  font-size: 14px;
-  opacity: 0.8;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 .nav-label { line-height: 1; }
+
+@media (max-width: 680px) {
+  .top-nav {
+    grid-column: 1 / -1;
+    width: calc(100% + 32px);
+    margin-left: -16px;
+    padding: 0 16px 9px;
+    justify-content: flex-start;
+  }
+
+  .nav-link {
+    min-height: 36px;
+    padding: 8px 11px;
+  }
+}
 </style>

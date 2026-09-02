@@ -58,8 +58,8 @@ async function refresh(): Promise<void> {
   error.value = null;
   try {
     channels.value = await api.value.list();
-  } catch (e) {
-    error.value = String(e);
+  } catch {
+    error.value = '无法加载 QQ 机器人。请检查服务连接并刷新页面重试。';
   } finally {
     loading.value = false;
   }
@@ -69,10 +69,10 @@ async function handleStart(id: string): Promise<void> {
   if (!api.value || !host.value) return;
   try {
     await api.value.start(id);
-    host.value.showToast({ message: 'Start requested', variant: 'info' });
+    host.value.showToast({ message: '启动请求已发送。', variant: 'info' });
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Start failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法启动 QQ 机器人。请检查渠道配置后重试。', variant: 'error' });
   }
 }
 
@@ -80,28 +80,29 @@ async function handleStop(id: string): Promise<void> {
   if (!api.value || !host.value) return;
   try {
     await api.value.stop(id);
-    host.value.showToast({ message: 'Stopped', variant: 'info' });
+    host.value.showToast({ message: 'QQ 机器人已停止。', variant: 'info' });
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Stop failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法停止 QQ 机器人。请稍后重试。', variant: 'error' });
   }
 }
 
 async function handleDelete(id: string, name: string): Promise<void> {
   if (!api.value || !host.value) return;
   const ok = await host.value.showConfirmDialog({
-    title: 'Delete Channel',
-    message: `Delete "${name}"?`,
-    confirmText: 'Delete',
+    title: '删除 QQ 机器人？',
+    message: `删除“${name}”后，该机器人会停止运行，渠道配置也会被永久移除。`,
+    confirmText: '删除',
+    cancelText: '取消',
     destructive: true,
   });
   if (!ok) return;
   try {
     await api.value.remove(id);
     await refresh();
-    host.value.showToast({ message: 'Deleted', variant: 'info' });
-  } catch (e) {
-    host.value.showToast({ message: `Delete failed: ${String(e)}`, variant: 'error' });
+    host.value.showToast({ message: 'QQ 机器人已删除。', variant: 'info' });
+  } catch {
+    host.value.showToast({ message: '无法删除 QQ 机器人。请稍后重试。', variant: 'error' });
   }
 }
 
@@ -124,11 +125,11 @@ async function saveAgentEditor(): Promise<void> {
   }
   try {
     await api.value.update(id, { defaultAgentId: newAgentId });
-    host.value.showToast({ message: 'Agent 已更新,后续消息使用新 Agent', variant: 'success' });
+    host.value.showToast({ message: '默认 Agent 已更新。后续消息将由新 Agent 处理。', variant: 'success' });
     editingChannelId.value = null;
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Update failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法更新默认 Agent。请稍后重试。', variant: 'error' });
   }
 }
 </script>
@@ -136,8 +137,8 @@ async function saveAgentEditor(): Promise<void> {
 <template>
   <div class="qq-channels-page">
     <header class="page-header">
-      <h2>QQ Channels</h2>
-      <p class="hint">⚠️ MVP 仅支持私聊 (C2C)。群聊消息会被 fast-fail。</p>
+      <h2>QQ 机器人</h2>
+      <p class="hint">当前版本仅支持 QQ 私聊（C2C），群聊消息不会被处理。</p>
     </header>
 
     <section v-if="error" class="error">{{ error }}</section>
@@ -145,26 +146,26 @@ async function saveAgentEditor(): Promise<void> {
     <!-- Create CTA -->
     <section class="qr-login-cta">
       <button class="btn-qr-login" @click="showCreate = true">
-        🤖 创建 QQ 机器人
+        扫码添加 QQ 机器人
       </button>
       <p class="cta-hint">
-        点击按钮 → 填写 displayName + agentId → 弹 QR → 用<b>手机 QQ</b>扫码 → 在手机上点授权 → 自动入库并启动
+        选择默认 Agent，然后使用手机 QQ 扫描二维码并完成授权。机器人会自动创建并启动。
       </p>
     </section>
 
     <section class="channel-list">
-      <h3>Channels ({{ channels.length }})</h3>
-      <div v-if="loading">Loading...</div>
+      <h3>QQ 机器人（{{ channels.length }}）</h3>
+      <div v-if="loading">正在加载 QQ 机器人…</div>
       <div v-else-if="channels.length === 0" class="empty">
-        还没有 channel。点击顶部"创建 QQ 机器人"按钮开始。
+        还没有 QQ 机器人。点击上方“扫码添加 QQ 机器人”开始配置。
       </div>
       <table v-else>
         <thead>
           <tr>
-            <th>Name</th>
+            <th>名称</th>
             <th>Agent</th>
             <th>App ID</th>
-            <th>Actions</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -172,14 +173,14 @@ async function saveAgentEditor(): Promise<void> {
             <td>{{ ch.displayName }}</td>
             <td>
               <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
-                {{ agentLabel(ch.defaultAgentId) }} <span class="edit-icon">✎</span>
+                {{ agentLabel(ch.defaultAgentId) }} <span class="edit-label">更改</span>
               </button>
             </td>
             <td><code>{{ ch.appId?.slice(0, 12) ?? ch.extra?.appId?.slice(0, 12) ?? '—' }}…</code></td>
             <td>
-              <button @click="handleStart(ch.id)">Start</button>
-              <button @click="handleStop(ch.id)">Stop</button>
-              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">Delete</button>
+              <button @click="handleStart(ch.id)">启动</button>
+              <button @click="handleStop(ch.id)">停止</button>
+              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
             </td>
           </tr>
         </tbody>
@@ -190,13 +191,16 @@ async function saveAgentEditor(): Promise<void> {
     <div v-if="editingChannelId" class="modal-backdrop" @click.self="editingChannelId = null">
       <div class="modal">
         <h3>更改 Agent</h3>
-        <p class="hint">选择新 Agent 后,当前会话 worker 会被杀掉,下一条消息使用新 Agent 处理。</p>
-        <select v-model="editingAgentId">
-          <option value="" disabled>选择 Agent</option>
-          <option v-for="a in agents" :key="a.id" :value="a.id">
-            {{ a.name }} — {{ a.model }}
-          </option>
-        </select>
+        <p class="hint">更改后，当前会话进程将停止；收到下一条消息时，系统会使用新 Agent 启动会话。</p>
+        <label class="modal-field">
+          <span>默认 Agent</span>
+          <select v-model="editingAgentId">
+            <option value="" disabled>选择 Agent</option>
+            <option v-for="a in agents" :key="a.id" :value="a.id">
+              {{ a.name }} — {{ a.model }}
+            </option>
+          </select>
+        </label>
         <div class="modal-actions">
           <button @click="editingChannelId = null">取消</button>
           <button class="primary" @click="saveAgentEditor">保存</button>
@@ -251,12 +255,13 @@ button.link { background: transparent; border: 1px dashed #c4b5fd; color: #6d28d
 button.link:hover { background: #f5f3ff; border-style: solid; }
 button.primary { background: #8b5cf6; color: white; border-color: #8b5cf6; }
 button.primary:hover { background: #7c3aed; }
-.edit-icon { font-size: 11px; margin-left: 4px; opacity: 0.7; }
+.edit-label { font-size: 11px; margin-left: 4px; opacity: 0.7; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal { background: white; border-radius: 8px; padding: 24px; max-width: 480px; width: 90%; }
 .modal h3 { margin: 0 0 8px; }
 .modal .hint { color: #6b7280; font-size: 13px; margin: 0 0 16px; }
+.modal-field { display: grid; gap: 5px; color: #4b5563; font-size: 13px; }
 .modal select { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 button.danger { color: #c00; border-color: #c00; }

@@ -75,8 +75,8 @@ async function refresh(): Promise<void> {
   error.value = null;
   try {
     channels.value = await api.value.list();
-  } catch (e) {
-    error.value = String(e);
+  } catch {
+    error.value = '无法加载微信机器人。请检查服务连接并刷新页面重试。';
   } finally {
     loading.value = false;
   }
@@ -85,7 +85,7 @@ async function refresh(): Promise<void> {
 async function handleManualCreate(): Promise<void> {
   if (!api.value || !host.value) return;
   if (!newChannel.value.displayName || !newChannel.value.defaultAgentId || !newChannel.value.storageDir) {
-    error.value = 'All fields are required';
+    error.value = '请填写机器人名称、默认 Agent 和存储目录。';
     return;
   }
   try {
@@ -93,9 +93,9 @@ async function handleManualCreate(): Promise<void> {
     newChannel.value = { displayName: '', defaultAgentId: '', storageDir: '' };
     showManualCreate.value = false;
     await refresh();
-    host.value.showToast({ message: 'Channel created', variant: 'success' });
-  } catch (e) {
-    error.value = String(e);
+    host.value.showToast({ message: '微信机器人已创建。', variant: 'success' });
+  } catch {
+    error.value = '无法创建微信机器人。请检查填写内容后重试。';
   }
 }
 
@@ -103,10 +103,10 @@ async function handleStart(id: string): Promise<void> {
   if (!api.value || !host.value) return;
   try {
     await api.value.start(id);
-    host.value.showToast({ message: 'Start requested (watch channel for status)', variant: 'info' });
+    host.value.showToast({ message: '启动请求已发送。', variant: 'info' });
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Start failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法启动微信机器人。请检查渠道配置后重试。', variant: 'error' });
   }
 }
 
@@ -114,28 +114,29 @@ async function handleStop(id: string): Promise<void> {
   if (!api.value || !host.value) return;
   try {
     await api.value.stop(id);
-    host.value.showToast({ message: 'Stopped', variant: 'info' });
+    host.value.showToast({ message: '微信机器人已停止。', variant: 'info' });
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Stop failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法停止微信机器人。请稍后重试。', variant: 'error' });
   }
 }
 
 async function handleDelete(id: string, name: string): Promise<void> {
   if (!api.value || !host.value) return;
   const ok = await host.value.showConfirmDialog({
-    title: 'Delete Channel',
-    message: `Delete "${name}"? This will stop the adapter and remove the row.`,
-    confirmText: 'Delete',
+    title: '删除微信机器人？',
+    message: `删除“${name}”后，该机器人会停止运行，渠道配置也会被永久移除。`,
+    confirmText: '删除',
+    cancelText: '取消',
     destructive: true,
   });
   if (!ok) return;
   try {
     await api.value.remove(id);
     await refresh();
-    host.value.showToast({ message: 'Deleted', variant: 'info' });
-  } catch (e) {
-    host.value.showToast({ message: `Delete failed: ${String(e)}`, variant: 'error' });
+    host.value.showToast({ message: '微信机器人已删除。', variant: 'info' });
+  } catch {
+    host.value.showToast({ message: '无法删除微信机器人。请稍后重试。', variant: 'error' });
   }
 }
 
@@ -154,11 +155,11 @@ async function saveAgentEditor(): Promise<void> {
   }
   try {
     await api.value.update(id, { defaultAgentId: newAgentId });
-    host.value.showToast({ message: 'Agent 已更新,后续消息使用新 Agent', variant: 'success' });
+    host.value.showToast({ message: '默认 Agent 已更新。后续消息将由新 Agent 处理。', variant: 'success' });
     editingChannelId.value = null;
     await refresh();
-  } catch (e) {
-    host.value.showToast({ message: `Update failed: ${String(e)}`, variant: 'error' });
+  } catch {
+    host.value.showToast({ message: '无法更新默认 Agent。请稍后重试。', variant: 'error' });
   }
 }
 
@@ -170,8 +171,8 @@ onMounted(async () => {
 <template>
   <div class="wechat-channels-page">
     <header class="page-header">
-      <h2>WeChat Channels</h2>
-      <p class="hint">⚠️ WeChat iLink ClawBot 仅支持 iOS 客户端扫码登录</p>
+      <h2>微信机器人</h2>
+      <p class="hint">WeChat iLink ClawBot 目前仅支持通过 iOS 微信扫码登录。</p>
     </header>
 
     <section v-if="error" class="error">{{ error }}</section>
@@ -179,41 +180,50 @@ onMounted(async () => {
     <!-- QR login: prominent default flow -->
     <section class="qr-login-cta">
       <button class="btn-qr-login" @click="showQrLogin = true">
-        📱 扫码登录新微信机器人
+        扫码添加微信机器人
       </button>
       <p class="cta-hint">
-        点击按钮 → 填写 displayName 和 defaultAgentId → 弹 QR → 用 iOS 微信扫码 → 自动入库并启动
+        填写机器人名称并选择默认 Agent，然后使用 iOS 微信扫描二维码。授权完成后，机器人会自动创建并启动。
       </p>
     </section>
 
     <!-- Manual create (advanced) — collapsed by default -->
     <details class="manual-section">
       <summary @click.prevent="showManualCreate = !showManualCreate">
-        ⚙️ 高级:手动创建(已有 iOS ClawBot 凭据)
+        高级设置：使用现有 iOS ClawBot 凭据手动创建
       </summary>
       <div v-if="showManualCreate" class="manual-form">
         <div class="row">
-          <input v-model="newChannel.displayName" placeholder="Display Name" />
-          <input v-model="newChannel.defaultAgentId" placeholder="Default Agent ID" />
-          <input v-model="newChannel.storageDir" placeholder="Storage Directory (绝对路径)" />
-          <button @click="handleManualCreate">Create</button>
+          <label>
+            <span>机器人名称</span>
+            <input v-model="newChannel.displayName" placeholder="例如：客服小助手" />
+          </label>
+          <label>
+            <span>默认 Agent ID</span>
+            <input v-model="newChannel.defaultAgentId" placeholder="输入 Agent ID" />
+          </label>
+          <label>
+            <span>存储目录</span>
+            <input v-model="newChannel.storageDir" placeholder="输入绝对路径" />
+          </label>
+          <button @click="handleManualCreate">创建</button>
         </div>
       </div>
     </details>
 
     <section class="channel-list">
-      <h3>Channels ({{ channels.length }})</h3>
-      <div v-if="loading">Loading...</div>
+      <h3>微信机器人（{{ channels.length }}）</h3>
+      <div v-if="loading">正在加载微信机器人…</div>
       <div v-else-if="channels.length === 0" class="empty">
-        还没有 channel。点击顶部"扫码登录新微信机器人"按钮开始。
+        还没有微信机器人。点击上方“扫码添加微信机器人”开始配置。
       </div>
       <table v-else>
         <thead>
           <tr>
-            <th>Name</th>
+            <th>名称</th>
             <th>Agent</th>
-            <th>Storage</th>
-            <th>Actions</th>
+            <th>存储目录</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -221,14 +231,14 @@ onMounted(async () => {
             <td>{{ ch.displayName }}</td>
             <td>
               <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
-                {{ agentLabel(ch.defaultAgentId) }} <span class="edit-icon">✎</span>
+                {{ agentLabel(ch.defaultAgentId) }} <span class="edit-label">更改</span>
               </button>
             </td>
             <td><code>{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</code></td>
             <td>
-              <button @click="handleStart(ch.id)">Start</button>
-              <button @click="handleStop(ch.id)">Stop</button>
-              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">Delete</button>
+              <button @click="handleStart(ch.id)">启动</button>
+              <button @click="handleStop(ch.id)">停止</button>
+              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
             </td>
           </tr>
         </tbody>
@@ -247,13 +257,16 @@ onMounted(async () => {
     <div v-if="editingChannelId" class="modal-backdrop" @click.self="editingChannelId = null">
       <div class="modal">
         <h3>更改 Agent</h3>
-        <p class="hint">选择新 Agent 后,当前会话 worker 会被杀掉,下一条消息使用新 Agent 处理。</p>
-        <select v-model="editingAgentId">
-          <option value="" disabled>选择 Agent</option>
-          <option v-for="a in agents" :key="a.id" :value="a.id">
-            {{ a.name }} — {{ a.model }}
-          </option>
-        </select>
+        <p class="hint">更改后，当前会话进程将停止；收到下一条消息时，系统会使用新 Agent 启动会话。</p>
+        <label class="modal-field">
+          <span>默认 Agent</span>
+          <select v-model="editingAgentId">
+            <option value="" disabled>选择 Agent</option>
+            <option v-for="a in agents" :key="a.id" :value="a.id">
+              {{ a.name }} — {{ a.model }}
+            </option>
+          </select>
+        </label>
         <div class="modal-actions">
           <button @click="editingChannelId = null">取消</button>
           <button class="primary" @click="saveAgentEditor">保存</button>
@@ -320,6 +333,7 @@ onMounted(async () => {
 .manual-form .row {
   display: flex; gap: 8px; align-items: center;
 }
+.manual-form label { display: grid; flex: 1; gap: 5px; color: #4b5563; font-size: 12px; }
 .manual-form input { flex: 1; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; }
 
 .channel-list { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
@@ -333,13 +347,14 @@ button.link { background: transparent; border: 1px dashed #93c5fd; color: #1d4ed
 button.link:hover { background: #eff6ff; border-style: solid; }
 button.primary { background: #3b82f6; color: white; border-color: #3b82f6; }
 button.primary:hover { background: #2563eb; }
-.edit-icon { font-size: 11px; margin-left: 4px; opacity: 0.7; }
+.edit-label { font-size: 11px; margin-left: 4px; opacity: 0.7; }
 .empty { color: #9ca3af; padding: 24px; text-align: center; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal { background: white; border-radius: 8px; padding: 24px; max-width: 480px; width: 90%; }
 .modal h3 { margin: 0 0 8px; }
 .modal .hint { color: #6b7280; font-size: 13px; margin: 0 0 16px; }
+.modal-field { display: grid; gap: 5px; color: #4b5563; font-size: 13px; }
 .modal select { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 </style>

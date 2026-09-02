@@ -17,6 +17,7 @@ watch(
   (t) => {
     document.documentElement.dataset.theme = t;
     localStorage.setItem(STORAGE_KEY, t);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#0d1119' : '#f4f6f9');
   },
   { immediate: true },
 );

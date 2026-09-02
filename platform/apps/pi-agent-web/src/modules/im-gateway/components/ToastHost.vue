@@ -7,6 +7,7 @@
  */
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import type { ToastOptions } from '@pi-agent-platform/channel-types';
+import AppIcon from '../../../components/ui/AppIcon.vue';
 
 interface ActiveToast extends Required<Pick<ToastOptions, 'variant' | 'durationMs'>> {
   id: number;
@@ -33,42 +34,90 @@ function dismiss(id: number): void {
   toasts.value = toasts.value.filter((t) => t.id !== id);
 }
 
+function iconName(variant: ActiveToast['variant']): string {
+  if (variant === 'success') return 'check';
+  if (variant === 'error' || variant === 'warning') return 'alert';
+  return 'brand';
+}
+
 onMounted(() => window.addEventListener('im-gateway:toast', handler));
 onBeforeUnmount(() => window.removeEventListener('im-gateway:toast', handler));
 </script>
 
 <template>
-  <div class="toast-host">
+  <div class="toast-host" aria-live="polite" aria-atomic="false">
     <transition-group name="toast" tag="div">
       <div
         v-for="t in toasts"
         :key="t.id"
         :class="['toast', `toast-${t.variant}`]"
-        @click="dismiss(t.id)"
+        :role="t.variant === 'error' ? 'alert' : 'status'"
       >
-        {{ t.message }}
+        <span class="toast-icon"><AppIcon :name="iconName(t.variant)" :size="17" /></span>
+        <span class="toast-message">{{ t.message }}</span>
+        <button type="button" class="toast-close" :aria-label="`Dismiss: ${t.message}`" @click="dismiss(t.id)">
+          <AppIcon name="close" :size="15" />
+        </button>
       </div>
     </transition-group>
   </div>
 </template>
 
 <style scoped>
-.toast-host { position: fixed; top: 64px; right: 16px; z-index: 9999; pointer-events: none; }
-.toast {
-  pointer-events: auto;
-  padding: 10px 14px;
-  margin-bottom: 8px;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  cursor: pointer;
-  max-width: 360px;
-  font-size: 14px;
+.toast-host {
+  position: fixed;
+  top: 82px;
+  right: 18px;
+  z-index: 9999;
+  pointer-events: none;
 }
-.toast-info { background: #3b82f6; color: white; }
-.toast-success { background: #10b981; color: white; }
-.toast-warning { background: #f59e0b; color: white; }
-.toast-error { background: #ef4444; color: white; }
-.toast-enter-active, .toast-leave-active { transition: all 0.2s ease; }
-.toast-enter-from { opacity: 0; transform: translateX(20px); }
-.toast-leave-to { opacity: 0; transform: translateX(20px); }
+.toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  width: min(390px, calc(100vw - 32px));
+  min-height: 48px;
+  padding: 9px 10px 9px 12px;
+  margin-bottom: 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-raised);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.toast-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.toast-success .toast-icon { background: var(--success-soft); color: var(--success); }
+.toast-warning .toast-icon { background: var(--warning-soft); color: var(--warning); }
+.toast-error .toast-icon { background: var(--danger-soft); color: var(--danger); }
+.toast-message { min-width: 0; }
+.toast-close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.toast-close:hover { background: var(--surface-hover); color: var(--text); }
+.toast-enter-active, .toast-leave-active { transition: opacity 200ms ease, transform 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(16px); }
+
+@media (max-width: 680px) {
+  .toast-host { top: 112px; right: 16px; }
+}
 </style>

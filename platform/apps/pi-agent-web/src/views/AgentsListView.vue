@@ -2,21 +2,35 @@
 import { ref, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AgentDTO } from '@pi-agent-platform/shared-types';
+import AppIcon from '../components/ui/AppIcon.vue';
 
 const router = useRouter();
 const agents = ref<AgentDTO[]>([]);
 const loading = ref(true);
+const loadError = ref<string | null>(null);
 const editingId = ref<string | null>(null);
 const startingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
+const savingId = ref<string | null>(null);
 
-// Inline edit buffer — keyed by agent id.
 const editBuffers = reactive<Record<string, Partial<AgentDTO>>>({});
 
-async function loadAgents() {
+function showToast(message: string, variant: 'info' | 'success' | 'error' = 'info') {
+  window.dispatchEvent(new CustomEvent('im-gateway:toast', { detail: { message, variant } }));
+}
+
+async function loadAgents(showLoading = true) {
+  if (showLoading) loading.value = true;
+  loadError.value = null;
   try {
     const res = await fetch('/api/agents');
-    if (res.ok) agents.value = await res.json();
+    if (!res.ok) throw new Error(`Server response ${res.status}`);
+    agents.value = await res.json();
+  } catch {
+    loadError.value = 'Check the server connection and try again.';
+    if (agents.value.length > 0) {
+      showToast(`Agents couldn't be refreshed. ${loadError.value}`, 'error');
+    }
   } finally {
     loading.value = false;
   }
@@ -44,18 +58,28 @@ function cancelEdit(id: string) {
 async function saveEdit(id: string) {
   const buf = editBuffers[id];
   if (!buf) return;
-  const res = await fetch(`/api/agents/${id}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buf),
-  });
-  if (!res.ok) {
-    alert(`Update failed: ${res.status}`);
+  if (!buf.name?.trim() || !buf.model?.trim() || !buf.workspacePath?.trim()) {
     return;
   }
-  editingId.value = null;
-  delete editBuffers[id];
-  await loadAgents();
+
+  savingId.value = id;
+  try {
+    const res = await fetch(`/api/agents/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buf),
+    });
+    if (!res.ok) {
+      throw new Error(`The agent couldn't be updated (server response ${res.status}). Try again.`);
+    }
+    editingId.value = null;
+    delete editBuffers[id];
+    await loadAgents(false);
+  } catch {
+    showToast('The agent couldn\'t be updated. Check the server connection and try again.', 'error');
+  } finally {
+    savingId.value = null;
+  }
 }
 
 async function startSession(agentId: string) {
@@ -63,26 +87,29 @@ async function startSession(agentId: string) {
   try {
     const res = await fetch(`/api/sessions/agents/${agentId}`, { method: 'POST' });
     if (!res.ok) {
-      alert(`Failed to create session: ${res.status}`);
-      return;
+      throw new Error(`The session couldn't be created (server response ${res.status}). Try again.`);
     }
     const data = (await res.json()) as { sessionId: string; agentId: string };
-    router.push(`/sessions/${data.sessionId}?agentId=${data.agentId}`);
+    await router.push(`/sessions/${data.sessionId}?agentId=${data.agentId}`);
+  } catch {
+    showToast('The session couldn\'t be created. Check the server connection and try again.', 'error');
   } finally {
     startingId.value = null;
   }
 }
 
-async function deleteAgent(id: string) {
-  if (!confirm('Delete this agent?')) return;
-  deletingId.value = id;
+async function deleteAgent(agent: AgentDTO) {
+  if (!confirm(`Delete "${agent.name}"? This removes the agent configuration and cannot be undone.`)) return;
+
+  deletingId.value = agent.id;
   try {
-    const res = await fetch(`/api/agents/${id}/delete`, { method: 'POST' });
+    const res = await fetch(`/api/agents/${agent.id}/delete`, { method: 'POST' });
     if (!res.ok) {
-      alert(`Delete failed: ${res.status}`);
-      return;
+      throw new Error(`The agent couldn't be deleted (server response ${res.status}). Try again.`);
     }
-    await loadAgents();
+    await loadAgents(false);
+  } catch {
+    showToast('The agent couldn\'t be deleted. Check the server connection and try again.', 'error');
   } finally {
     deletingId.value = null;
   }
@@ -97,133 +124,187 @@ function setToolsString(id: string, value: string) {
   if (!buf) return;
   buf.tools = value
     .split(',')
-    .map((s) => s.trim())
+    .map((tool) => tool.trim())
     .filter(Boolean);
 }
 
-onMounted(loadAgents);
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join('');
+}
+
+onMounted(() => loadAgents());
 </script>
 
 <template>
-  <div class="max-w-3xl">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-2xl font-bold">Agents</h2>
-      <div class="flex gap-2 items-center">
-        <router-link
-          to="/sessions"
-          class="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
-        >
-          📋 Sessions
-        </router-link>
-        <span class="text-xs text-gray-500">{{ agents.length }} total</span>
+  <section class="page-shell" aria-labelledby="agents-title">
+    <header class="page-heading">
+      <div class="page-heading-copy">
+        <h1 id="agents-title" class="page-title">Agents</h1>
       </div>
+      <div class="page-actions">
+        <router-link class="btn btn-secondary" to="/sessions">
+          <AppIcon name="sessions" :size="16" />
+          Sessions
+        </router-link>
+        <span class="page-count">{{ agents.length }} {{ agents.length === 1 ? 'agent' : 'agents' }}</span>
+        <button
+          class="btn btn-secondary btn-icon"
+          type="button"
+          :class="{ 'is-loading': loading }"
+          :disabled="loading"
+          aria-label="Refresh agents"
+          @click="loadAgents()"
+        >
+          <AppIcon name="refresh" :size="16" />
+        </button>
+      </div>
+    </header>
+
+    <div class="surface-panel" :aria-busy="loading">
+      <div v-if="loading" class="skeleton-list" aria-label="Loading agents" aria-live="polite">
+        <div class="loading-caption">Loading agents…</div>
+        <div v-for="index in 3" :key="index" class="skeleton-row">
+          <span class="skeleton-avatar" />
+          <span class="skeleton-copy">
+            <span class="skeleton-line" />
+            <span class="skeleton-line short" />
+          </span>
+        </div>
+      </div>
+
+      <div v-else-if="loadError && agents.length === 0" class="state-panel">
+        <div class="state-content">
+          <span class="state-icon"><AppIcon name="alert" :size="23" /></span>
+          <h2 class="state-title">Agents couldn't be loaded</h2>
+          <p class="state-copy">{{ loadError }}</p>
+          <button class="btn btn-secondary state-action" type="button" @click="loadAgents()">Try again</button>
+        </div>
+      </div>
+
+      <div v-else-if="agents.length === 0" class="state-panel">
+        <div class="state-content">
+          <span class="state-icon"><AppIcon name="agents" :size="23" /></span>
+          <h2 class="state-title">No agents configured</h2>
+        </div>
+      </div>
+
+      <ul v-else class="resource-list">
+        <li v-for="agent in agents" :key="agent.id" class="resource-row">
+          <div v-if="editingId !== agent.id" class="resource-row-inner">
+            <div class="resource-identity">
+              <span class="resource-avatar">{{ initials(agent.name) }}</span>
+              <div class="resource-content">
+                <h2 class="resource-title">{{ agent.name }}</h2>
+                <div class="resource-meta">
+                  <span class="meta-item truncate" :title="`${agent.model} · ${agent.workspacePath}`">
+                    <AppIcon name="model" :size="14" />
+                    <span>{{ agent.model }} · {{ agent.workspacePath }}</span>
+                  </span>
+                </div>
+                <p v-if="agent.description" class="resource-description">{{ agent.description }}</p>
+                <p class="resource-tools">Tools: {{ (agent.tools ?? []).join(', ') || '—' }}</p>
+              </div>
+            </div>
+            <div class="resource-actions">
+              <button
+                class="btn btn-primary"
+                type="button"
+                :class="{ 'is-loading': startingId === agent.id }"
+                :disabled="startingId === agent.id || deletingId === agent.id"
+                @click="startSession(agent.id)"
+              >
+                <AppIcon :name="startingId === agent.id ? 'refresh' : 'plus'" :size="16" />
+                {{ startingId === agent.id ? '…' : 'New session' }}
+              </button>
+              <button
+                class="btn btn-secondary"
+                type="button"
+                :aria-label="`Edit ${agent.name}`"
+                @click="startEdit(agent)"
+              >
+                <AppIcon name="edit" :size="16" />
+                Edit
+              </button>
+              <button
+                class="btn btn-danger"
+                type="button"
+                :aria-label="`Delete ${agent.name}`"
+                :disabled="deletingId === agent.id || startingId === agent.id"
+                @click="deleteAgent(agent)"
+              >
+                <AppIcon name="trash" :size="16" />
+                Delete
+              </button>
+            </div>
+          </div>
+
+          <form v-else class="inline-editor" @submit.prevent="saveEdit(agent.id)">
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">Name</span>
+                <input v-model="editBuffers[agent.id]!.name" class="control" autocomplete="off" required />
+              </label>
+              <label class="field">
+                <span class="field-label">Model</span>
+                <input v-model="editBuffers[agent.id]!.model" class="control mono" autocomplete="off" required />
+              </label>
+              <label class="field field-span-2">
+                <span class="field-label">Description</span>
+                <input
+                  v-model="editBuffers[agent.id]!.description"
+                  class="control"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field field-span-2">
+                <span class="field-label">Workspace path</span>
+                <input v-model="editBuffers[agent.id]!.workspacePath" class="control mono" autocomplete="off" required />
+              </label>
+              <label class="field field-span-2">
+                <span class="field-label">System prompt</span>
+                <textarea
+                  v-model="editBuffers[agent.id]!.systemPrompt"
+                  class="control"
+                  rows="4"
+                />
+              </label>
+              <label class="field field-span-2">
+                <span class="field-label">Tools (comma-separated)</span>
+                <input
+                  :value="toolsString(editBuffers[agent.id]!.tools)"
+                  class="control mono"
+                  autocomplete="off"
+                  @input="(event: Event) => setToolsString(agent.id, (event.target as HTMLInputElement).value)"
+                />
+              </label>
+            </div>
+            <div class="editor-actions">
+              <button
+                class="btn btn-secondary"
+                type="button"
+                :disabled="savingId === agent.id"
+                @click="cancelEdit(agent.id)"
+              >
+                Cancel
+              </button>
+              <button
+                class="btn btn-primary"
+                type="submit"
+                :class="{ 'is-loading': savingId === agent.id }"
+                :disabled="savingId === agent.id"
+              >
+                <AppIcon :name="savingId === agent.id ? 'refresh' : 'check'" :size="16" />
+                {{ savingId === agent.id ? '…' : 'Save' }}
+              </button>
+            </div>
+          </form>
+        </li>
+      </ul>
     </div>
-
-    <div v-if="loading" class="text-gray-500">Loading...</div>
-    <div v-else-if="agents.length === 0" class="text-gray-500">No agents yet.</div>
-
-    <ul v-else class="space-y-2">
-      <li
-        v-for="agent in agents"
-        :key="agent.id"
-        class="p-3 rounded border border-gray-200 dark:border-gray-700"
-      >
-        <!-- View mode -->
-        <div v-if="editingId !== agent.id" class="flex items-start justify-between gap-3">
-          <div class="flex-1 min-w-0">
-            <div class="font-medium">{{ agent.name }}</div>
-            <div class="text-xs text-gray-500 truncate">{{ agent.model }} · {{ agent.workspacePath }}</div>
-            <div v-if="agent.description" class="text-xs text-gray-400 mt-1">{{ agent.description }}</div>
-            <div class="text-[10px] text-gray-400 mt-1">tools: {{ (agent.tools ?? []).join(', ') || '—' }}</div>
-          </div>
-          <div class="flex flex-col gap-1 shrink-0">
-            <button
-              class="px-3 py-1 text-xs rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
-              :disabled="startingId === agent.id"
-              @click="startSession(agent.id)"
-            >
-              {{ startingId === agent.id ? '…' : '▶ New session' }}
-            </button>
-            <button
-              class="px-3 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
-              @click="startEdit(agent)"
-            >
-              ✎ Edit
-            </button>
-            <button
-              class="px-3 py-1 text-xs rounded border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-900 disabled:opacity-50"
-              :disabled="deletingId === agent.id"
-              @click="deleteAgent(agent.id)"
-            >
-              🗑 Delete
-            </button>
-          </div>
-        </div>
-
-        <!-- Edit mode -->
-        <div v-else class="space-y-2">
-          <div class="grid grid-cols-2 gap-2">
-            <label class="text-xs">
-              <span class="text-gray-500">Name</span>
-              <input
-                v-model="editBuffers[agent.id]!.name"
-                class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            </label>
-            <label class="text-xs">
-              <span class="text-gray-500">Model</span>
-              <input
-                v-model="editBuffers[agent.id]!.model"
-                class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            </label>
-          </div>
-          <label class="text-xs block">
-            <span class="text-gray-500">Description</span>
-            <input
-              v-model="editBuffers[agent.id]!.description"
-              class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-            />
-          </label>
-          <label class="text-xs block">
-            <span class="text-gray-500">Workspace path</span>
-            <input
-              v-model="editBuffers[agent.id]!.workspacePath"
-              class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-            />
-          </label>
-          <label class="text-xs block">
-            <span class="text-gray-500">System prompt</span>
-            <textarea
-              v-model="editBuffers[agent.id]!.systemPrompt"
-              rows="2"
-              class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-            />
-          </label>
-          <label class="text-xs block">
-            <span class="text-gray-500">Tools (comma-separated)</span>
-            <input
-              :value="toolsString(editBuffers[agent.id]!.tools)"
-              class="w-full p-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              @input="(e: Event) => setToolsString(agent.id, (e.target as HTMLInputElement).value)"
-            />
-          </label>
-          <div class="flex justify-end gap-2">
-            <button
-              class="px-3 py-1 text-xs rounded border border-gray-300 dark:border-gray-600"
-              @click="cancelEdit(agent.id)"
-            >
-              Cancel
-            </button>
-            <button
-              class="px-3 py-1 text-xs rounded bg-blue-500 text-white"
-              @click="saveEdit(agent.id)"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      </li>
-    </ul>
-  </div>
+  </section>
 </template>

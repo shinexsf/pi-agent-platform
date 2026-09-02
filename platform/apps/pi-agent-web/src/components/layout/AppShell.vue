@@ -1,32 +1,43 @@
 <script setup lang="ts">
 /**
- * AppShell — top-level layout: title + TopNav + ToastHost + ConfirmDialogHost + main slot.
+ * AppShell — top-level layout: brand + TopNav + theme + global feedback + main slot.
  *
- * TopNav (data-driven, from router meta) replaces the old hardcoded TopBar.
+ * TopNav stays data-driven through router metadata.
  */
-import { computed } from 'vue';
 import { useTheme } from '../../composables/useTheme';
+import AppIcon from '../ui/AppIcon.vue';
 import TopNav from '../../modules/im-gateway/components/TopNav.vue';
 import ToastHost from '../../modules/im-gateway/components/ToastHost.vue';
 import ConfirmDialogHost from '../../modules/im-gateway/components/ConfirmDialogHost.vue';
 
-const title = computed(() => 'pi-agent-platform');
 const { theme, toggle } = useTheme();
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col">
-    <header class="border-b border-gray-200 dark:border-gray-700 px-4 py-2 flex items-center justify-between">
-      <h1 class="text-lg font-semibold">{{ title }}</h1>
-      <button
-        class="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
-        @click="toggle"
-      >
-        {{ theme === 'dark' ? '☼ Light' : '☾ Dark' }}
-      </button>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="app-header-inner">
+        <router-link class="app-brand" to="/agents" aria-label="pi-agent-platform home">
+          <span class="app-brand-mark">
+            <AppIcon name="brand" :size="21" :stroke-width="1.7" />
+          </span>
+          <span class="app-brand-copy">
+            <strong>pi-agent-platform</strong>
+          </span>
+        </router-link>
+        <TopNav />
+        <button
+          class="theme-toggle"
+          type="button"
+          :aria-label="theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
+          @click="toggle"
+        >
+          <AppIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="18" />
+          <span>{{ theme === 'dark' ? 'Light' : 'Dark' }}</span>
+        </button>
+      </div>
     </header>
-    <TopNav />
-    <main class="flex-1 p-4">
+    <main id="main-content" class="app-main" tabindex="-1">
       <slot />
     </main>
     <ToastHost />

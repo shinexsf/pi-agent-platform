@@ -15,6 +15,7 @@ import { createPinia } from 'pinia';
 import { createRouter, createWebHistory, type Router } from 'vue-router';
 import App from './App.vue';
 import './style.css';
+import { installRouteTransitions } from './motion/routeTransitions';
 
 // Forward-declared so function closures (created below) can reference it
 // before the router is constructed later in this file.
@@ -34,12 +35,12 @@ const baseRoutes = [
   {
     path: '/agents',
     component: AgentsListView,
-    meta: { navLabel: 'Agents', navOrder: 10, navIcon: '🤖' },
+    meta: { navLabel: 'Agents', navOrder: 10, navIcon: 'agents' },
   },
   {
     path: '/sessions',
     component: SessionsListView,
-    meta: { navLabel: 'Sessions', navOrder: 20, navIcon: '💬' },
+    meta: { navLabel: 'Sessions', navOrder: 20, navIcon: 'sessions' },
   },
   {
     path: '/sessions/:id',
@@ -57,6 +58,7 @@ const router = createRouter({
   ],
 });
 routerRef.router = router;
+installRouteTransitions(router);
 
 // Set up the global ChannelAdminHost object so channel admin pages can use
 // window.__channelAdminHost.apiFetch() etc. The current channel type is
@@ -127,15 +129,6 @@ function interpolate(template: string, params?: Record<string, unknown>): string
 
 (window as unknown as { __channelAdminHost?: ChannelAdminHost }).__channelAdminHost = globalHost;
 (window as unknown as { __channelAdminRegistry?: unknown }).__channelAdminRegistry = channelAdminRegistry;
-
-// DEBUG: log channelType whenever apiFetch is called
-const debugHost = globalHost as ChannelAdminHost & { _origApiFetch?: typeof globalHost.apiFetch };
-const origApiFetch = debugHost.apiFetch.bind(globalHost);
-debugHost.apiFetch = async (method, path, body) => {
-  const ct = currentChannelType();
-  console.log(`[im-gateway] apiFetch ${method} ${path} on path=${window.location.pathname} → channelType=${ct}`);
-  return origApiFetch(method, path, body);
-};
 
 const app = createApp(App);
 app.use(createPinia());
