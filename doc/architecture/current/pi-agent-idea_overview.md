@@ -218,5 +218,3 @@ pi-agent-idea (Kotlin)
 ## 相关条目
 
 - [`pi-agent-idea_ide-bridge.md`](pi-agent-idea_ide-bridge.md) —— IDE bridge 接口设计（invoke/on/getEnv + method 路由 + 跨语言同步 + JCEF 注入）
-- 决策来源（仅参考，不迁移）：`reference/projects/personal-agent-manage/doc/decisions/20-server-sdk-orchestrator-with-worker-pool.md`
-- 旧 IDEA 插件（仅参考，不迁移）：`reference/projects/personal-agent-manage/agent-manage-plugin/`

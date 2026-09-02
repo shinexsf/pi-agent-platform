@@ -11,6 +11,7 @@
     "build": "pnpm -r build",
     "build:web": "pnpm --filter @pi-agent-platform/web build && node scripts/copy-spa.mjs --src=apps/pi-agent-web/dist --dst=apps/pi-agent-server/public/web",
     "build:ide": "pnpm --filter @pi-agent-platform/ide build && node scripts/copy-spa.mjs --src=apps/pi-agent-ide/dist --dst=apps/pi-agent-server/public/ide",
+    "pack:cli": "node scripts/build-cli.mjs",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },

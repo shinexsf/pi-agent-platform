@@ -5,7 +5,7 @@
  */
 import type { ChannelHost, ChannelPackage } from '@pi-agent-platform/channel-types';
 import { createQqRoutes } from './routes.js';
-import { logger } from '@pi-agent-platform/server/im-gateway/logger';
+import { logger } from '../../shared/logger.js';
 import { MIGRATION_SQL, SCHEMA_HINTS } from './schema.js';
 
 const QqChannelPackage: ChannelPackage = {

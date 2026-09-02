@@ -63,8 +63,9 @@ async function main() {
   // Static dirs (mounted before API routes so /api/* still takes precedence by exact match).
   // /ide/  ——  JCEF 加载 Vue SPA（pi-agent-ide 构建产物）
   // /web/  ——  浏览器 SPA（pi-agent-web 构建产物，跟 pi-agent-idea MVP 不相关但预留）
-  mountStaticDir(app, '/ide/', path.resolve('./public/ide'), '/ide/');
-  mountStaticDir(app, '/web/', path.resolve('./public/web'), '/web/');
+  const publicBaseDir = resolvePublicDir();
+  mountStaticDir(app, '/ide/', path.join(publicBaseDir, 'ide'), '/ide/');
+  mountStaticDir(app, '/web/', path.join(publicBaseDir, 'web'), '/web/');
 
   // API routes
   app.get('/api/health', (c) => c.json({ status: 'ok', uptime: process.uptime() }));
@@ -131,6 +132,18 @@ main().catch((err) => {
   console.error('[server] fatal:', err);
   process.exit(1);
 });
+
+/**
+ * Resolve the SPA public directory.
+ * - Packaged mode (started by `pi-server` CLI): PUBLIC_DIR env injected by CLI (absolute path to dist/server/public).
+ * - Dev mode: `./public` relative to cwd (original behavior).
+ */
+function resolvePublicDir(): string {
+  if (process.env.PI_SERVER_CLI === '1' && process.env.PUBLIC_DIR) {
+    return process.env.PUBLIC_DIR;
+  }
+  return path.resolve('./public');
+}
 
 /**
  * Mount a static directory under a route prefix. If the directory doesn't exist,

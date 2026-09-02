@@ -32,6 +32,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { existsSync } from 'node:fs';
 
 function resolveWorkerEntry(): string {
+  // Packaged mode (started by `pi-server` CLI): use absolute path injected via env.
+  // The CLI sets PI_SERVER_CLI=1 + WORKER_DIST_DIR=<global>/dist/worker at spawn time.
+  if (process.env.PI_SERVER_CLI && process.env.WORKER_DIST_DIR) {
+    return path.join(process.env.WORKER_DIST_DIR, 'index.js');
+  }
+  // Dev mode: probe well-known relative locations (tsx + built dist both supported).
   const candidates = [
     path.resolve(process.cwd(), '../../workers/session-worker/dist/index.js'),
     path.resolve(process.cwd(), '../../workers/session-worker/src/index.ts'),
@@ -224,6 +230,36 @@ export class WorkerPool extends EventEmitter {
     entry.child.on('exit', (code, signal) => {
       const w = this.workers.get(sessionId);
       this.workers.delete(sessionId);
+
+      // Preserve event listeners across worker death so SSE clients can resume
+      // receiving events when the session is reactivated. This covers:
+      //   - placeholder worker killed by `session-timeout-scanner` (5 min idle)
+      //   - placeholder worker LRU-evicted when worker pool is full
+      //   - active worker that crashes (model error, OOM, unhandled exception)
+      //   - active worker killed by startup-timeout
+      // Without this transfer, `this.workers.delete(sessionId)` drops all
+      // references to `entry.eventListeners`, so when the IDE/IM client later
+      // sends a prompt and `spawnAndCreate` rebuilds the worker, the new worker's
+      // `flushPendingListeners` (which only sees listeners buffered BEFORE spawn)
+      // has no way to recover them. Symptom: worker processes the prompt
+      // correctly and emits message_update events, but the SSE stream is silently
+      // disconnected and the UI hangs on "sending" forever.
+      //
+      // Transfer to `pendingListeners` (attached:false) so the next `spawn()`
+      // for this sessionId will attach them to the new entry via
+      // `flushPendingListeners`.
+      if (entry.eventListeners.length > 0) {
+        let arr = this.pendingListeners.get(sessionId);
+        if (!arr) {
+          arr = [];
+          this.pendingListeners.set(sessionId, arr);
+        }
+        for (const listener of entry.eventListeners) {
+          arr.push({ listener, attached: false });
+        }
+        entry.eventListeners = [];
+      }
+
       if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGKILL') {
         process.stderr.write(
           `[server] worker exited unexpectedly, sessionId=${sessionId} pid=${entry.workerPid} code=${code} signal=${signal}\n`,
@@ -262,15 +298,17 @@ export class WorkerPool extends EventEmitter {
    * Subscribe to WorkerEvent for a session.
    * If no worker exists yet, buffer the listener and attach when spawn completes.
    * Returns an unsubscribe function.
+   *
+   * The returned unsubscribe closure is safe to call at any time — including
+   * AFTER the worker has died (in which case the listener may have been
+   * transferred to `pendingListeners` by `wireUpHandlers`' exit block).
+   * `cleanupListener` handles both locations.
    */
   subscribe(sessionId: string, listener: (event: WorkerEvent) => void): () => void {
     const entry = this.workers.get(sessionId);
     if (entry) {
       entry.eventListeners.push(listener);
-      return () => {
-        const idx = entry.eventListeners.indexOf(listener);
-        if (idx >= 0) entry.eventListeners.splice(idx, 1);
-      };
+      return () => this.cleanupListener(sessionId, listener);
     }
     // No worker yet — buffer at class level so spawn() can flush on ready.
     let arr = this.pendingListeners.get(sessionId);
@@ -288,6 +326,12 @@ export class WorkerPool extends EventEmitter {
       if (e) {
         e.eventListeners.push(pending.listener);
         pending.attached = true;
+        // Once attached, no longer needed in pendingListeners buffer.
+        const a = this.pendingListeners.get(sessionId);
+        if (a) {
+          const idx = a.indexOf(pending);
+          if (idx >= 0) a.splice(idx, 1);
+        }
       }
     };
     setTimeout(tryAttach, 10);
@@ -297,19 +341,45 @@ export class WorkerPool extends EventEmitter {
     setTimeout(tryAttach, 6000);
     setTimeout(tryAttach, 12000);
 
-    return () => {
-      pending.attached = true; // prevent future attaches
-      const e = this.workers.get(sessionId);
-      if (e) {
-        const i = e.eventListeners.indexOf(pending.listener);
-        if (i >= 0) e.eventListeners.splice(i, 1);
-      }
-      const a = this.pendingListeners.get(sessionId);
-      if (a) {
-        const idx = a.indexOf(pending);
-        if (idx >= 0) a.splice(idx, 1);
-      }
-    };
+    // Closure captures `pending` so tryAttach is disabled after unsubscribe.
+    return () => this.cleanupListener(sessionId, listener, pending);
+  }
+
+  /**
+   * Remove a listener from wherever it currently lives (entry.eventListeners,
+   * pendingListeners buffer, or both). Safe to call multiple times.
+   *
+   * The `pending` arg, if provided, also marks the listener as unsubscribed so
+   * pending-path tryAttach timers won't re-attach it. Required for the
+   * pre-spawn subscribe path (no worker exists yet → wrapped in PendingListener
+   * for tryAttach tracking). The post-spawn subscribe path doesn't need it
+   * because there's no tryAttach to disable.
+   *
+   * The pendingListeners match is by listener function reference — this works
+   * for both the original PendingListener objects (pre-spawn subscribe path)
+   * AND the PendingListener wrappers created by `wireUpHandlers`' exit block
+   * when transferring listeners from a dead worker back to the buffer.
+   */
+  private cleanupListener(
+    sessionId: string,
+    listener: (event: WorkerEvent) => void,
+    pending?: PendingListener,
+  ): void {
+    // 1) Disable any pending tryAttach retries for this listener.
+    if (pending) pending.attached = true;
+    // 2) Remove from live entry (if worker still exists).
+    const e = this.workers.get(sessionId);
+    if (e) {
+      const i = e.eventListeners.indexOf(listener);
+      if (i >= 0) e.eventListeners.splice(i, 1);
+    }
+    // 3) Remove from pendingListeners buffer (matches both pre-spawn
+    //    PendingListener objects and post-exit transfers).
+    const a = this.pendingListeners.get(sessionId);
+    if (a) {
+      const idx = a.findIndex((p) => p.listener === listener);
+      if (idx >= 0) a.splice(idx, 1);
+    }
   }
 
   /**

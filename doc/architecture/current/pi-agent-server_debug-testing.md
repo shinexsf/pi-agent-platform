@@ -256,5 +256,3 @@ curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 - [dev-journal 016: worker 接管 systemPrompt + debug 接口](../dev-journal/2026-08-30_custom-systemprompt-takeover.md) —— `/:id/context.systemPrompt` debug 接口设计
 
 ## 关联决策
-
-- [决策 20](../../../personal-agent-manage/doc/decisions/20-server-sdk-orchestrator-with-worker-pool.md) —— 架构决策来源（**仅参考，不迁移**）

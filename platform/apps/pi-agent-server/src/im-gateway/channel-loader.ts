@@ -18,6 +18,11 @@ interface Manifest {
 }
 
 async function findManifest(): Promise<string> {
+  // Packaged mode (started by `pi-server` CLI): manifest lives next to the bundled channels.
+  if (process.env.PI_SERVER_CLI && process.env.CHANNELS_DIR) {
+    return path.join(process.env.CHANNELS_DIR, 'manifest.json');
+  }
+  // Dev mode: probe well-known relative locations.
   const candidates = [
     path.resolve(process.cwd(), 'channels/manifest.json'),
     path.resolve(process.cwd(), '../channels/manifest.json'),
@@ -54,8 +59,10 @@ export async function loadChannels(host: ChannelHost): Promise<Array<{ type: str
   }
   const channelsDir = path.dirname(manifestPath);
   const loaded: Array<{ type: string; packagePath: string }> = [];
+  // Packaged mode: bundled channel dist (already compiled). Dev mode: live .ts source under tsx.
+  const channelEntrySubpath = process.env.PI_SERVER_CLI === '1' ? 'dist/index.js' : 'src/index.ts';
   for (const channelName of manifest.channels) {
-    const packagePath = path.resolve(channelsDir, channelName, 'src/index.ts');
+    const packagePath = path.resolve(channelsDir, channelName, channelEntrySubpath);
     try {
       // Dynamic import — convert absolute path to file:// URL (Windows requires this).
       // Cache-bust per restart by appending a query string (no-op semantics).

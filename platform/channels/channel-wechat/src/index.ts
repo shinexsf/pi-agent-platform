@@ -12,7 +12,7 @@
 import type { ChannelHost, ChannelPackage } from '@pi-agent-platform/channel-types';
 import { createWechatRoutes } from './routes.js';
 import { MIGRATION_SQL, SCHEMA_HINTS } from './schema.js';
-import { logger } from '@pi-agent-platform/server/im-gateway/logger';
+import { logger } from '../../shared/logger.js';
 
 const WechatChannelPackage: ChannelPackage = {
   type: 'wechat',

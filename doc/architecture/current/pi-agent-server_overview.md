@@ -81,5 +81,3 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | IM 渠道(微信 iOS 限制 / qq-bot-sdk AGPL)| ⏸️ 见 `pi-agent-server_im-gateway.md` 待决项 |
 
 ## 相关决策
-
-- [决策 20](../../../personal-agent-manage/doc/decisions/20-server-sdk-orchestrator-with-worker-pool.md) —— 架构决策来源（**仅参考，不迁移**）

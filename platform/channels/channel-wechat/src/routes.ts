@@ -34,8 +34,8 @@ import type {
 } from '@pi-agent-platform/channel-types';
 import { SCHEMA_HINTS, MIGRATION_SQL } from './schema.js';
 import { WechatAdapter } from './adapter.js';
-import { registerChannel } from '@pi-agent-platform/server/im-gateway/channel-registry';
-import { logger } from '@pi-agent-platform/server/im-gateway/logger';
+import { registerChannel } from '../../shared/channel-registry.js';
+import { logger } from '../../shared/logger.js';
 
 // Zod schemas for validation
 const CreateChannelSchema = z.object({

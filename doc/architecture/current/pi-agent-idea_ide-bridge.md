@@ -577,5 +577,3 @@ class JcefChatPanel(private val project: Project) : Disposable {
 ## 相关条目
 
 - [`pi-agent-idea_overview.md`](pi-agent-idea_overview.md) —— 整体架构 + 数据流 + 阶段化路径
-- 参考旧实现（不迁移）：`reference/projects/personal-agent-manage/agent-manage-plugin/doc/dev-journal/04-pi-rpc-and-js-bridge.md`
-- 参考旧实现（不迁移）：`reference/projects/personal-agent-manage/agent-manage-plugin/doc/notes/03-architecture-gap-after-refactor.md`

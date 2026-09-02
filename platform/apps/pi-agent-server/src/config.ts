@@ -4,6 +4,8 @@
  * Validates types and exits on invalid values.
  */
 
+import path from 'node:path';
+
 export interface ServerConfig {
   port: number;
   nodeEnv: 'development' | 'production' | 'test';
@@ -45,6 +47,16 @@ function parseNodeEnv(raw: string | undefined): ServerConfig['nodeEnv'] {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const nodeEnv = parseNodeEnv(env.NODE_ENV);
 
+  // Packaged mode (started by `pi-server` CLI): use absolute paths injected via env.
+  // Dev mode: fall through to original env vars / defaults.
+  const isPackaged = env.PI_SERVER_CLI === '1';
+  const databasePath = (isPackaged && env.PI_DATA_DIR)
+    ? path.join(env.PI_DATA_DIR, 'data.db')
+    : (env.DATABASE_PATH ?? './data.db');
+  const attachmentsDir = (isPackaged && env.PI_ATTACHMENTS_ROOT)
+    ? env.PI_ATTACHMENTS_ROOT
+    : (env.PI_AGENT_ATTACHMENTS_ROOT ?? defaultAttachmentsDir());
+
   return {
     port: parseIntStrict('PORT', env.PORT, 3000),
     nodeEnv,
@@ -55,12 +67,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       5, // default 5 minutes for placeholder (no DB row)
     ) * 60_000,
     maxWorkers: parseIntStrict('MAX_WORKERS', env.MAX_WORKERS, 20),
-    databasePath: env.DATABASE_PATH ?? './data.db',
+    databasePath,
     workerStartupTimeoutMs: parseIntStrict('WORKER_STARTUP_TIMEOUT_MS', env.WORKER_STARTUP_TIMEOUT_MS, 5000), // default 5s — pi SDK load takes ~1s (auth + models). 200ms was wishful.
     workerStopTimeoutMs: 5_000,   // invariants: SIGTERM → 5s → SIGKILL
     workspaceRoot: env.WORKSPACE_ROOT ?? process.cwd(),
     agentDir: env.PI_AGENT_DIR ?? defaultAgentDir(),
-    attachmentsDir: env.PI_AGENT_ATTACHMENTS_ROOT ?? defaultAttachmentsDir(),
+    attachmentsDir,
   };
 }
 

@@ -10,6 +10,7 @@
     "./admin": "./src/admin/index.ts"
   },
   "scripts": {
+    "build": "tsc --noEmit false",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

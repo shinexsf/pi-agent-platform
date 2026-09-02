@@ -10,8 +10,8 @@ import { z } from 'zod';
 import type { ChannelConfig, ChannelHost } from '@pi-agent-platform/channel-types';
 import { SCHEMA_HINTS, MIGRATION_SQL } from './schema.js';
 import { QqAdapter } from './adapter.js';
-import { registerChannel } from '@pi-agent-platform/server/im-gateway/channel-registry';
-import { logger } from '@pi-agent-platform/server/im-gateway/logger';
+import { registerChannel } from '../../shared/channel-registry.js';
+import { logger } from '../../shared/logger.js';
 
 const CreateChannelSchema = z.object({
   displayName: z.string().min(1).max(64),

@@ -264,7 +264,3 @@ function useTheme() {
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— HTTP API 路由
 
 ## 参考
-
-- [`reference/projects/pi-web-main/`](../../reference/projects/pi-web-main/) —— 独立的 pi Web 端（UI 参考）
-- [`reference/projects/craft-agents-oss-main/apps/webui/`](../../reference/projects/craft-agents-oss-main/apps/webui/) —— 第三方 agent UI 套件（参考）
-- [`reference/projects/personal-agent-manage/agent-manage-web/`](../../reference/projects/personal-agent-manage/agent-manage-web/) —— 旧 web（Vue 3）
