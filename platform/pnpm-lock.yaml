@@ -253,6 +253,9 @@ importers:
       '@wechatbot/wechatbot':
         specifier: 2.0.1
         version: 2.0.1
+      better-sqlite3:
+        specifier: ^11.5.0
+        version: 11.5.0
       commander:
         specifier: ^12.1.0
         version: 12.1.0

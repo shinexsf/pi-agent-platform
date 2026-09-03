@@ -16,8 +16,10 @@ npm install -g ./pi-server-0.0.1-alpha.tgz
 ```
 
 > Note: `pack:cli` is the only build command — it aggregates server + worker +
-> channels + SPA + better-sqlite3 native binary into `packages/cli/dist/` and
-> immediately produces the tarball in one step.
+> channels + SPA into `packages/cli/dist/` and immediately produces the tarball
+> in one step. `better-sqlite3` is **not** bundled; it is installed as a
+> regular npm dependency at `npm install -g` time, which triggers its
+> `install` hook (prebuild-install || node-gyp rebuild).
 
 After install, `pi-server`, `pi-server.cmd`, and `pi-server.ps1` are on your PATH.
 
@@ -112,8 +114,24 @@ PORT=8080 pi-server start
 
 - **Node.js** >= 22
 - Tested on Windows + Linux (macOS should work; POSIX paths)
-- The native `better-sqlite3` binary is downloaded by `prebuild-install` on `npm install` for your OS + arch
+- `better-sqlite3` is installed via npm's standard `install` hook at `npm install -g` time. The hook runs `prebuild-install || node-gyp rebuild`. If your machine has neither a prebuilt binary available (slow GitHub access) nor the native build toolchain (Windows: VS Build Tools / Linux: gcc + python), the install will fail — see [Troubleshooting](#troubleshooting) below.
 
 ## Versioning
 
 This is the **0.0.1-alpha** release. Expect rough edges. Until we hit 1.0.0, minor versions may include breaking changes — always check the upgrade notes.
+
+## Troubleshooting
+
+### `better-sqlite3` install fails with `node-gyp` / `gyp ERR! find VS`
+
+This means the `install` hook in `better-sqlite3` couldn't find a prebuilt binary and fell back to a local native build, which needs Visual Studio Build Tools on Windows / gcc + python on Linux.
+
+**Options** (in increasing order of effort):
+
+1. **Wait and retry** — `prebuild-install` downloads from GitHub Releases, which can be slow or blocked on some networks.
+2. **Install build tools**:
+   - Windows: install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the "Desktop development with C++" workload, then re-run `npm install -g ./pi-server-0.0.1-alpha.tgz`.
+   - Linux: `apt install build-essential python3` (or equivalent).
+3. **Use a precompiled binary manually** — download `better-sqlite3-v11.5.0-napi-v3-win32-x64.tar.gz` (or your platform) from <https://github.com/WiseLibs/better-sqlite3/releases/tag/v11.5.0>, extract to `<global-node_modules>/better-sqlite3/`, and ensure `build/Release/better_sqlite3.node` lands at the right path.
+
+If `pi-server start` says `Error: Cannot open database because the directory does not exist` or `Cannot find module 'better-sqlite3'`, the native binding isn't where Node expects it.

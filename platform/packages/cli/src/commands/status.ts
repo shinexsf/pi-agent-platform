@@ -13,11 +13,11 @@ import { log, warn } from '../logger.js';
 import { pidFile } from '../paths.js';
 
 function readPortFromEntry(): number {
-  // The CLI daemon.ts hardcodes PORT='3000' when spawning the server (see
+  // The CLI daemon.ts hardcodes PORT='9006' when spawning the server (see
   // daemon.ts:startServer) — it deliberately ignores shell PORT to avoid
-  // colliding with other processes on the same machine. So we hardcode 3000
+  // colliding with other processes on the same machine. So we hardcode 9006
   // here too. (Post-MVP: parse from server log or expose /api/server/info.)
-  return 3000;
+  return 9006;
 }
 
 export async function statusCommand(): Promise<void> {

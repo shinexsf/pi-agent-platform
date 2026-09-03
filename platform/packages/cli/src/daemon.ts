@@ -16,12 +16,11 @@
  */
 
 import { spawn, exec } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync, writeFileSync, openSync, cpSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {
   channelsDir,
-  cliRoot,
   dataRoot,
   logFile,
   pidFile,
@@ -29,7 +28,6 @@ import {
   serverEntry,
   workerEntry,
 } from './paths.js';
-import { log } from './logger.js';
 
 /** Returns true if `pid` is a live process. `process.kill(pid, 0)` is the cross-platform probe. */
 export function isProcessAlive(pid: number): boolean {
@@ -70,32 +68,6 @@ export interface StartResult {
 }
 
 /**
- * Copy the bundled better-sqlite3 (with native binary) into the global
- * node_modules directory so the server can `require('better-sqlite3')`.
- * Idempotent: skips if already present.
- *
- * Why: pi-server does NOT declare better-sqlite3 as a runtime dependency
- * (because its `install` hook triggers node-gyp on systems without Visual
- * Studio / prebuild network access). We bundle the prebuilt binary from the
- * dev workspace and stage it into the global tree at start time.
- */
-export function ensureBetterSqlite3(): void {
-  const vendorDir = path.join(cliRoot(), 'dist', 'vendor', 'better-sqlite3');
-  if (!existsSync(vendorDir)) {
-    log('warn: bundled better-sqlite3 vendor not found — server may fail to load SQLite if prebuild-install was unreachable');
-    return;
-  }
-  const globalNm = path.dirname(cliRoot());
-  const target = path.join(globalNm, 'better-sqlite3');
-  const nativeFile = path.join(target, 'build', 'Release', 'better_sqlite3.node');
-  if (existsSync(nativeFile)) return; // already staged
-
-  mkdirSync(target, { recursive: true });
-  cpSync(vendorDir, target, { recursive: true });
-  log(`staged better-sqlite3 native binary into ${target}`);
-}
-
-/**
  * Spawn the server as a detached child. Returns immediately.
  * - Server stdout/stderr → logFile (append)
  * - Process is detached (POSIX: setsid + unref; Windows: windowsHide)
@@ -110,14 +82,12 @@ export function startServer(): StartResult {
     );
   }
 
-  ensureBetterSqlite3();
-
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // Always override PORT — the user's shell may have PORT set to a value
-    // occupied by another process on the same machine. Server defaults to 3000.
+    // occupied by another process on the same machine. Server default is 9006.
     // Users who want a different port should edit config.env or use --port (post-MVP).
-    PORT: '3000',
+    PORT: '9006',
     NODE_ENV: 'production',
     PI_SERVER_CLI: '1',
     WORKER_DIST_DIR: path.dirname(workerEntry()),

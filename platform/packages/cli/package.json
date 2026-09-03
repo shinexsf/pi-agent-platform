@@ -26,6 +26,7 @@
     "@hono/node-server": "^1.13.0",
     "@tencent-connect/qqbot-connector": "^1.2.0",
     "@wechatbot/wechatbot": "2.0.1",
+    "better-sqlite3": "^11.5.0",
     "commander": "^12.1.0",
     "drizzle-orm": "^0.36.0",
     "hono": "^4.6.0",
