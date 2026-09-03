@@ -140,6 +140,10 @@ export class WorkerPool extends EventEmitter {
       // Worker process cwd = agent workspace (so plugins using process.cwd() resolve correctly).
       cwd: workspacePath ?? process.cwd(),
       env: { ...process.env, PI_AGENT_DIR: config.agentDir, PI_AGENT_ATTACHMENTS_ROOT: config.attachmentsDir },
+      // On Windows, spawning a child from a detached/GUI process would otherwise
+      // pop up a new console window for the worker. Hide it; logs still go to
+      // server.log via the inherited stdout / captured stderr pipe.
+      windowsHide: true,
     });
 
     const entry: WorkerEntry = {

@@ -1,7 +1,6 @@
 # pi-agent-server http-api
 
 > HTTP API 路由。hono 框架。
-> v2：见 `changelog/2026-08-24_012-session-lifecycle-v2.md`（统一 context 端点）
 
 ## Health
 

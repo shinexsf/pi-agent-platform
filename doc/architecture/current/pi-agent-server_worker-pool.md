@@ -1,7 +1,7 @@
 # pi-agent-server worker-pool
 
 > Worker Pool 架构。master 通过 `child_process.spawn` 管理 N 个 worker 子进程。
-> v2：见 `changelog/2026-08-24_012-session-lifecycle-v2.md`（hasRow + LRU + MAX_WORKERS）
+> v2：hasRow + LRU + MAX_WORKERS（详见 `doc/architecture/changelog/` README）。
 
 ## 进程模型
 

@@ -231,7 +231,6 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
 - [`doc/architecture/current/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机扩展 IM idle timeout 规则
 - [`doc/architecture/current/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
 - [`doc/architecture/current/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 待补充"主包零渠道知识"硬约束
-- [`doc/architecture/changelog/2026-08-26_im-gateway-design.md`](../changelog/2026-08-26_im-gateway-design.md) — 本次架构变更 changelog
 - [`openspec/changes/im-gateway/proposal.md`](../../openspec/changes/im-gateway/proposal.md) — 提案(163 行)
 - [`openspec/changes/im-gateway/design.md`](../../openspec/changes/im-gateway/design.md) — 设计(955 行,16 个 D)
 - [`openspec/changes/im-gateway/tasks.md`](../../openspec/changes/im-gateway/tasks.md) — 实施任务(65 个)

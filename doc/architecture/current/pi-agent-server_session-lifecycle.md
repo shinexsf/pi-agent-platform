@@ -1,7 +1,7 @@
 # pi-agent-server session-lifecycle
 
 > Session 生命周期。定义 session 何时创建、销毁、配置管理。
-> v2：见 `changelog/2026-08-24_012-session-lifecycle-v2.md`
+> v2：placeholder 即 spawn + 统一 context 端点 + worker pool 上限 20 + LRU + 删 active 自动超时（详见 `doc/architecture/changelog/` README）。
 
 ## 状态机
 
@@ -117,7 +117,6 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 - customPrompt 路径：保留 Available tools / "In addition to..." / tool promptGuidelines（避免 model 乱调用工具）
 - default 路径：走 pi SDK 原 default prompt（含 Pi doc / Role def / 硬编码 Guidelines），不动
 - 详细规格见 [`worker-system-prompt-customization` spec](../specs/worker-system-prompt-customization/spec.md)
-- 变更背景见 [changelog 013: worker 接管 systemPrompt 拼接](../changelog/2026-08-30_013-worker-system-prompt-takeover.md)
 
 **两套 spawnPlaceholder/spawnAndCreate 实现的注意**：worker 当前架构下 `im-gateway/session-bridge.ts` 和 `routes/sessions.ts` **各自有本地实现**（IM 渠道 / IDE+web 端分别走）。改 systemPrompt 拼接或加 cacheSystemPrompt 时，**两处都要改**——否则一边的 session 不缓存 systemPrompt，`GET /:id/context` 返回 null。
 

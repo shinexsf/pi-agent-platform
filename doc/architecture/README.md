@@ -18,6 +18,7 @@
 | pi-agent-server | http-api | [HTTP API](current/pi-agent-server_http-api.md) | v1 路由 + SSE 协议 |
 | pi-agent-server | im-gateway | [IM Gateway](current/pi-agent-server_im-gateway.md) | QQ + 微信渠道包（后端 + 前端一体化）；5 个接口；manifest dynamic import；21 条 API；30min IM session timeout |
 | pi-agent-server | debug-testing | [Debug Testing](current/pi-agent-server_debug-testing.md) | Debug 接口 = unit tests 替代品；server `/debug/*` 5 端点 + IM `/api/im/debug/*` 2 端点；dev-only gating；不要写 unit tests 用 curl 端到端 |
+| **pi-agent-server** | **packaging** | **[Packaging & Distribution](current/pi-agent-server_packaging.md)** | **`pi-server` npm tarball；`PI_SERVER_CLI` marker 双模式启动；6 个打包态环境变量；channels/shared/ 副本解决 workspace 内部包依赖；tarball 不含 node_modules；better-sqlite3 走 npm 标准 install hook** | **2026-09-02** |
 | pi-agent-server | invariants | [不变量](current/pi-agent-server_invariants.md) | 架构层 hard rules（不能动） |
 | pi-agent-web | overview | [架构概览](current/pi-agent-web_overview.md) | Vue 3 + Tailwind v4 + 自写业务组件 + 不引入重组件库 |
 | pi-agent-idea | overview | [架构概览](current/pi-agent-idea_overview.md) | IntelliJ 客户端：Kotlin 插件 + Vue UI 双模块；Chat 用 JCEF、管理用 Swing；server 托管静态资源；MVP 已实施 |

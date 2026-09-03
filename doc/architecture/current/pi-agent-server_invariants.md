@@ -1,6 +1,6 @@
 # pi-agent-server invariants
 
-> 架构层不变量（system-wide hard rules）。**不能动**，动之前必须改 changelog + 重新评审。
+> 架构层不变量（system-wide hard rules）。**不能动**，动之前必须写新架构变更并重新评审（详见 `doc/architecture/changelog/` README）。
 
 ## 进程模型
 
@@ -102,7 +102,7 @@
 - `platform/channels/manifest.json` `channels` 数组加 `"channel-slack"`
 - 主包任何文件（MUST NOT）改动
 
-**违反以上任一硬约束 = 动架构，必须改 changelog + 重新评审**。
+**违反以上任一硬约束 = 动架构，必须写新架构变更并重新评审**（详见 `doc/architecture/changelog/` README）。
 
 ## sessionId
 
@@ -207,8 +207,8 @@ DB 存的路径是 forward slash 形式。传给 `fs.readFile` / `path.resolve` 
 
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— session 状态机
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— worker 进程模型
-- [changelog 005: 路径规范化](changelog/2026-08-19_005-path-normalization.md) —— `normalizePath` 工具
-- [changelog 010: worker cwd + 历史会话续接](changelog/2026-08-19_010-worker-cwd-and-session-resume.md) —— spawn cwd 段
+- `normalizePath` 工具（路径规范化段）
+- spawn cwd 段（worker cwd = agent.workspacePath）
 
 ## 相关文档
 

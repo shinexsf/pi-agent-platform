@@ -34,7 +34,7 @@ import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { printStartupBanner } from './startup-banner.js';
 import { initModelRegistry, listAvailableModels } from './model-registry.js';
 import { mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 async function main() {
   printStartupBanner();
@@ -161,5 +161,22 @@ function mountStaticDir(app: Hono, prefix: string, absDir: string, logLabel: str
     root: absDir,
     rewriteRequestPath: (p) => p.startsWith(`${baseWithoutSlash}/`) ? p.slice(baseWithoutSlash.length) : p,
   }));
+  // SPA history fallback: any GET request under the prefix whose path has no
+  // file extension (so it's a vue-router route, not an asset) falls back to
+  // the SPA's index.html. Required because vue-router uses HTML5 History API
+  // (pushState); refreshing /web/agents would otherwise 404 since there's no
+  // /public/web/agents file.
+  const indexHtmlPath = path.join(absDir, 'index.html');
+  if (existsSync(indexHtmlPath)) {
+    const indexHtml = readFileSync(indexHtmlPath, 'utf-8');
+    app.get(`${prefix}*`, (c) => {
+      const last = c.req.path.split('/').pop() ?? '';
+      if (/\.[a-zA-Z0-9]+$/.test(last)) {
+        // Has a file extension → asset, don't fallback. Let Hono return 404.
+        return c.notFound();
+      }
+      return c.html(indexHtml);
+    });
+  }
   console.log(`[server] ${logLabel} mounted from ${absDir}`);
 }

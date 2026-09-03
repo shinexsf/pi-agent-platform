@@ -244,10 +244,7 @@ curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 
 ## 历史决策
 
-- [changelog 007: 接入真实 pi SDK](./changelog/2026-08-19_007-real-pi-sdk.md) —— `/debug/health` `/debug/sessions` `/debug/workers` 初版（5 个端点，2026-08-19）
-- [changelog 012: IM Gateway 架构设计](./changelog/2026-08-26_im-gateway-design.md) —— `/api/im/debug/state` 初版（2026-08-26）
-- [changelog 013: worker 接管 systemPrompt + debug 接口](./changelog/2026-08-30_013-worker-system-prompt-takeover.md) —— `/api/sessions/:id/context.systemPrompt` + `cacheSystemPrompt` + `WorkerEntry.systemPrompt` 缓存模式（2026-08-30）
-- [changelog 014: debug-testing 架构规范](./changelog/2026-08-30_014-debug-testing.md) —— 本规范（2026-08-30）
+（历史变更轨迹见 `doc/architecture/changelog/`，gitignored 私域）
 
 ## 相关 dev-journal
 

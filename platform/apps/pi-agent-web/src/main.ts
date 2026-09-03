@@ -51,7 +51,10 @@ const baseRoutes = [
 ];
 
 const router = createRouter({
-  history: createWebHistory(),
+  // SPA 部署在 server 的 /web/ 下。vue-router 的 history base 必须跟 vite
+  // base 一致，否则 pushState 跳到 /agents（不带前缀），刷新后 server
+  // 没 mount /agents → 404。
+  history: createWebHistory('/web/'),
   routes: [
     ...baseRoutes,
     buildImGatewayRoute(channelAdminRegistry),

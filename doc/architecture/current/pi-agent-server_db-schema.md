@@ -76,7 +76,7 @@ export interface Agent {
   model: string;
   thinkingLevel?: string;
   // systemPrompt / tools 可选：undefined 表示"用 pi 默认"
-  // (与 db nullable 列对齐，参见 changelog 2026-08-26)。
+  // (与 db nullable 列对齐)。
   systemPrompt?: string;
   appendSystemPrompt?: string;
   tools?: string[];
