@@ -39,9 +39,11 @@
   - 第三方 pi 插件可能直接读 `process.cwd()`（不走 pi SDK session cwd）
   - worker cwd = agent workspacePath → 插件拿正确目录
   - 影响 worker module 解析吗？**不**（入口文件绝对路径 / 相对 import 基于文件位置 / node_modules 向上找）
-- **启动快速失败**：master spawn worker 后 **200ms 内** 检测 `exit code !== 0` 立刻报错
-  - 200ms 是经验值：启动失败通常 <100ms，正常启动需要更长时间
-  - 太快误报，太慢上层等待过久
+- **启动快速失败**：master spawn worker 后 **5 秒内**（默认 `WORKER_STARTUP_TIMEOUT_MS=5000`）检测 `exit code !== 0` 立刻报错
+  - 5s 是经验值：启动失败通常 <1s 退出，正常 pi SDK 启动（读 `models.json` + 加载资源）需要 ~1s，留 4s 缓冲
+  - 早期设计值 200ms 已被实测推翻（详见 dev-journal 014：worker env 漏注入 → 退 2 的教训）
+  - 太短误报，太长上层等待过久
+  - 通过 `WORKER_STARTUP_TIMEOUT_MS` 环境变量可调
 - **stderr 诊断收集**：worker stderr 保留**最近 100 chunks**
   - 用于启动失败 / 运行时异常时的诊断（dump stderr）
   - 不能改大改小（影响诊断完整性 vs 内存占用）
@@ -77,7 +79,7 @@
 | 渠道表名 | `channels_wechat`, `channels_qq`, `channels_qq_routes` |
 | 渠道字段 | `storage_dir`, `storageDir`, `app_secret`, `appSecret`, `group_openid`, `groupOpenid` |
 | 渠道 SDK | `@tencent-connect/qqbot-connector`, `@wechatbot/wechatbot`, `qq-bot-sdk`, `iLinkSDK` |
-| 渠道路由字面量 | `"/api/im/wechat"`, `"/api/im/qq"`（主包只挂 `/api/im/manifest`, `/api/im/health`, `/api/im/channels`） |
+| 渠道路由字面量 | `"/api/im/wechat"`, `"/api/im/qq"`（**不在主包 src/ 出现**；主包 im-gateway 用 `router.route(\`/${type}\`, r)` 运行时按 manifest 拼接，渠道包在 `register()` 时把前缀作为参数传入）|
 
 ### 主包 package.json 零 SDK 依赖
 

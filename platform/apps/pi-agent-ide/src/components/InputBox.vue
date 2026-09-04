@@ -585,7 +585,10 @@ onUnmounted(() => {
 .input-wrapper {
   position: relative;
   background: transparent;
-  border: 1px solid #26282C;
+  /* 用 var(--border) 代替硬编码 #26282C（暗色灰 900）——后者在亮色白底
+   * 上像"贴了一条黑边"。hover 状态由 --border 自身的暗色 → 亮色变化
+   * 体现（IDE 注入的 light --border 是 #e1e4e8 → #d0d7de）。 */
+  border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   min-height: 96px;
@@ -597,10 +600,10 @@ onUnmounted(() => {
   transition: border-color 0.12s;
 }
 .input-wrapper:hover {
-  border-color: #3a3d42;
+  border-color: var(--text-secondary);
 }
 .input-wrapper:focus-within {
-  border-color: #3577E9;
+  border-color: var(--user-bubble-bg);
 }
 
 .input-pills {
@@ -684,7 +687,7 @@ onUnmounted(() => {
   line-height: 1;
 }
 .toolbar-icon-btn:hover {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--hover-bg-strong);
   color: var(--text-primary);
 }
 
@@ -721,7 +724,7 @@ onUnmounted(() => {
 .send-btn:hover:not(:disabled),
 .abort-btn:hover {
   color: var(--user-bubble-bg);
-  background: rgba(128, 128, 128, 0.1);
+  background: var(--hover-bg);
 }
 .send-btn:disabled {
   opacity: 0.4;

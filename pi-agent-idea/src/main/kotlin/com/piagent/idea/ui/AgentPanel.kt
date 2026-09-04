@@ -13,6 +13,7 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.SwingUtilities
+import com.intellij.ui.JBColor
 
 /**
  * Lists agents whose workspacePath matches the given project path.
@@ -58,6 +59,7 @@ class AgentPanel(
     }
 
     private fun addAgentRow(): JPanel {
+        val hoverBg = JBColor(0xE8E8E8, 0x333333)
         val row = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             border = javax.swing.border.EmptyBorder(6, 12, 6, 12)
@@ -70,7 +72,7 @@ class AgentPanel(
                     }
                 }
                 override fun mouseEntered(e: java.awt.event.MouseEvent) {
-                    background = Color(0x33, 0x33, 0x33)
+                    background = hoverBg
                     isOpaque = true
                 }
                 override fun mouseExited(e: java.awt.event.MouseEvent) {
@@ -81,12 +83,12 @@ class AgentPanel(
         }
         val plus = JLabel("+").apply {
             font = font.deriveFont(java.awt.Font.BOLD, 16f)
-            foreground = Color(0xaa, 0xaa, 0xaa)
+            foreground = JBColor(0x666666, 0xAAAAAA)
             border = javax.swing.border.EmptyBorder(0, 0, 0, 8)
         }
         val label = JLabel("Add Agent").apply {
             font = font.deriveFont(java.awt.Font.PLAIN, 12f)
-            foreground = Color(0xaa, 0xaa, 0xaa)
+            foreground = JBColor(0x666666, 0xAAAAAA)
         }
         row.add(plus)
         row.add(label)
@@ -113,7 +115,7 @@ class AgentPanel(
         })
         left.add(JLabel(agent.model).apply {
             font = font.deriveFont(10f)
-            foreground = java.awt.Color.GRAY
+            foreground = JBColor(0x888888, 0x888888)
             alignmentX = JLabel.LEFT_ALIGNMENT
         })
         row.add(left)

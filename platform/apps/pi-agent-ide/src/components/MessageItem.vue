@@ -504,14 +504,16 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
   margin: 0 -6px;
 }
 .thinking-preview:hover {
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--hover-bg);
 }
-/* 折叠态末尾的 hyperlink-style 提示文字：浅蓝 + 下划线，仅作用于
- * `...(collapsed)` 这一段，整行其他文字保持灰色无下划线不变。 */
+/* 折叠态末尾的 hyperlink-style 提示文字：链接色 + 下划线，仅作用于
+ * `...(collapsed)` 这一段，整行其他文字保持灰色无下划线不变。
+ * 用 var(--link) 而不是硬编码 #93C5FD：后者在亮色白底上只有 2:1 对比度
+ * 几乎不可见，跟 var(--link) (4.5:1+) 一致。 */
 .thinking-collapsed-suffix {
-  color: #93C5FD;
+  color: var(--link);
   text-decoration: underline;
-  text-decoration-color: #93C5FD;
+  text-decoration-color: var(--link);
   text-underline-offset: 2px;
 }
 .thinking-expanded {
@@ -522,7 +524,7 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
   /* No max-height per user request: full thinking stays fully visible. */
 }
 .thinking-expanded:hover {
-  background: rgba(128, 128, 128, 0.04);
+  background: var(--hover-bg);
 }
 
 .message-content {
@@ -590,9 +592,11 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
   font-size: 11px;
 }
 
-.tool-status.status-completed { color: var(--tool-done-border); }
-.tool-status.status-running { color: var(--tool-running-border); }
-.tool-status.status-error { color: var(--tool-error-border); }
+/* 状态文字用 *-text 变量（亮色下 700-900 阶，暗色下 300-500 阶），
+ * 满足 WCAG AA。500 阶 hue 在浅色卡背景上只有 2~3:1 不可读。 */
+.tool-status.status-completed { color: var(--tool-done-text); }
+.tool-status.status-running { color: var(--tool-running-text); }
+.tool-status.status-error { color: var(--tool-error-text); }
 
 .tool-args {
   margin-top: 2px;
@@ -669,7 +673,7 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
   max-width: 100%;
 }
 .arg-value-preview:hover {
-  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.15);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .arg-value-expanded {
@@ -715,7 +719,7 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
 }
 .tool-result-preview:hover {
   /* Tint via filter would be cleanest; box-shadow outline is simpler. */
-  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.15);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .tool-result-toggle {
   display: inline-block;

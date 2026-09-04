@@ -83,17 +83,19 @@ export const Methods = {
   GET_SELECTION:       'context.getSelection',
   GET_CURRENT_FILE:    'context.getCurrentFile',
   GET_WORKSPACE:       'context.getWorkspace',
+  SEARCH_FILES:        'context.searchFiles',      // Kotlin 端已实装 PSI + FS 双路补齐；Vue 端 FileSearchMenu 调用
 
   // 主题
   GET_THEME:           'theme.get',
 
   // 通知
   NOTIFY:              'ui.notify',
- CONFIRM:             'ui.confirm',
+  CONFIRM:             'ui.confirm',
 } as const
 
 export const Events = {
   THEME_CHANGED:       'theme.changed',
+  SESSION_QUEUE_UPDATE:'session.queue_update',     // Kotlin 端已实装，转发 worker queue_update 到 JCEF
   WORKSPACE_CHANGED:   'context.workspaceChanged',
   EDITOR_FOCUSED:      'editor.focused',
 } as const
@@ -104,6 +106,7 @@ export namespace Results {
   export type GetSelection     = { filePath: string; startLine: number; endLine: number; text: string; language?: string } | null
   export type GetCurrentFile   = { path: string; content: string; language?: string; isDirty?: boolean } | null
   export type GetWorkspace     = { root: string; git?: { branch: string; remote?: string; commit?: string }; name?: string } | null
+  export type SearchFiles      = Array<{ path: string; label: string; relativePath: string }>  // Kotlin 端 PSI + FS 双路结果
   export type GetTheme         = { mode: 'light' | 'dark' | 'high-contrast'; cssVars: Record<string, string>; fontFamily?: string }
 }
 ```
@@ -142,6 +145,14 @@ export namespace Results {
  * context.getWorkspace
  *   params: 无
  *   returns: WorkspaceInfo | null（无项目时返回 null）
+ *   timeout: 1s
+ */
+
+/**
+ * context.searchFiles
+ *   params: { query: string, limit?: number }
+ *   returns: Array<{ path, label, relativePath }> | []（空查询返空数组）
+ *   说明: Kotlin 端走 PSI 索引 + Filesystem fallback 双路补齐，详见 `IdeaIdeBridge.handleSearchFiles`
  *   timeout: 1s
  */
 
@@ -573,6 +584,20 @@ class JcefChatPanel(private val project: Project) : Disposable {
 - **OQ1：单向推送事件（on）的实现** —— JS 端 `on(event, listener)` 注册 listener，Kotlin 端需要推时调 `__ideBridgeOnEvent(event, data)`。需要解决 listener ID 管理和 unsubscribe 的 JS↔Kotlin 映射。当前设计是单向简单版本，复杂场景（高频事件、listener 清理）需要进一步设计。
 - **OQ2：桥接失败时的 Vue 降级** —— invoke 返回 ok=false 时，UI 应该显示 fallback 还是 toast 提示？
 - **OQ3：bridge 调用是否需要授权层** —— 是否所有 invoke 都要做用户权限确认？MVP 暂不做
+
+## 已知契约漂移（2026-09-03 发现，待修）
+
+**问题**：Vue 端调用 `SEARCH_FILES` / `SESSION_QUEUE_UPDATE` 时**用硬编码字符串**，未走 `Methods` / `Events` 常量：
+
+- `platform/apps/pi-agent-ide/src/components/FileSearchMenu.vue:58` —— `u.invoke("context.searchFiles", ...)`
+- `platform/apps/pi-agent-ide/src/composables/useSSE.ts:540` —— `b.on('session.queue_update', ...)`
+
+**后果**：Kotlin 端重命名 / 删除常量时，Vue 端硬编码静默失效，集成测试 `BridgeContractTest.kt` 也**只断言 Kotlin→期望字符串方向**，不覆盖 Vue→Kotlin 方向，漂移不会被自动化捕获。
+
+**修复路径**（下次 change 处理）：
+1. Vue 端调用点改走常量（`Methods.SEARCH_FILES` / `Events.SESSION_QUEUE_UPDATE`）
+2. `BridgeContractTest` 加一条反向断言：读 Vue 端 `Methods` 常量 → 验证 Kotlin 端常量覆盖
+3. CI / build 加 lint 规则检查 IDE bridge 字符串字面量（与主包零渠道字面量约束同思路）
 
 ## 相关条目
 

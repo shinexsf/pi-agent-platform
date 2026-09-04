@@ -158,7 +158,7 @@ onUnmounted(() => {
   border-radius: 3px;
 }
 .thinking-trigger:hover {
-  background: rgba(128, 128, 128, 0.1);
+  background: var(--hover-bg);
 }
 .thinking-empty {
   color: var(--text-secondary);
@@ -185,7 +185,7 @@ onUnmounted(() => {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-popup);
   padding: 4px 0;
 }
 
@@ -202,7 +202,7 @@ onUnmounted(() => {
   color: var(--user-bubble-text);
 }
 .thinking-current {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--hover-bg-strong);
 }
 .thinking-check {
   font-size: 11px;

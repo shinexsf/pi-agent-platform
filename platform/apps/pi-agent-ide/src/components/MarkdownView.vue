@@ -181,7 +181,7 @@ export default {
   padding: 12px;
   padding-top: 32px; /* leave room for copy button */
   overflow-x: auto;
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--hover-bg);
 }
 .markdown-body :deep(pre .code-copy-btn) {
   position: absolute;
@@ -223,7 +223,7 @@ export default {
   font-size: 13px;
 }
 .markdown-body :deep(:not(pre) > code) {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--hover-bg-strong);
   padding: 2px 5px;
   border-radius: 3px;
 }

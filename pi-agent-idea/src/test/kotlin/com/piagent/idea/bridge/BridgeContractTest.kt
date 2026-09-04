@@ -107,25 +107,42 @@ class BridgeContractTest {
     }
 
     @Test
-    fun `ThemeInfo cssVars 18-var round-trip`() {
-        // Per D10: emit 18 cssVars covering all style.css references.
+    fun `ThemeInfo cssVars 26-var round-trip`() {
+        // Per D10 + light-theme-fix: emit 26 cssVars covering all `style.css`
+        // references (background / foreground / bubbles / tool cards / result /
+        // link / scrollbar / font / state-text / on-error / hover-bg / shadow).
+        // 亮色 / 暗色 *-text 单独一档 hue（500 阶在浅色背景不可读）。
         val cssVars = mapOf(
+            // surface
             "--bg-primary" to "#191A1C",
             "--text-primary" to "#d4d4d4",
             "--border" to "#3c3f41",
             "--text-secondary" to "#9da0a4",
+            // user bubble
             "--user-bubble-bg" to "#3577E9",
             "--user-bubble-text" to "#FFFFFF",
+            // tool card state (bg + border + text)
             "--tool-done-bg" to "#1B3A1B",
             "--tool-done-border" to "#66BB6A",
+            "--tool-done-text" to "#81C784",
             "--tool-running-bg" to "#3D3A1B",
             "--tool-running-border" to "#FFC107",
+            "--tool-running-text" to "#FFCA28",
             "--tool-error-bg" to "#3D1B1B",
             "--tool-error-border" to "#EF5350",
+            "--tool-error-text" to "#EF5350",
+            // tool result + error on-color
             "--tool-result-bg" to "#274427",
+            "--on-error" to "#FFFFFF",
+            // link / scrollbar / font
             "--link" to "#64B5F6",
             "--scrollbar-thumb" to "rgba(255,255,255,0.2)",
             "--scrollbar-thumb-hover" to "rgba(255,255,255,0.35)",
+            "--hover-bg" to "rgba(255,255,255,0.08)",
+            "--hover-bg-strong" to "rgba(255,255,255,0.12)",
+            "--shadow-popup" to "0 -4px 16px rgba(0,0,0,0.4)",
+            "--shadow-tooltip" to "0 4px 12px rgba(0,0,0,0.5)",
+            "--shadow-fab" to "0 2px 8px rgba(0,0,0,0.4)",
             "--font-family" to "JetBrains Mono",
         )
         val theme = IdeaIdeBridge.ThemeInfo(
@@ -137,7 +154,7 @@ class BridgeContractTest {
         val restored = mapper.readValue(json, IdeaIdeBridge.ThemeInfo::class.java)
         assertEquals("dark", restored.mode)
         assertEquals(cssVars, restored.cssVars)
-        assertEquals(17, restored.cssVars.size, "ThemeInfo cssVars must cover all 17 style.css references")
+        assertEquals(26, restored.cssVars.size, "ThemeInfo cssVars must cover all 26 style.css references")
     }
 
     @Test

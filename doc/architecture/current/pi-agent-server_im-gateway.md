@@ -121,25 +121,36 @@ IM 网关是 **pi-agent-server 进程内模块**,但代码组织上完全 worksp
 
 **主包零渠道 DDL**:主包 `db/init.ts` 只写主表 DDL,IM 渠道表完全由渠道包 register 时声明。
 
-## HTTP API(21 条)
+## HTTP API(23 条 = 主包 5 + 微信 9 + QQ 9)
 
 ```
-主包汇总(3 条):
+主包汇总(5 条):
   GET  /api/im/manifest          ← 启用渠道列表(给前端)
   GET  /api/im/health            ← 渠道包加载状态 + adapter 连接状态
   GET  /api/im/channels          ← 跨 type channels 只读列表
+  GET  /api/im/debug/state       ← dev-only:内部状态快照(session map + adapters + QQ notified)
+  GET  /api/im/events            ← SSE:渠道日志实时流(dev+prod 都挂,admin 实时事件用)
 
-微信渠道(7 条,渠道包自挂 /api/im/wechat/*):
-  GET    /channels, POST /channels, PATCH /channels/:id, DELETE /channels/:id
-  POST   /channels/:id/start, POST /channels/:id/stop
-  GET    /channels/:id/status
+微信渠道(9 条,渠道包自挂 /api/im/wechat/*):
+  GET    /channels               ← 列出
+  POST   /channels               ← 创建
+  GET    /channels/:id           ← 详情
+  PATCH  /channels/:id           ← 修改
+  DELETE /channels/:id           ← 删除
+  POST   /qr-login               ← 创建 row + auto storageDir + 返回 channelId(不启动)
+  POST   /channels/:id/start-qr  ← 触发 SDK 扫码登录,经 SSE 推 qr-url / connected
+  POST   /channels/:id/start     ← 启动(复用 stored creds,失败 fallback 到 QR)
+  POST   /channels/:id/stop      ← 停止
 
-QQ 渠道(11 条 = 上面 7 + bindings 4,渠道包自挂 /api/im/qq/*):
-  GET    /channels/:id/bindings, POST /channels/:id/bindings
-  PATCH  /channels/:id/bindings/:bindingId, DELETE /channels/:id/bindings/:bindingId
+QQ 渠道(9 条,与微信同模板,渠道包自挂 /api/im/qq/*):
+  GET    /channels, POST /channels, GET /channels/:id, PATCH /channels/:id, DELETE /channels/:id
+  POST   /qr-login               ← 后续由 connector onCredentials 回调回填 appId/appSecret
+  POST   /channels/:id/start-qr  ← 启动 QR 流
+  POST   /channels/:id/start     ← 启动(已有 credentials)
+  POST   /channels/:id/stop      ← 停止
 ```
 
-> **MVP 简化**:QQ 渠道仅暴露 7 条 channels CRUD,**bindings 4 条路由 MVP 不暴露**(群聊 / bindings 推迟到下个 change)。完整 11 条在群聊支持时再加。
+> **MVP 简化**:**bindings 4 条路由 MVP 不暴露**(群聊 / per-chat binding 推迟到下个 change)。QQ 渠道 MVP 只走"单 channel 单 agent"模式(用 `defaultAgentId`),不暴露 bindings 子表路由。完整 11+ 条在群聊支持时再加。
 
 ## sendFileToUser 工具(MVP 跳过,推下个 change)
 
@@ -178,8 +189,8 @@ worker 端 `agent_end` event 不含回复文本(`delta` 是空 sentinel),实际�
 | D5 | 群路由 key | 用 `chat_id`(防 OpenClaw #10207 bug),不用 sender user id |
 | D6 | session 状态字段 | 放渠道表(`current_session_id`),不建独立映射表 |
 | D7 | sendFileToUser | worker 薄壳 + master 统一处理,闭包捕获 sessionId |
-| D8 | 渠道指令注入 | createSession 时 merge 到 `RuntimeConfig.appendSystemPrompt` |
-| D9 | 斜杠命令分发 | gateway 层解析,per-route 自定义优先 |
+| D8 | 渠道指令注入 | adapter 实现 `getSystemPromptContext(channelId, chatId)` 但路由层 **⏸️ MVP 未消费**(返回值未注入 `RuntimeConfig.appendSystemPrompt`)|
+| D9 | 斜杠命令分发 | gateway 层解析(builtin → worker 二级分发);**⏸️ per-route 自定义 MVP 未落地** |
 | D10 | 路由未命中 | 返回错误消息,不自动 binding |
 | D11 | HTTP API 路径 | 主包汇总 + 渠道包自挂(`/api/im/<type>/*`) |
 | D12 | 依赖归属 | SDK 归渠道包,主包零 SDK |
@@ -221,6 +232,8 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
 | 鉴权 | ⏸️ 上线前必补 | 当前裸奔,跟 server 现有状态一致 |
 | 限流 | ⏸️ 不做 | 后续加 middleware |
 | 多 agent 路由(同一 channel 多 chat 不同 agent) | ⏸️ 不做 | 当前单 channel 一 agent(微信)或 per-chat binding(QQ) |
+| 渠道指令注入(D8) | ⏸️ adapter 接口已实装 | `getSystemPromptContext` 返回值未注入到任何 prompt |
+| per-route 自定义斜杠命令(D9) | ⏸️ MVP 未落地 | 当前仅 builtin → worker 二级分发 |
 | `qq-bot-sdk` AGPL-3.0 商用评估 | ⏸️ 待办 | ChannelAdapter 抽象允许替换 |
 | `@wechatbot/wechatbot` 成熟度验证 | ⏸️ 待办 | 新包,需早期 spike |
 

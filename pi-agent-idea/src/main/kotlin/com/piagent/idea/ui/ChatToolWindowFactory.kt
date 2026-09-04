@@ -41,6 +41,10 @@ import javax.swing.JTextField
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
+import com.intellij.ide.ui.LafManagerListener
+import com.intellij.ui.JBColor
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.util.messages.MessageBusConnection
 
 /**
  * 主 ToolWindow 入口。
@@ -58,7 +62,7 @@ import javax.swing.border.EmptyBorder
  * Factory 字段（与 project 无关）：
  *   - settings: PluginSettings（应用单例）
  *   - connectionStatusAction: 标题栏状态指示（所有 project 共享同一个 server 连接状态）
- *   - 各种颜色/尺寸常量
+ *   - 各种颜色/尺寸常量（JBColor 亮/暗自动切换）
  *
  * 布局：
  *   - 自实现 tab bar：chat tabs (CENTER) | fixed icon buttons (EAST, 固定贴右：Agents / Sessions)
@@ -73,16 +77,22 @@ import javax.swing.border.EmptyBorder
  *
  * Tab bar 高度 / 颜色约定：
  *   - 高度 = `tabBarHeight`（紧凑；约 = 一行字号 + 4px）
- *   - bg = `0x3C3F41`（IDE 默认 Dark ToolWindow bg；不与整体底色形成反差）
- *   - hover = `0x4A4E51`（稍亮，给点击反馈）
+ *   - bg = JBColor(亮/暗)（跟随 IDE 主题）
+ *   - hover = bg 稍亮一档（给点击反馈）
  *   - active 区别：仅底部 2px 蓝色边框 + icon 染色（不靠 bg 拉亮，避免"太亮"）
  *   - chat tab × 按钮：BorderLayout 内部 closeBtn 在 EAST、titleLabel 在 CENTER + maxWidth
  *     限定（修 "× 按钮位置不稳" bug —— 之前 BoxLayout 平铺，title 长会把 × 挤出）
+ *
+ * 主题跟随：
+ *   - Tab bar 颜色用 JBColor（亮/暗随主题自动切换）
+ *   - SessionPanel / AgentPanel 硬编码 Color 改为 JBColor
+ *   - LafManagerListener 切主题时触发所有面板 repaint
  */
 class ChatToolWindowFactory : ToolWindowFactory {
 
     private lateinit var settings: PluginSettings
     private val connectionStatusAction = ConnectionStatusAction()
+    private var themeConnection: MessageBusConnection? = null
 
     /** Per-project state. Keyed by Project so two opened projects keep independent UI state. */
     private val windowStates = mutableMapOf<Project, WindowState>()
@@ -150,15 +160,19 @@ class ChatToolWindowFactory : ToolWindowFactory {
         windowStates.getOrPut(project) { WindowState(project) }
 
     private val tabBarHeight = 22
-    private val tabBgColor = Color(0x3C, 0x3F, 0x41)
-    private val tabHoverBgColor = Color(0x4A, 0x4E, 0x51)
-    private val tabSeparatorColor = Color(0x33, 0x35, 0x37)
-    private val tabActiveBorderColor = Color(0x35, 0x77, 0xE9)
+    // JBColor(light, dark) — 每次 paint 时读，跟随 IDE 主题自动切换
+    private val tabBgColor = JBColor(0xF5F5F5, 0x3C3F41)
+    private val tabHoverBgColor = JBColor(0xE8E8E8, 0x4A4E51)
+    private val tabSeparatorColor = JBColor(0xD0D0D0, 0x333537)
+    private val tabActiveBorderColor = JBColor(0x3577E9, 0x3577E9)
     private val tabActiveBorderHeight = 2
+    private val tabCloseBtnColor = JBColor(0x666666, 0xAAAAAA)
+    private val tabCloseBtnHoverColor = JBColor(0xCC3333, 0xEE5555)
+    private val tabTitleColor = JBColor(0x333333, 0xDDDDDD)
+    private val tabErrorColor = JBColor(0xCC5555, 0xCC5555)
 
     private class ConnectionStatusAction : AnAction(), DumbAware {
         var status: Status = Status.Checking
-        var serverUrl: String = ""
 
         enum class Status { Checking, Connected, Failed }
 
@@ -167,6 +181,10 @@ class ChatToolWindowFactory : ToolWindowFactory {
         }
 
         override fun update(e: AnActionEvent) {
+            // Read serverUrl fresh on every update so settings changes show up
+            // immediately without restarting IDEA (previously cached at
+            // createToolWindowContent time).
+            val serverUrl = PluginSettings.getInstance().serverUrl
             e.presentation.icon = when (status) {
                 Status.Checking -> GrayDotIcon
                 Status.Connected -> GreenDotIcon
@@ -185,22 +203,25 @@ class ChatToolWindowFactory : ToolWindowFactory {
     }
 
     private object GrayDotIcon : Icon {
-        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
-            g.color = Color(0x88, 0x88, 0x88); g.fillOval(x + 2, y + 2, 4, 4)
+        private val c = JBColor(0x888888, 0x888888)
+        override fun paintIcon(component: Component?, g: Graphics, x: Int, y: Int) {
+            g.color = c; g.fillOval(x + 2, y + 2, 4, 4)
         }
         override fun getIconWidth() = 8; override fun getIconHeight() = 8
     }
 
     private object GreenDotIcon : Icon {
-        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
-            g.color = Color(0x6a, 0xbf, 0x69); g.fillOval(x + 2, y + 2, 4, 4)
+        private val c = JBColor(0x4CAF50, 0x66BB6A)
+        override fun paintIcon(component: Component?, g: Graphics, x: Int, y: Int) {
+            g.color = c; g.fillOval(x + 2, y + 2, 4, 4)
         }
         override fun getIconWidth() = 8; override fun getIconHeight() = 8
     }
 
     private object RedDotIcon : Icon {
-        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
-            g.color = Color(0xcc, 0x55, 0x55); g.fillOval(x + 2, y + 2, 4, 4)
+        private val c = JBColor(0xCC5555, 0xCC5555)
+        override fun paintIcon(component: Component?, g: Graphics, x: Int, y: Int) {
+            g.color = c; g.fillOval(x + 2, y + 2, 4, 4)
         }
         override fun getIconWidth() = 8; override fun getIconHeight() = 8
     }
@@ -217,16 +238,35 @@ class ChatToolWindowFactory : ToolWindowFactory {
 
         if (!settings.isConfigured()) {
             connectionStatusAction.status = ConnectionStatusAction.Status.Failed
-            connectionStatusAction.serverUrl = "(unconfigured)"
             renderUnconfigured(toolWindow)
             return
         }
 
-        connectionStatusAction.serverUrl = settings.serverUrl
         // Build (or reuse) THIS project's WindowState and mount its widget tree.
         val state = stateFor(project)
         mountToolWindow(toolWindow, state)
         checkConnection()
+
+        // 订阅主题切换（LafManagerListener）：切主题时所有子面板 repaint
+        if (themeConnection == null) {
+            themeConnection = ApplicationManager.getApplication().messageBus.connect()
+            themeConnection!!.subscribe(
+                LafManagerListener.TOPIC,
+                LafManagerListener {
+                    // JBColor 自动返回新主题色，只需触发 repaint 让所有组件重绘
+                    windowStates.values.forEach { ws ->
+                        SwingUtilities.invokeLater {
+                            ws.tabBar.repaint()
+                            ws.body.repaint()
+                            ws.agentPanel.repaint()
+                            ws.sessionPanel.repaint()
+                            ws.chatTabPanels.values.forEach { it.repaint() }
+                        }
+                    }
+                }
+            )
+            PluginLogger.info("ChatToolWindowFactory: theme listener subscribed")
+        }
     }
 
     private fun mountToolWindow(toolWindow: ToolWindow, state: WindowState) {
@@ -331,7 +371,7 @@ class ChatToolWindowFactory : ToolWindowFactory {
         // × close button (per A1)
         val closeBtn = JLabel("×").apply {
             font = font.deriveFont(Font.BOLD, 14f)
-            foreground = Color(0xaa, 0xaa, 0xaa)
+            foreground = tabCloseBtnColor
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             border = EmptyBorder(0, 6, 0, 8)
             toolTipText = "Close"
@@ -343,8 +383,8 @@ class ChatToolWindowFactory : ToolWindowFactory {
                         closeChatTab(state, serverSessionId)
                     }
                 }
-                override fun mouseEntered(e: MouseEvent) { foreground = Color(0xee, 0x55, 0x55) }
-                override fun mouseExited(e: MouseEvent) { foreground = Color(0xaa, 0xaa, 0xaa) }
+                override fun mouseEntered(e: MouseEvent) { foreground = tabCloseBtnHoverColor }
+                override fun mouseExited(e: MouseEvent) { foreground = tabCloseBtnColor }
             })
         }
         // Per A3.6: double-click title to rename.
@@ -672,7 +712,7 @@ class ChatToolWindowFactory : ToolWindowFactory {
                 border = EmptyBorder(20, 20, 20, 20)
             }
             val label = JLabel("<html><body style='width:400px'>$message</body></html>").apply {
-                foreground = Color(0xcc, 0x55, 0x55)
+                foreground = tabErrorColor
             }
             errPanel.add(label, BorderLayout.CENTER)
             val back = JButton("返回 Agents").apply {

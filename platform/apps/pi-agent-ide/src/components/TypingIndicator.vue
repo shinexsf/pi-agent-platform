@@ -13,7 +13,7 @@
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--hover-bg);
   border-radius: 12px;
   align-self: flex-start;
 }

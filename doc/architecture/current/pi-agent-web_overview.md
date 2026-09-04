@@ -7,18 +7,20 @@
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Vue 3 SPA (Vite) │
-│ │ │
-│ ┌──────┐ ┌──────────────────────────────────────────┐ │
-│ │ Sidebar│ │ ChatWindow │ │
-│ │ (sess) │ │ (消息列表 + 自动滚动)│ │
-│ │ mobile│ │ │ │
-│ │ Bottom│ │ ChatInput │ │
-│ │ Nav │ │ (textarea + 自动高度) │ │
-│ └──────┘ └──────────────────────────────────────────┘ │
-│ │ ▲ │ │
-│ │ SSE / fetch │ │
-│ ▼ │ │
-│ PiSessionProxy ──────────────────────────────→ Server │
+│ │
+│ ┌────────────────┐ ┌─────────────────────────────────┐ │
+│ │ SessionsListView │ │ SessionDetailView │ │
+│ │ (table + page) │ │ (chat inline: │ │
+│ │ │ │  消息气泡 + auto-scroll │ │
+│ │ │ │  + tool details collapse) │ │
+│ │ │ │ │ │
+│ │ │ │ (ChatInput inline) │ │
+│ └────────────────┘ └─────────────────────────────────┘ │
+│ │ ▲ │
+│ │ SSE (useSSE) / fetch │
+│ ▼ │
+│ pinia (installed, 0 store) → │
+│ PiSessionProxy (per-page useSSE) → Server │
 └──────────────────────────────────────────────────────────┘
             │
             ▼
@@ -30,8 +32,8 @@
 pi-agent-web 是一个 Vue 3 SPA（Vite 构建）。**不引入重型组件库**（naive-ui / Ant Design / Element Plus），**自写业务组件**，样式用 Tailwind CSS v4 原子化 class。
 
 - **流式响应**：自封装 `useSSE` composable（EventSource + 重连 + 中断）
-- **chat 原语**：自写 `ChatWindow` / `ChatInput` / `ChatMessage` 等业务组件
-- **响应式**：CSS 媒体查询 + `useIsMobile` composable，移动端用抽屉 / Bottom nav
+- **chat 原语**：MVP 不抽独立 chat 组件，全部 inline 到 `SessionDetailView.vue`（待主体稳了再拆）
+- **响应式**：CSS 媒体查询为主，`window.matchMedia` 内联判断，未抽独立 composable
 - **亮暗主题**：CSS variables + `useTheme` composable + `<html data-theme="...">`
 - **不引入测试**（v1）：等主体稳了再补
 
@@ -42,7 +44,7 @@ pi-agent-web 是一个 Vue 3 SPA（Vite 构建）。**不引入重型组件库**
 | 框架 | **Vue 3**（~16KB）| 复用旧 web 经验 / 轻量 |
 | 构建 | **Vite** | 快 / 现代 / Vue 官方推荐 |
 | 样式 | **Tailwind CSS v4**（`@tailwindcss/vite`）| 主流 / 原子化 / AI 友好度最高 |
-| 状态管理 | **Pinia** | Vue 3 推荐 / 轻量 |
+| 状态管理 | **Pinia**（已装但 MVP 0 store，状态都 inline 在 view 里）| Vue 3 推荐 / 轻量 |
 | 路由 | **Vue Router** | Vue 生态标准 |
 | HTTP | **fetch**（浏览器原生）| 简单 |
 | SSE | **EventSource**（浏览器原生）| 简单 |
@@ -60,60 +62,44 @@ pi-agent-web 是一个 Vue 3 SPA（Vite 构建）。**不引入重型组件库**
 
 ```
 src/views/
-├── AgentsListView.vue         # /agents
-├── AgentCreateView.vue        # /agents/create
-├── AgentDetailView.vue        # /agents/:id（编辑 + session列表）
-├── SessionsListView.vue       # /sessions
-├── SessionDetailView.vue      # /sessions/:id（聊天页，核心）
-└── SettingsView.vue           # /settings
+├── AgentsListView.vue         # /agents（列表 + inline 编辑表单）
+├── SessionsListView.vue       # /sessions（列表）
+└── SessionDetailView.vue      # /sessions/:id（聊天页，核心）
 ```
+
+> **MVP 范围**：`AgentCreateView` / `AgentDetailView` / `SettingsView` **未单独抽页面**——`AgentsListView` 内嵌 inline 编辑表单（创建 / 修改都走 inline editor）；`Agent` 配置通过 IDE 端管理，web 端只读为主。`SettingsView` 待 web 端设置项需求出现再拆。
 
 ## 组件结构
 
-### 业务组件（自写，~15 个）
+### 业务组件（自写，实际 ~2 个）
 
 ```
 src/components/
 ├── layout/
-│   ├── AppShell.vue          # 响应式布局（侧栏 / Bottom nav）
-│   ├── Sidebar.vue          # 桌面 session 侧栏
-│   ├── BottomNav.vue        # 移动底部导航
-│   └── TopBar.vue           # logo + actions + theme toggle
-├── chat/
-│   ├── ChatWindow.vue       # 消息列表 + 自动滚动
-│   ├── ChatMessage.vue      # 单消息（user / assistant / tool）
-│   ├── ChatInput.vue        # 输入框 + 自动高度
-│   ├── ToolCallCard.vue     # 工具调用折叠卡
-│   └── ModelSelector.vue    # 模型下拉
-├── agent/
-│   ├── AgentCard.vue        # agent 卡片
-│   └── AgentForm.vue        # agent 编辑表单
-├── session/
-│   └── SessionListItem.vue  # session 列表项
+│   └── AppShell.vue          # 响应式布局（侧栏 + 顶部 nav + theme toggle 全部 inline 在 AppShell）
 └── ui/
-    ├── ThemeToggle.vue      # 亮暗主题切换按钮
-    └── EmptyState.vue       # 空状态占位
+    └── AppIcon.vue           # 共享 SVG icon family（agents / sessions / brand / send / refresh 等）
 ```
 
-### Composables（~5 个）
+> **MVP 简化**：其余"业务组件"（`ChatWindow` / `ChatMessage` / `ChatInput` / `ToolCallCard` / `ModelSelector` / `Sidebar` / `BottomNav` / `TopBar` / `ThemeToggle` / `EmptyState` 等）**未独立抽取**——直接 inline 到各 view 文件里。`SessionDetailView.vue` 内联消息渲染、auto-scroll、tool call `details/pre` 折叠等；`SessionsListView.vue` / `AgentsListView.vue` 内联各自列表项的 `resource-row` / `inline-editor` 模板。
+>
+> **为什么**：MVP 主体未稳，**抽组件过早**会让“重构成本反而高于复用收益”。主体稳定后再考虑抽取（IDE 端 `pi-agent-ide/` 是另一套独立抽取，参考对比）。
+
+### Composables（实际 ~2 个）
 
 ```
 src/composables/
-├── useTheme.ts              # 亮暗主题 + localStorage
-├── useSSE.ts                # EventSource 封装 + 重连 + 中断
-├── useSession.ts            # session 操作（CRUD + 占位 + prompt）
-├── useAgent.ts              # agent 操作（CRUD）
-└── useIsMobile.ts           # 响应式检测（matchMedia）
+├── useTheme.ts              # 亮暗主题 + localStorage + meta theme-color
+└── useSSE.ts                # EventSource 封装 + 重连（指数退避 1s→30s） + 类型化事件
 ```
 
-### Pinia stores（~3 个）
+> **MVP 简化**：`useSession` / `useAgent` / `useIsMobile` **未拆**——session / agent 操作直接写在 view 文件里用 `fetch()`；响应式判断用 CSS 媒体查询 + 少量 `window.matchMedia` 内联。
 
-```
-src/stores/
-├── agents.ts                # agent 列表 + 当前 agent
-├── session.ts               # 当前 session + messages + 流式状态
-└── ui.ts                    # theme / sidebar / modal 等 UI 状态
-```
+### Pinia stores（实际 0 个）
+
+> **MVP 范围**：`Pinia` 已装（`main.ts` 调用 `app.use(createPinia())`），但**当前 0 个 `defineStore(...)` 调用**——所有状态用 view 本地 `ref()` / `reactive()` 管理。
+>
+> **为什么不抽 store**：MVP 多 view 共享状态需求低（agent 列表仅 `AgentsListView` 使用，sessions 列表仅 `SessionsListView` 使用），`SessionDetailView` 内的 `messages` / `sending` / `contextCache` 只在该 view 生命周期内需要。后续如果跨 view 状态同步需求出现（多 tab 同步 / 全局 toast 队列 / 未读计数等）再抽。
 
 ## 核心：聊天页（SessionDetailView）
 
@@ -157,7 +143,7 @@ src/stores/
 ### 1. 自动滚动
 
 ```typescript
-// ChatWindow.vue
+// SessionDetailView.vue（inline）
 function scrollToBottom() {
   // 仅在用户没滚上去时自动滚
   if (isNearBottom.value) {
@@ -173,30 +159,46 @@ watch(messages, scrollToBottom, { deep: true });
 ### 2. SSE 重连
 
 ```typescript
-// useSSE.ts
-function createSSE(sessionId: string) {
+// composables/useSSE.ts（实际接口）
+export function useSSE(url: string): SSEController {
   let es: EventSource | null = null;
   let retryDelay = 1000;
+  let closed = false;
 
-  function connect() {
-    es = new EventSource(`/api/sessions/${sessionId}/events`);
-    es.onerror = () => {
+  function open() {
+    if (closed) return;
+    es = new EventSource(url);
+    es.addEventListener('error', () => {
       es?.close();
-      // 指数退避重连
-      setTimeout(() => {
-        retryDelay = Math.min(retryDelay * 2, 30000);
-        connect();
-      }, retryDelay);
-    };
+      es = null;
+      if (closed) return;
+      // 指数退避重连 1s → 30s
+      const delay = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, 30_000);
+      setTimeout(open, delay);
+    });
+    // 各类型事件通过 dispatch 派发到 handlers
   }
 
-  function disconnect() {
-    es?.close();
-    es = null;
-  }
-
-  return { connect, disconnect };
+  return {
+    on(event, handler) { /* 订阅事件 */ },
+    off(event, handler) { /* 取消订阅 */ },
+    connect: open,
+    disconnect() { closed = true; es?.close(); es = null; },
+  };
 }
+```
+
+调用侧：
+
+```typescript
+// SessionDetailView.vue
+const sse = useSSE(`/api/sessions/${props.id}/events`);
+sse.on('connected', () => { connected.value = true; });
+sse.on('message_update', (data) => { applyDelta(data); });
+sse.on('agent_end', () => { sending.value = false; });
+onMounted(() => sse.connect());
+onBeforeUnmount(() => sse.disconnect());
 ```
 
 ### 3. 主题切换

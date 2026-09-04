@@ -25,8 +25,10 @@
 | `/api/sessions` | GET | 列出 sessions（agentId 可选过滤）|
 | `/api/sessions/:id` | GET | 详情（**保留兼容**，web 端用；新客户端用 `/context`）|
 | `/api/sessions/:id` | POST | 更新（title）|
-| `/api/sessions/:id/archive` | POST | 归档 |
-| **`/api/sessions/:id/context`** | **GET** | **★ 统一 context 端点**（commands + models + session metadata）|
+| `/api/sessions/:id/archive` | POST | 归档（软删除：DB status='archived'，sessions row 保留，可从历史重开）|
+| `/api/sessions/:id/delete` | POST | **硬删除**：DB row + pi session 文件 + attachment 子目录全部级联清掉 |
+| `/api/sessions/:id/messages` | GET | 历史消息列表（master 直接读 `pi_session_path` jsonl 文件，不走 IPC）|
+| **`/api/sessions/:id/context`** | **GET** | **★ 统一 context 端点**(commands + models + session metadata + systemPrompt + contextUsage)|
 
 ## 会话交互（核心）
 
@@ -39,7 +41,9 @@
 | `/api/sessions/:id/model` | POST | 切模型 | URL |
 | `/api/sessions/:id/think` | POST | 切 thinking | URL |
 | `/api/sessions/:id/command` | POST | dispatch slash command | URL |
-| `/api/sessions/:id/rename` | POST | 重命名 session | URL |
+| `/api/sessions/:id/rename` | POST | 重命名 session（title 1-200 字符，空/undefined → 清空）| URL |
+| `/api/sessions/:id/attachments` | POST | 上传图片（base64，magic-byte sniff；上限 25 MB；PNG/JPEG/GIF/WebP） | URL |
+| `/api/sessions/:id/attachments` | GET | 列出 session 附件元数据（不含文件路径，新→旧） | URL |
 | **`/api/sessions/import-from-file`** | **POST** | **关联外部 pi session 文件入库**（读 .jsonl 头部拿 sessionId，snapshot agent 配置建 row；不 spawn worker）。body: `{ agentId, piSessionPath, title? }`。Idempotent（id 冲突返已存在 row） | master |
 | **`/api/models`** | **GET** | **全局 model registry**（IDE Add-Agent 对话框下拉用） | master |
 

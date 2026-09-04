@@ -318,20 +318,36 @@ class IdeaIdeBridge(private val project: Project) {
                 // User bubble (blue, consistent across themes)
                 "--user-bubble-bg" to "#3577E9",
                 "--user-bubble-text" to "#FFFFFF",
-                // Tool cards (state-specific; per D10)
+                // Tool cards (state-specific; per D10).
+                // 500 阶 (green-500 / amber-500 / red-500) 在 50-100 阶浅色背景上
+                // 对比度只有 2~3:1 不可读，所以拆出 *-text 用 700-900 阶。
                 "--tool-done-bg" to if (isDark) "#1B3A1B" else "#E8F5E9",
                 "--tool-done-border" to if (isDark) "#66BB6A" else "#4CAF50",
+                "--tool-done-text" to if (isDark) "#81C784" else "#1B5E20",
                 "--tool-running-bg" to if (isDark) "#3D3A1B" else "#FFF8E1",
                 "--tool-running-border" to if (isDark) "#FFC107" else "#FF9800",
+                "--tool-running-text" to if (isDark) "#FFCA28" else "#E65100",
                 "--tool-error-bg" to if (isDark) "#3D1B1B" else "#FFEBEE",
                 "--tool-error-border" to if (isDark) "#EF5350" else "#F44336",
-                // Tool result (subtle highlight inside card)
-                "--tool-result-bg" to if (isDark) "#274427" else "rgba(0,0,0,0.08)",
+                "--tool-error-text" to if (isDark) "#EF5350" else "#B71C1C",
+                // Tool result (subtle highlight inside card).
+                // 亮色下用同色系浅绿 (green-500 @ 12%)，跟外层 done-card 拉开层次；
+                // 暗色保留原有深绿 #274427。
+                "--tool-result-bg" to if (isDark) "#274427" else "rgba(76,175,80,0.12)",
+                // On-color for error surfaces (retry button text etc.)
+                "--on-error" to if (isDark) "#FFFFFF" else "#B71C1C",
                 // Link color (blue, matches IDE hyperlink)
                 "--link" to if (isDark) "#64B5F6" else "#3577E9",
                 // Scrollbar (translucent, theme-aware)
                 "--scrollbar-thumb" to if (isDark) "rgba(255,255,255,0.2)" else "rgba(0,0,0,0.15)",
                 "--scrollbar-thumb-hover" to if (isDark) "rgba(255,255,255,0.35)" else "rgba(0,0,0,0.25)",
+                // Hover bg (replaces scattered rgba(128,128,128,*) — "脏灰" in light)
+                "--hover-bg" to if (isDark) "rgba(255,255,255,0.08)" else "rgba(0,0,0,0.06)",
+                "--hover-bg-strong" to if (isDark) "rgba(255,255,255,0.12)" else "rgba(0,0,0,0.10)",
+                // Popup shadow (lighter in light theme, deeper in dark)
+                "--shadow-popup" to if (isDark) "0 -4px 16px rgba(0,0,0,0.4)" else "0 -4px 16px rgba(0,0,0,0.10)",
+                "--shadow-tooltip" to if (isDark) "0 4px 12px rgba(0,0,0,0.5)" else "0 4px 12px rgba(0,0,0,0.15)",
+                "--shadow-fab" to if (isDark) "0 2px 8px rgba(0,0,0,0.4)" else "0 2px 8px rgba(0,0,0,0.12)",
                 // Font
                 "--font-family" to "JetBrains Mono",
             ),

@@ -136,9 +136,9 @@ watch(previewing, (open) => {
   height: 96px;
   border-radius: 4px;
   overflow: hidden;
-  border: 1px solid rgba(128, 128, 128, 0.2);
+  border: 1px solid var(--border);
   cursor: zoom-in;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover-bg);
   transition: transform 0.1s;
   text-decoration: none;
   /* Reset button defaults so the tile doesn't have browser button chrome. */

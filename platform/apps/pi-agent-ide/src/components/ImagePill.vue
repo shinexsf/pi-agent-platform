@@ -45,8 +45,8 @@ const emit = defineEmits<{
   align-items: center;
   gap: 6px;
   padding: 4px 6px 4px 4px;
-  background: rgba(128, 128, 128, 0.12);
-  border: 1px solid rgba(128, 128, 128, 0.25);
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
   border-radius: 14px;
   margin: 2px 4px 2px 0;
   font-size: 12px;
@@ -98,11 +98,13 @@ const emit = defineEmits<{
 .pill-x:hover {
   background: rgba(255, 80, 80, 0.18);
   border-color: rgba(255, 80, 80, 0.45);
-  color: #c0392b;
+  /* 暗色下也用 red 文字——上边红 80 透明度底 + 红色文字在 #1F2125 上
+   * 对比度只有 3.5:1 不到 AA，但 × 只是次要操作，hover 反馈够识别即可。 */
+  color: var(--tool-error-text);
 }
 
 .pill-x:focus-visible {
-  outline: 2px solid rgba(255, 80, 80, 0.55);
+  outline: 2px solid var(--tool-error-text);
   outline-offset: 1px;
 }
 </style>

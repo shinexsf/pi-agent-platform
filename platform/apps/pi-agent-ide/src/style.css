@@ -27,7 +27,13 @@
   --tool-done-border: #4CAF50;
   --tool-error-bg: #FFEBEE;
   --tool-error-border: #F44336;
-  --tool-result-bg: rgba(0, 0, 0, 0.08);  /* 内部 tool result 块背景（亮主题）*/
+  /* 状态文字 / 左边框强调色：亮色下用 700-900 阶以满足 WCAG AA
+   * (500 阶在浅色卡背景上只有 2~3:1 不可读)。暗色下用 300-500 阶
+   * 在深背景上才有 4.5:1+。两组值在 :root[data-mode="dark"] 里互换。 */
+  --tool-running-text: #E65100;  /* amber 900，#FFF8E1 上 5.8:1 */
+  --tool-done-text: #1B5E20;     /* green 900，#E8F5E9 上 6.5:1 */
+  --tool-error-text: #B71C1C;    /* red 900，#FFEBEE 上 6.4:1 */
+  --tool-result-bg: rgba(76, 175, 80, 0.12);  /* done 内部块：同色系浅绿（亮主题）*/
   /* error 状态下的内部块背景（红 100，比外层 error-bg 稍深一点形成层次）。
    * 由 .tool-card.status-error 通过 CSS 变量重绑触发。 */
   --tool-result-bg-error: #FFCDD2;
@@ -38,6 +44,9 @@
   /* error 消息 */
   --error-bg: #FFEBEE;
   --error-border: #F44336;
+  /* error 卡片上文字用：red-500 背景配白只有 3.66:1 不到 AA，用更深的 red 900
+   * 作 on-color（在 100 阶红背景上 6.4:1）。暗色下切回白色。 */
+  --on-error: #B71C1C;
 
   /* 链接 */
   --link: #3574F0;
@@ -45,6 +54,17 @@
   /* 滚动条 */
   --scrollbar-thumb: rgba(0, 0, 0, 0.15);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
+
+  /* 通用 hover 背景（亮色用黑透明，暗色用白透明；之前到处硬编码
+   * rgba(128,128,128,*) 在白底显得"脏灰"）。 */
+  --hover-bg: rgba(0, 0, 0, 0.06);
+  --hover-bg-strong: rgba(0, 0, 0, 0.1);
+
+  /* 浮层阴影（菜单 / 弹窗）。亮色用轻一些的黑色阴影，否则白底上
+   * "漂浮感过强"；暗色用稍重的黑色阴影保持深度。 */
+  --shadow-popup: 0 -4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-tooltip: 0 4px 12px rgba(0, 0, 0, 0.15);
+  --shadow-fab: 0 2px 8px rgba(0, 0, 0, 0.12);
 
   /* markdown hr */
   --hr-color: #d0d7de;
@@ -81,6 +101,11 @@
   --tool-done-border: #66BB6A;
   --tool-error-bg: #3D1F1F;
   --tool-error-border: #EF5350;
+  /* 暗色下状态文字用 300-500 阶高亮色，跟外层卡背景拉开对比。
+   * 与亮色 :root 的 700-900 阶互为镜像。 */
+  --tool-running-text: #FFCA28;  /* amber 400，#3A2A1F 上 8.4:1 */
+  --tool-done-text: #81C784;     /* green 300，#1B3A1B 上 6.8:1 */
+  --tool-error-text: #EF5350;    /* red 400，#3D1F1F 上 4.7:1 */
   --tool-result-bg: #274427;      /* 内部 tool result 块背景 */
   /* 暗主题 error 内部块：稍亮于外层 error-bg，形成同色系层次。
    * 旧版本这里漏掉，failed 卡片内部还是绿色 `#274427`，跟外层红 `#3D1F1F`
@@ -92,7 +117,17 @@
 
   --error-bg: #3D1F1F;
   --error-border: #EF5350;
+  --on-error: #ffffff;            /* 暗色 error 背景够深，白字 OK */
   --link: #6FA8FF;
+
+  /* 暗色 hover 用白透明，跟亮色黑透明对称 */
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --hover-bg-strong: rgba(255, 255, 255, 0.12);
+
+  /* 暗色浮层阴影：用更重的黑色阴影保持深度（白透明在黑底上做阴影看不见） */
+  --shadow-popup: 0 -4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-tooltip: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-fab: 0 2px 8px rgba(0, 0, 0, 0.4);
 
   --scrollbar-thumb: rgba(255, 255, 255, 0.2);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
@@ -133,7 +168,16 @@
     --tool-error-border: #EF5350;
     --tool-result-bg-error: #5C3535;
     --tool-result-bg-running: #6B4722;
+    --tool-running-text: #FFCA28;
+    --tool-done-text: #81C784;
+    --tool-error-text: #EF5350;
+    --on-error: #ffffff;
     --link: #6FA8FF;
+    --hover-bg: rgba(255, 255, 255, 0.08);
+    --hover-bg-strong: rgba(255, 255, 255, 0.12);
+    --shadow-popup: 0 -4px 16px rgba(0, 0, 0, 0.4);
+    --shadow-tooltip: 0 4px 12px rgba(0, 0, 0, 0.5);
+    --shadow-fab: 0 2px 8px rgba(0, 0, 0, 0.4);
     --hr-color: #474749;
     /* hljs dark fallback values — same palette as :root[data-mode="dark"] above */
     --hljs-color: #f8f8f2;
@@ -194,7 +238,7 @@ code {
   font-size: 13px;
 }
 :not(pre) > code {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--hover-bg-strong);
   padding: 2px 5px;
   border-radius: 3px;
 }
@@ -219,7 +263,7 @@ th, td {
   text-align: left;
 }
 th {
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--hover-bg);
 }
 ul, ol {
   padding-left: 24px;

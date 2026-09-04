@@ -25,7 +25,7 @@ const props = defineProps<{
 <style scoped>
 .steer-bar {
   border-top: 1px solid var(--border);
-  background: rgba(128, 128, 128, 0.04);
+  background: var(--hover-bg);
   padding: 6px 12px 4px;
   max-height: 120px;
   overflow-y: auto;
@@ -48,7 +48,7 @@ const props = defineProps<{
   gap: 6px;
   font-size: 12px;
   padding: 2px 4px;
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--hover-bg);
   border-radius: 3px;
 }
 .steer-tag {

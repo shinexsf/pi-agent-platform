@@ -154,7 +154,7 @@ watch(
   color: var(--text-primary);
   cursor: pointer;
   font-size: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-fab);
 }
 
 .jump-to-latest:hover {

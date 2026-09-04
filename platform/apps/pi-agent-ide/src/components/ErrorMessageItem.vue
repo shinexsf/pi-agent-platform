@@ -102,10 +102,13 @@ function onRetry() {
 
 .error-retry {
   background: var(--error-border);
-  color: white;
+  /* 亮色下 red-500 + 白只有 3.66:1 (差 AA 0.84)；用 --on-error 切到
+   * red 900 (6.4:1)。暗色下 --on-error = 白色，保持原观感。 */
+  color: var(--on-error);
   border: none;
   padding: 4px 10px;
   font-size: 12px;
+  font-weight: 500;
   border-radius: 3px;
   cursor: pointer;
 }

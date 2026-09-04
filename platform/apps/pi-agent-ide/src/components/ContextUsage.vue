@@ -52,8 +52,8 @@ const ringOffset = computed<string>(() => {
 const ringColor = computed<string>(() => {
   const u = usage.value
   if (!u || u.percent === null) return 'var(--text-secondary)'
-  if (u.percent >= 90) return 'var(--tool-error-border, #e5484d)'
-  if (u.percent >= 70) return 'var(--tool-running-border, #f5a623)'
+  if (u.percent >= 90) return 'var(--tool-error-text, #b71c1c)'
+  if (u.percent >= 70) return 'var(--tool-running-text, #e65100)'
   return 'var(--user-bubble-bg, #3577E9)'
 })
 
@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
 }
 
 .ring-track {
-  stroke: rgba(128, 128, 128, 0.18);
+  stroke: var(--border);
 }
 
 .context-pct {
@@ -272,7 +272,7 @@ onBeforeUnmount(() => {
   padding: 8px 10px;
   font-size: 11px;
   color: var(--text-primary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-tooltip);
   z-index: 1000;
   min-width: 160px;
   pointer-events: none;
@@ -304,6 +304,6 @@ onBeforeUnmount(() => {
 }
 
 .context-tip-warn {
-  color: var(--tool-error-border, #e5484d);
+  color: var(--tool-error-text, #e5484d);
 }
 </style>

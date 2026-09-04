@@ -24,6 +24,7 @@ import javax.swing.JPopupMenu
 import javax.swing.JScrollPane
 import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
+import com.intellij.ui.JBColor
 
 /**
  * Lists all sessions for agents matching the given workspace.
@@ -162,6 +163,8 @@ class SessionPanel(
             alignmentX = JPanel.LEFT_ALIGNMENT
             maximumSize = Dimension(Int.MAX_VALUE, 40)
 
+            // JBColor：亮色 → 浅灰 hover，暗色 → 深灰 hover
+            val hoverBg = JBColor(0xE8E8E8, 0x2A2A2A)
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (SwingUtilities.isLeftMouseButton(e) && e.clickCount == 2) {
@@ -183,7 +186,7 @@ class SessionPanel(
                     }
                 }
                 override fun mouseEntered(e: MouseEvent) {
-                    background = Color(0x2a, 0x2a, 0x2a)
+                    background = hoverBg
                     isOpaque = true
                     repaint()
                 }
@@ -202,7 +205,7 @@ class SessionPanel(
         }
         left.add(JLabel(titleText).apply {
             font = font.deriveFont(java.awt.Font.PLAIN, 12f)
-            foreground = Color(0xdd, 0xdd, 0xdd)
+            foreground = JBColor(0x333333, 0xDDDDDD)
             alignmentX = JLabel.LEFT_ALIGNMENT
         })
         // Subtitle: "agent · model · thinking · time" — comma-separated for readability.
@@ -215,7 +218,7 @@ class SessionPanel(
         ).joinToString(" · ")
         left.add(JLabel(meta).apply {
             font = font.deriveFont(10f)
-            foreground = Color(0x88, 0x88, 0x88)
+            foreground = JBColor(0x888888, 0x888888)
             alignmentX = JLabel.LEFT_ALIGNMENT
         })
         card.add(left)
@@ -223,7 +226,7 @@ class SessionPanel(
 
         // Green dot when worker is online; nothing when offline (per user feedback).
         if (session.worker != null && session.worker.pid > 0) {
-            card.add(JLabel(CircleIcon(Color(0x4c, 0xaf, 0x50), 8)).apply {
+            card.add(JLabel(CircleIcon(JBColor(0x4CAF50, 0x66BB6A), 8)).apply {
                 border = EmptyBorder(0, 6, 0, 0)
             })
         }
@@ -297,7 +300,7 @@ class SessionPanel(
         }
         panel.add(JLabel("暂无历史会话").apply {
             font = font.deriveFont(java.awt.Font.PLAIN, 14f)
-            foreground = Color(0x88, 0x88, 0x88)
+            foreground = JBColor(0x888888, 0x888888)
         }, gbc)
         return panel
     }

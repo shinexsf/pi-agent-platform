@@ -18,7 +18,7 @@ flowchart TB
         SSE["SSE<br/>(Web 端流式)"]
         IMGateway["im-gateway/<br/>(QQ WebSocket / 微信 long-poll)<br/>✅ 已设计, 实施中"]
         WPM["WorkerPool<br/>(child_process.fork)"]
-        DB[("SQLite<br/>agents + sessions + 渠道表")]
+        DB[("SQLite<br/>agents + sessions + attachments + 渠道表")]
     end
 
     subgraph Worker["Worker 进程 (每 session 一个)"]
