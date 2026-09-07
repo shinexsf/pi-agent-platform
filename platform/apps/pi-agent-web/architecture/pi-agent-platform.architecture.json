@@ -1,0 +1,466 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pi-agent-platform 项目架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      620
+    ],
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "revision": "8bc39cf0f391ee9aa5bfa90db4f5f5af3fef03b7"
+    }
+  },
+  "components": [
+    {
+      "id": "idea-host",
+      "type": "frontend",
+      "label": "IntelliJ 插件",
+      "sublabel": "pi-agent-idea · Kotlin",
+      "pos": [
+        60,
+        30
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "pi-agent-idea/src/main/kotlin/com/piagent/idea/ui/JcefChatPanel.kt",
+          "line": 91,
+          "end_line": 94,
+          "label": "JCEF 加载 IDE 界面"
+        }
+      ]
+    },
+    {
+      "id": "ide-ui",
+      "type": "frontend",
+      "label": "IDE 会话界面",
+      "sublabel": "pi-agent-ide · Vue 3",
+      "pos": [
+        60,
+        200
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-ide/src/composables/useSSE.ts",
+          "line": 215,
+          "label": "SSE 事件订阅"
+        }
+      ]
+    },
+    {
+      "id": "web-ui",
+      "type": "frontend",
+      "label": "Web 会话与管理",
+      "sublabel": "pi-agent-web · Vue 3",
+      "pos": [
+        60,
+        330
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-web/src/views/SessionDetailView.vue",
+          "line": 137,
+          "label": "浏览器会话订阅"
+        },
+        {
+          "path": "platform/apps/pi-agent-web/src/modules/im-gateway/index.ts",
+          "line": 27,
+          "label": "渠道管理页 glob 发现"
+        }
+      ]
+    },
+    {
+      "id": "im-networks",
+      "type": "external",
+      "label": "QQ / 微信",
+      "sublabel": "QQ 私聊 · WeChat iLink",
+      "pos": [
+        60,
+        450
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/channels/channel-qq/src/adapter.ts",
+          "line": 270,
+          "label": "QQ WebSocket 连接"
+        },
+        {
+          "path": "platform/channels/channel-wechat/src/adapter.ts",
+          "line": 154,
+          "label": "微信消息订阅"
+        }
+      ]
+    },
+    {
+      "id": "http-server",
+      "type": "backend",
+      "label": "Hono 接入与会话 API",
+      "sublabel": "pi-agent-server · Node.js",
+      "pos": [
+        420,
+        200
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/index.ts",
+          "line": 74,
+          "label": "HTTP 路由与静态托管"
+        },
+        {
+          "path": "platform/apps/pi-agent-server/src/routes/events.ts",
+          "line": 15,
+          "label": "worker 事件转为 SSE"
+        }
+      ]
+    },
+    {
+      "id": "channel-packages",
+      "type": "backend",
+      "label": "QQ / 微信渠道包",
+      "sublabel": "适配器 · 注册 · 渠道自有表",
+      "pos": [
+        420,
+        450
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/channels/channel-qq/src/index.ts",
+          "line": 17,
+          "label": "QQ 渠道自建表"
+        },
+        {
+          "path": "platform/channels/channel-wechat/src/index.ts",
+          "line": 24,
+          "label": "微信渠道自建表"
+        },
+        {
+          "path": "platform/channels/manifest.json",
+          "line": 2,
+          "label": "启用渠道清单"
+        }
+      ]
+    },
+    {
+      "id": "im-host",
+      "type": "backend",
+      "label": "IM Gateway Host",
+      "sublabel": "消息路由 · 内存会话映射",
+      "pos": [
+        760,
+        450
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/im-gateway/index.ts",
+          "line": 122,
+          "label": "入站路由接入"
+        },
+        {
+          "path": "platform/apps/pi-agent-server/src/im-gateway/channel-loader.ts",
+          "line": 62,
+          "label": "manifest 动态加载"
+        },
+        {
+          "path": "platform/apps/pi-agent-server/src/im-gateway/routing.ts",
+          "line": 226,
+          "label": "事件订阅与回复发送"
+        }
+      ]
+    },
+    {
+      "id": "session-pool",
+      "type": "backend",
+      "label": "会话 Worker Pool",
+      "sublabel": "spawn / call / subscribe",
+      "pos": [
+        760,
+        200
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/worker-pool.ts",
+          "line": 118,
+          "label": "按会话创建子进程"
+        },
+        {
+          "path": "platform/apps/pi-agent-server/src/im-gateway/session-bridge.ts",
+          "line": 81,
+          "label": "共用会话恢复逻辑"
+        }
+      ]
+    },
+    {
+      "id": "sdk-worker",
+      "type": "backend",
+      "label": "session-worker × N",
+      "sublabel": "pi SDK · 每会话一个进程",
+      "pos": [
+        1060,
+        200
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/index.ts",
+          "line": 71,
+          "label": "IPC 方法分派"
+        },
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 379,
+          "label": "创建 pi SDK AgentSession"
+        }
+      ]
+    },
+    {
+      "id": "model-provider",
+      "type": "external",
+      "label": "模型服务",
+      "sublabel": "由 pi SDK 解析与调用",
+      "pos": [
+        1060,
+        30
+      ],
+      "size": [
+        220,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 540,
+          "label": "会话实际 provider / model"
+        }
+      ]
+    },
+    {
+      "id": "metadata-store",
+      "type": "database",
+      "label": "SQLite 元数据",
+      "sublabel": "agents · sessions · attachments",
+      "pos": [
+        420,
+        30
+      ],
+      "size": [
+        260,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/db/init.ts",
+          "line": 25,
+          "label": "SQLite / Drizzle 与表结构"
+        }
+      ]
+    },
+    {
+      "id": "session-files",
+      "type": "database",
+      "label": "会话文件与工作区",
+      "sublabel": "历史恢复 · tools · AGENTS.md",
+      "pos": [
+        1060,
+        450
+      ],
+      "size": [
+        260,
+        82
+      ],
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 350,
+          "label": "SessionManager 恢复历史"
+        },
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 364,
+          "label": "加载工作区与技能资源"
+        },
+        {
+          "path": "platform/apps/pi-agent-server/src/worker-pool.ts",
+          "line": 137,
+          "label": "worker cwd 指向工作区"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "pi-agent-server 主进程 · 渠道按 manifest 装载",
+      "wraps": [
+        "http-server",
+        "session-pool",
+        "channel-packages",
+        "im-host"
+      ],
+      "pad": 32
+    },
+    {
+      "kind": "region",
+      "label": "会话子进程 · 独立 pi SDK 实例",
+      "wraps": [
+        "sdk-worker"
+      ],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "id": "idea-bridge",
+      "from": "idea-host",
+      "to": "ide-ui",
+      "label": "JCEF / ide-bridge",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        170,
+        140
+      ]
+    },
+    {
+      "id": "ide-http-sse",
+      "from": "ide-ui",
+      "to": "http-server",
+      "label": "HTTP · SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "web-http-sse",
+      "from": "web-ui",
+      "to": "http-server",
+      "label": "HTTP · SSE",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "api-pool",
+      "from": "http-server",
+      "to": "session-pool",
+      "label": "会话调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pool-worker-ipc",
+      "from": "session-pool",
+      "to": "sdk-worker",
+      "label": "进程 IPC",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sdk-model-api",
+      "from": "sdk-worker",
+      "to": "model-provider",
+      "label": "模型 API",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        1170,
+        145
+      ]
+    },
+    {
+      "id": "server-sqlite",
+      "from": "http-server",
+      "to": "metadata-store",
+      "label": "SQL 读写",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "sdk-files",
+      "from": "sdk-worker",
+      "to": "session-files",
+      "label": "加载 / 持久化",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "network-channel",
+      "from": "im-networks",
+      "to": "channel-packages",
+      "label": "WS / 长轮询"
+    },
+    {
+      "id": "channel-host",
+      "from": "channel-packages",
+      "to": "im-host",
+      "label": "消息 / 回复"
+    },
+    {
+      "id": "im-pool",
+      "from": "im-host",
+      "to": "session-pool",
+      "label": "调用 / 订阅",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "多入口，共用会话能力",
+      "items": [
+        "Server 托管 /ide/ 与 /web/；HTTP 提交，SSE 回传事件。",
+        "IDE 插件位于仓库根；JCEF 与 Kotlin 通过 ide-bridge 通信。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "进程与持久化分工",
+      "items": [
+        "每会话一个子进程；IPC 传递方法调用、结果与事件。",
+        "SQLite 存元数据；pi SDK 管历史文件；附件字节另存磁盘。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "渠道与回收策略",
+      "items": [
+        "渠道依赖 channel-types 契约，自管 channels_qq / channels_wechat。",
+        "IM 空闲 30 分钟回收 worker；占位会话默认 5 分钟回收。"
+      ]
+    }
+  ]
+}

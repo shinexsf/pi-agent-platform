@@ -5,16 +5,18 @@
  * TopNav stays data-driven through router metadata.
  */
 import { useTheme } from '../../composables/useTheme';
+import { useRoute } from 'vue-router';
 import AppIcon from '../ui/AppIcon.vue';
 import TopNav from '../../modules/im-gateway/components/TopNav.vue';
 import ToastHost from '../../modules/im-gateway/components/ToastHost.vue';
 import ConfirmDialogHost from '../../modules/im-gateway/components/ConfirmDialogHost.vue';
 
 const { theme, toggle } = useTheme();
+const route = useRoute();
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'app-shell--full-width': route.meta.fullWidth }">
     <header class="app-header">
       <div class="app-header-inner">
         <router-link class="app-brand" to="/agents" aria-label="pi-agent-platform home">
@@ -44,3 +46,23 @@ const { theme, toggle } = useTheme();
     <ConfirmDialogHost />
   </div>
 </template>
+
+<style scoped>
+.app-shell--full-width {
+  display: flex;
+  height: 100dvh;
+  flex-direction: column;
+}
+
+.app-shell--full-width .app-header {
+  flex: none;
+}
+
+.app-shell--full-width .app-main {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  animation: none;
+}
+</style>

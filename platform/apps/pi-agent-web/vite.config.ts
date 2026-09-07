@@ -2,11 +2,9 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import tailwindcss from '@tailwindcss/vite';
 
-// pi-agent-web: browser SPA, served by pi-agent-server under /web/.
-// base: '/web/' so built index.html references '/web/assets/...', matching the
-// server's mountStaticDir('/web/', ...) route.
-export default defineConfig({
-  base: '/web/',
+// Production assets and preview use the server's /web/ mount; local dev uses /.
+export default defineConfig(({ command, isPreview }) => ({
+  base: command === 'build' || isPreview ? '/web/' : '/',
   plugins: [vue(), tailwindcss()],
   server: {
     host: true,
@@ -21,4 +19,4 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
-});
+}));

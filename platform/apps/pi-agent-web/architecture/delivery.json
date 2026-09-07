@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/chenkang/Developer/pi-agent-platform/platform/apps/pi-agent-web/architecture/pi-agent-platform.architecture.json",
+  "output": "/Users/chenkang/Developer/pi-agent-platform/platform/apps/pi-agent-web/public/architecture/viewer.html",
+  "specification": {
+    "sha256": "7f1ff8a1ad7809e8adad268e090c1802cd86bf77f9bb9bb9cd0e1ea4e2b6e4a4",
+    "bytes": 10599
+  },
+  "artifact": {
+    "sha256": "4ac08fc1ba79e787a950c0272676120a0ae786c7d2f0c74fbf1377a71e92b529",
+    "bytes": 726996
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  },
+  "evidence": {
+    "verified": true,
+    "repository": "https://github.com/shinexsf/pi-agent-platform",
+    "revision": "8bc39cf0f391ee9aa5bfa90db4f5f5af3fef03b7",
+    "references": 23
+  }
+}

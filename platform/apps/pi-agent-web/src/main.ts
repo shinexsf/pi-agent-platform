@@ -5,6 +5,7 @@
  *   /agents         Agents list    (meta.navLabel="Agents")
  *   /sessions       Sessions list  (meta.navLabel="Sessions")
  *   /sessions/:id   Session detail
+ *   /architecture   Interactive project architecture
  *   /im/*           Channel admin pages (auto-discovered via import.meta.glob)
  *
  * Channel admin pages consume `window.__channelAdminHost` (set below) which
@@ -43,6 +44,11 @@ const baseRoutes = [
     meta: { navLabel: 'Sessions', navOrder: 20, navIcon: 'sessions' },
   },
   {
+    path: '/architecture',
+    component: () => import('./views/ArchitectureView.vue'),
+    meta: { navLabel: '架构图', navOrder: 90, navIcon: 'architecture', fullWidth: true },
+  },
+  {
     path: '/sessions/:id',
     component: SessionDetailView,
     props: true,
@@ -51,10 +57,8 @@ const baseRoutes = [
 ];
 
 const router = createRouter({
-  // SPA 部署在 server 的 /web/ 下。vue-router 的 history base 必须跟 vite
-  // base 一致，否则 pushState 跳到 /agents（不带前缀），刷新后 server
-  // 没 mount /agents → 404。
-  history: createWebHistory('/web/'),
+  // 跟随 Vite 的 base：开发环境为 /，Server 托管构建产物时为 /web/。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     ...baseRoutes,
     buildImGatewayRoute(channelAdminRegistry),

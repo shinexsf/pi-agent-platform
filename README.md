@@ -30,6 +30,11 @@ pnpm --filter @pi-agent-platform/server dev
 
 Server 默认监听 `http://localhost:8787`，Web UI 在 `/web/`。
 
+Web UI 顶部的“架构图”入口可查看交互式项目架构，支持明暗主题、视觉样式切换和导出。
+在 `platform/` 下运行 `pnpm dev:web` 后访问 `http://localhost:5173/architecture`；
+运行 `pnpm build:web` 后由 Server 提供 `/web/architecture`，支持直接访问和刷新。
+架构图源文件位于 `platform/apps/pi-agent-web/architecture/`，页面随 Web UI 一起构建发布。
+
 架构文档：[`doc/architecture/`](./doc/architecture/README.md)
 
 ## License
