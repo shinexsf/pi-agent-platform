@@ -385,14 +385,24 @@ export function useSSE(options: UseSSEOptions) {
    * (Option A — cache 直传; see design.md Goals §F3 实现选型).
    * Server's `/prompt` endpoint extracts `[pi-attachment:att_xxx]` markers and
    * looks them up server-side; no need to send the bytes back.
+   *
+   * Steer mode: allows sending while agent is working (sending=true).
+   * The message is queued server-side and delivered after current turn.
    */
   async function send(
     agentId: string,
     message: string,
     attachedImages?: Array<{ mimeType: string; data: string }>,
   ) {
-    if (sending.value) return
-    sending.value = true
+    // Steer mode: allow sending even when agent is working
+    // Only block if already sending AND not a new steer message
+    // (This enables the "queue while working" behavior)
+    const isSteerMessage = sending.value // If agent is working, this is a steer message
+    
+    // Don't set sending=true for steer messages - let agent_end handle it
+    if (!isSteerMessage) {
+      sending.value = true
+    }
 
     const tempUserId = `temp-user-${Date.now()}`
     const userMsg: MessageDTO = {
@@ -422,7 +432,10 @@ export function useSSE(options: UseSSEOptions) {
           message: errMsg,
         })
         messages.value = messages.value.filter((m) => m.id !== tempUserId)
-        sending.value = false
+        // Only reset sending if this wasn't a steer message (agent still working)
+        if (!isSteerMessage) {
+          sending.value = false
+        }
       }
       // No loadContext() — currentModel / currentThinkingLevel / commands are already populated
       // by the placeholder worker at tab-open. hasRow flips from false→true server-side,
@@ -435,7 +448,10 @@ export function useSSE(options: UseSSEOptions) {
         message: String(err),
       })
       messages.value = messages.value.filter((m) => m.id !== tempUserId)
-      sending.value = false
+      // Only reset sending if this wasn't a steer message (agent still working)
+      if (!isSteerMessage) {
+        sending.value = false
+      }
     }
   }
 

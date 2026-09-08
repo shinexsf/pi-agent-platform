@@ -7,9 +7,9 @@
  *   - Pill row on top (image attachments with × button — clicking × removes
  *     both the pill AND the corresponding marker from the textarea text)
  *   - Textarea on top of pill row
- *   - Toolbar on bottom with: + (attach), Steer indicator (always-on), Model selector, Thinking selector
+ *   - Toolbar on bottom with: + (attach), Model selector, Thinking selector, Steer button (when agent working)
  *   - Top edge of wrapper is draggable to resize height (CSS resize: vertical)
- *   - No "follow-up" mode — only steer (per user feedback)
+ *   - Steer button (⚡) only visible when agent is working (sending=true)
  *
  * Image attachments:
  *   - paste on textarea -> upload via `attachmentsUploader.uploadImage` -> cache by id
@@ -231,6 +231,22 @@ function abortSend() {
   emit('abort')
 }
 
+function sendSteer() {
+  const text = input.value.trim()
+  if (!text) return
+
+  // Same as send() but for steer messages while agent is working
+  const attached = props.attachmentsUploader.listForSend()
+  const attachedImages = attached.map((a) => ({ mimeType: a.mimeType, data: a.dataB64 }))
+  emit('send', text, attachedImages)
+
+  // Clear state
+  attachments.value = new Map()
+  props.attachmentsUploader.clear()
+  input.value = ''
+  nextTick(() => textareaEl.value?.focus())
+}
+
 function onKeyDown(e: KeyboardEvent) {
   // ── Menu open: navigation keys first ──
   if (slashOpen.value) {
@@ -318,10 +334,14 @@ function onKeyDown(e: KeyboardEvent) {
     }
   }
 
-  // Default: Enter sends
+  // Default: Enter sends (or steers if agent is working)
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    send()
+    if (props.sending) {
+      sendSteer()  // Agent is working, send as steer message
+    } else {
+      send()       // Agent is idle, send normally
+    }
     return
   }
 }
@@ -547,11 +567,6 @@ onUnmounted(() => {
         @change="onPickerChange"
       />
 
-      <span class="steer-indicator" title="Steer mode (always-on; queued messages interrupt the current agent)">
-        <span class="steer-dot"></span>
-        Steer
-      </span>
-
       <ModelSelector
         :session-id="sessionId"
         @select="(p: string, mid: string) => emit('setModel', p, mid)"
@@ -564,10 +579,21 @@ onUnmounted(() => {
 
       <div class="input-toolbar-spacer" />
 
+      <!-- Steer button: only visible when agent is working -->
+      <button
+        v-if="sending"
+        class="steer-btn"
+        type="button"
+        data-tooltip="Send steer message (Enter)"
+        aria-label="Send steer message"
+        @click="sendSteer"
+      >⚡</button>
       <button
         v-if="sending"
         class="abort-btn"
         type="button"
+        title="Stop agent"
+        aria-label="Stop agent"
         @click="abortSend"
       >■</button>
       <button
@@ -691,28 +717,13 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-.steer-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 2px 6px;
-  user-select: none;
-}
-.steer-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--user-bubble-bg);
-}
-
 .input-toolbar-spacer {
   flex: 1;
 }
 
 .send-btn,
-.abort-btn {
+.abort-btn,
+.steer-btn {
   background: transparent;
   color: var(--text-secondary);
   border: none;
@@ -722,7 +733,8 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 .send-btn:hover:not(:disabled),
-.abort-btn:hover {
+.abort-btn:hover,
+.steer-btn:hover {
   color: var(--user-bubble-bg);
   background: var(--hover-bg);
 }
@@ -733,5 +745,28 @@ onUnmounted(() => {
 .abort-btn {
   color: var(--tool-error-border);
   font-weight: 500;
+  padding: 4px 8px;
+  margin-left: -6px;  /* 抵消 toolbar 的 gap */
+}
+.steer-btn {
+  color: var(--user-bubble-bg);
+  font-size: 14px;
+  padding: 4px 6px;
+  position: relative;
+}
+.steer-btn:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: none;
 }
 </style>
