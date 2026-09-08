@@ -34,6 +34,25 @@ function onScroll() {
 function onWheel(e: WheelEvent) {
   const el = messagesEl.value
   if (!el) return
+  // If the wheel target is inside a scrollable child (e.g. .tool-result-block,
+  // .arg-value-expanded, <pre>), let the browser handle it natively so the
+  // inner scrollable gets the wheel event. Only intercept when the outer
+  // message-list itself should scroll.
+  const target = e.target as HTMLElement | null
+  if (target) {
+    let ancestor: HTMLElement | null = target
+    while (ancestor && ancestor !== el) {
+      const style = getComputedStyle(ancestor)
+      if (
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        ancestor.scrollHeight > ancestor.clientHeight
+      ) {
+        // Inner element is scrollable and has overflow — let it scroll
+        return
+      }
+      ancestor = ancestor.parentElement
+    }
+  }
   // Direct scrollTop +=: instant response, no animation queue (smooth scroll
   // on wheel ticks makes rapid scrolling stutter as each event cancels the
   // previous animation). Programmatic scroll (jump-to-latest, auto-follow new

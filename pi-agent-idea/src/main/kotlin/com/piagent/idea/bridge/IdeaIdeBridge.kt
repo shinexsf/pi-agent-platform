@@ -334,6 +334,8 @@ class IdeaIdeBridge(private val project: Project) {
                 // 亮色下用同色系浅绿 (green-500 @ 12%)，跟外层 done-card 拉开层次；
                 // 暗色保留原有深绿 #274427。
                 "--tool-result-bg" to if (isDark) "#274427" else "rgba(76,175,80,0.12)",
+                "--tool-result-bg-error" to if (isDark) "#4D2A2A" else "#FFCDD2",
+                "--tool-result-bg-running" to if (isDark) "#5C3F1F" else "#FFE082",
                 // On-color for error surfaces (retry button text etc.)
                 "--on-error" to if (isDark) "#FFFFFF" else "#B71C1C",
                 // Link color (blue, matches IDE hyperlink)
