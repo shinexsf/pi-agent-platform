@@ -16,6 +16,7 @@ declare global {
 }
 
 const channels = ref<QqChannel[]>([]);
+const channelStatus = ref<Record<string, string>>({});
 const agents = ref<AgentRow[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -57,12 +58,18 @@ async function refresh(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    channels.value = await api.value.list();
+    const [list, statusMap] = await Promise.all([api.value.list(), api.value.listStatus()]);
+    channels.value = list;
+    channelStatus.value = statusMap;
   } catch {
     error.value = '无法加载 QQ 机器人。请检查服务连接并刷新页面重试。';
   } finally {
     loading.value = false;
   }
+}
+
+function getStatus(id: string): string {
+  return channelStatus.value[id] ?? 'unknown';
 }
 
 async function handleStart(id: string): Promise<void> {
@@ -162,6 +169,7 @@ async function saveAgentEditor(): Promise<void> {
       <table v-else>
         <thead>
           <tr>
+            <th>状态</th>
             <th>名称</th>
             <th>Agent</th>
             <th>App ID</th>
@@ -170,6 +178,9 @@ async function saveAgentEditor(): Promise<void> {
         </thead>
         <tbody>
           <tr v-for="ch in channels" :key="ch.id">
+            <td>
+              <span class="status-dot" :class="getStatus(ch.id) === 'connected' ? 'status-connected' : 'status-stopped'" :title="getStatus(ch.id)"></span>
+            </td>
             <td>{{ ch.displayName }}</td>
             <td>
               <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
@@ -178,8 +189,8 @@ async function saveAgentEditor(): Promise<void> {
             </td>
             <td><code>{{ ch.appId?.slice(0, 12) ?? ch.extra?.appId?.slice(0, 12) ?? '—' }}…</code></td>
             <td>
-              <button @click="handleStart(ch.id)">启动</button>
-              <button @click="handleStop(ch.id)">停止</button>
+              <button v-if="getStatus(ch.id) !== 'connected'" @click="handleStart(ch.id)">启动</button>
+              <button v-else @click="handleStop(ch.id)">停止</button>
               <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
             </td>
           </tr>
@@ -266,4 +277,13 @@ button.primary:hover { background: #7c3aed; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 button.danger { color: #c00; border-color: #c00; }
 .empty { color: #9ca3af; padding: 24px; text-align: center; }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-connected { background: #22c55e; }
+.status-stopped { background: #ef4444; }
 </style>

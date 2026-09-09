@@ -313,7 +313,7 @@ export class QqAdapter implements ChannelAdapter {
       const { msg } = payload as { msg: unknown };
       this.handleGroup(msg);
     });
-    ws.on('ws', (data: unknown) => {
+    ws.on('EVENT_WS', (data: unknown) => {
       const d = data as { eventType: string; eventMsg?: unknown };
       const ev = d.eventType;
       this.opts.host.logEvent({

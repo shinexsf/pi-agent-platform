@@ -236,6 +236,21 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
   if (tc.result === undefined) return { label: '[running]', cls: 'status-running' }
   return { label: '[completed]', cls: 'status-completed' }
 }
+
+function toolIcon(name: string): string {
+  switch (name) {
+    case 'read':
+      return '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h7l3 3v9H3V2z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M10 2v3h3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M5 10h4" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>'
+    case 'write':
+      return '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2h7l3 3v9H3V2z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M10 2v3h3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 3-4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    case 'edit':
+      return '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>'
+    case 'bash':
+      return '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 12h4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    default:
+      return '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 6v4M6 8h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'
+  }
+}
 </script>
 
 <template>
@@ -324,7 +339,7 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
         :class="toolStatus(tc).cls"
       >
         <div class="tool-line1">
-          <span class="tool-icon">🛠</span>
+          <span class="tool-icon" v-html="toolIcon(tc.name)"></span>
           <span class="tool-name">{{ tc.name }}</span>
           <span class="tool-call-id">({{ tc.id.slice(0, 8) }})</span>
           <span class="tool-status" :class="toolStatus(tc).cls">{{ toolStatus(tc).label }}</span>
@@ -574,7 +589,15 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
 }
 
 .tool-icon {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.tool-icon :deep(svg) {
+  display: block;
 }
 
 .tool-name {
@@ -600,7 +623,6 @@ function toolStatus(tc: { result?: string; isError?: boolean }): { label: string
 
 .tool-args {
   margin-top: 2px;
-  padding-left: 22px;
 }
 
 .tool-arg-row {

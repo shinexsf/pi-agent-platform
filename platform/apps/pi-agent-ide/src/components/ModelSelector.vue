@@ -53,11 +53,11 @@ const display = computed(() => {
   const found = models.value.find(
     (m) => m.provider === currentModel.value!.provider && m.modelId === currentModel.value!.modelId,
   )
-  if (found) return found.displayName
+  if (found) return { name: found.displayName, provider: found.provider }
   if (currentModel.value.provider) {
-    return `${currentModel.value.provider}/${currentModel.value.modelId}`
+    return { name: currentModel.value.modelId, provider: currentModel.value.provider }
   }
-  return currentModel.value.modelId
+  return { name: currentModel.value.modelId, provider: null }
 })
 
 function repositionPanel() {
@@ -128,7 +128,7 @@ onUnmounted(() => {
       :class="{ 'model-empty': !display }"
       @click.stop="toggle"
     >
-      <span class="model-label">{{ display ?? 'model' }}</span>
+      <span class="model-label">{{ display?.name ?? 'model' }}<span v-if="display?.provider" class="model-label-provider"> / {{ display.provider }}</span></span>
       <svg class="model-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
         <path d="M2 4 L6 8 L10 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
@@ -151,7 +151,7 @@ onUnmounted(() => {
           }"
           @click="m.hasAuth && pick(m)"
         >
-          <span class="model-name">{{ m.displayName }}</span>
+          <span class="model-name">{{ m.displayName }}<span class="model-provider"> / {{ m.provider }}</span></span>
           <span v-if="!m.hasAuth" class="model-noauth">no auth</span>
           <span v-if="currentModel?.provider === m.provider && currentModel?.modelId === m.modelId" class="model-check">✓</span>
         </div>
@@ -192,6 +192,12 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+}
+
+.model-label-provider {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 
 .model-chevron {
@@ -241,6 +247,16 @@ onUnmounted(() => {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.model-provider {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.model-item:hover:not(.model-disabled) .model-provider {
+  color: var(--user-bubble-text);
+  opacity: 0.8;
+}
+
 .model-noauth {
   font-size: 11px;
   color: var(--tool-error-border);

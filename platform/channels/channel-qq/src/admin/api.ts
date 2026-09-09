@@ -22,6 +22,10 @@ export function createQqApi(host: ChannelAdminHost) {
       const res = (await host.apiFetch('GET', '/channels')) as { channels: QqChannel[] };
       return res.channels;
     },
+    listStatus: async (): Promise<Record<string, string>> => {
+      const res = (await host.apiFetch('GET', '/channels/status')) as { statusMap: Record<string, string> };
+      return res.statusMap;
+    },
     create: async (input: { displayName: string; defaultAgentId: string; appId: string; appSecret: string; autoReconnect?: boolean }): Promise<QqChannel> => {
       return (await host.apiFetch('POST', '/channels', input)) as QqChannel;
     },

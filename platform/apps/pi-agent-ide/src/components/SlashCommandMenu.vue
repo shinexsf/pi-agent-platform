@@ -22,6 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [cmd: SlashCommand]
   close: []
+  indexChange: [index: number]
 }>()
 
 // Subscribe to context.commands so the menu reflects the latest 4-class list.
@@ -38,18 +39,39 @@ onUnmounted(() => {
   unsubscribe = null
 })
 
-const localIndex = ref(0)
-watch(() => props.selectedIndex, (v) => { localIndex.value = v })
+// selectedIndex is the single source of truth from parent.
+// On mouseenter, emit indexChange so parent updates; no local copy needed.
+
+const BUILTIN_COMMAND_META: Record<string, { description?: string; argumentHint?: string }> = {
+  model: { description: 'Select model', argumentHint: '<provider/model>' },
+  thinking: { description: 'Set thinking level', argumentHint: '<level>' },
+  name: { description: 'Set session display name', argumentHint: '<name>' },
+  session: { description: 'Show session info and stats' },
+  compact: { description: 'Manually compact the session context' },
+  hotkeys: { description: 'Show all keyboard shortcuts' },
+}
+
+const allKnown = computed<SlashCommand[]>(() => {
+  const cached = commands.value ?? []
+  const names = new Set(cached.map((c) => c.name))
+  const builtins: SlashCommand[] = Object.entries(BUILTIN_COMMAND_META).map(([name, meta]) => ({
+    name,
+    description: meta.description ?? '',
+    argumentHint: meta.argumentHint,
+    source: 'builtin' as const,
+  }))
+  return [...cached, ...builtins.filter((b) => !names.has(b.name))]
+})
 
 const filtered = computed<SlashCommand[]>(() => {
   const f = props.filter.toLowerCase()
-  if (!f) return commands.value.slice(0, 20)
-  return commands.value
-    .filter((c) => c.name.toLowerCase().startsWith(f) || c.name.toLowerCase().includes(f))
-    .slice(0, 20)
+  if (!f) return allKnown.value
+  return allKnown.value.filter(
+    (c) => c.name.toLowerCase().startsWith(f) || c.name.toLowerCase().includes(f)
+  )
 })
 
-const clampedIndex = computed(() => Math.min(localIndex.value, Math.max(0, filtered.value.length - 1)))
+const clampedIndex = computed(() => Math.min(props.selectedIndex, Math.max(0, filtered.value.length - 1)))
 
 // Container ref — used to scroll the selected item into view when keyboard nav
 // moves selection outside the visible area (max-height: 240px).
@@ -117,7 +139,7 @@ onUnmounted(() => {
       class="slash-item"
       :class="{ 'slash-selected': i === clampedIndex }"
       @click="pick(i)"
-      @mouseenter="localIndex = i"
+      @mouseenter="emit('indexChange', i)"
     >
       <span class="slash-source" :class="'source-' + cmd.source">{{ sourceBadge(cmd.source) }}</span>
       <span class="slash-name">/{{ cmd.name }}</span>

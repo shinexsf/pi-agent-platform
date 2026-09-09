@@ -250,8 +250,10 @@ function sendSteer() {
 function onKeyDown(e: KeyboardEvent) {
   // ── Menu open: navigation keys first ──
   if (slashOpen.value) {
+    const cmds = filteredSlashCommands()
+    const maxIdx = Math.max(0, cmds.length - 1)
     if (e.key === 'ArrowDown') {
-      slashIndex.value = slashIndex.value + 1
+      slashIndex.value = Math.min(maxIdx, slashIndex.value + 1)
       e.preventDefault(); e.stopPropagation(); return
     }
     if (e.key === 'ArrowUp') {
@@ -369,8 +371,8 @@ function removePill(id: string) {
 function filteredSlashCommands(): SlashCommand[] {
   const f = slashFilter.value.toLowerCase()
   const all = allKnownCommands()
-  if (!f) return all.slice(0, 20)
-  return all.filter((c: SlashCommand) => c.name.toLowerCase().startsWith(f) || c.name.toLowerCase().includes(f)).slice(0, 20)
+  if (!f) return all
+  return all.filter((c: SlashCommand) => c.name.toLowerCase().startsWith(f) || c.name.toLowerCase().includes(f))
 }
 
 function allKnownCommands(): SlashCommand[] {
@@ -509,6 +511,7 @@ onUnmounted(() => {
         :anchor-el="textareaEl"
         @select="applySlashCommand"
         @close="slashOpen = false"
+        @index-change="(i: number) => { slashIndex = i }"
       />
     </Teleport>
     <!-- File search menu overlay (Teleport to body) -->

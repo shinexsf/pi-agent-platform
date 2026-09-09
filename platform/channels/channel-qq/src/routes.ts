@@ -49,6 +49,16 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
     return c.json({ channels: all });
   });
 
+  router.get('/channels/status', (c) => {
+    const all = host.listChannelConfigs().filter((cfg) => cfg.type === 'qq');
+    const statusMap: Record<string, string> = {};
+    for (const cfg of all) {
+      const adapter = state.activeAdapters.get(cfg.id);
+      statusMap[cfg.id] = adapter ? adapter.getStatus().status : 'stopped';
+    }
+    return c.json({ statusMap });
+  });
+
   router.post('/channels', async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = CreateChannelSchema.safeParse(body);

@@ -32,7 +32,7 @@ function escapeAttr(text: string): string {
 let md!: MarkdownIt
 const mdOptions: Options = {
   html: false,        // raw HTML disabled (XSS guard)
-  linkify: true,
+  linkify: false,      // disable auto-linking URLs — users click links to navigate away from the SPA
   breaks: true,
   highlight(str: string, lang: string): string {
     const copyBtn = '<button class="code-copy-btn" type="button">Copy</button>'
