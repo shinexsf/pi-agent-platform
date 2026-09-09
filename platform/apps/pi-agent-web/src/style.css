@@ -636,6 +636,12 @@ html[data-route-direction="lateral"]::view-transition-new(app-stage) {
   opacity: 0.48;
 }
 
+.btn-sm {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+}
+
 .btn-primary {
   background: var(--accent);
   color: #fff;
@@ -677,7 +683,16 @@ html[data-route-direction="lateral"]::view-transition-new(app-stage) {
 
 .btn-icon {
   width: 38px;
+  min-width: 38px;
+  min-height: 38px;
   padding: 0;
+  flex: none;
+}
+
+.search-input {
+  min-width: 200px;
+  max-width: 300px;
+  flex: 1;
 }
 
 .btn.is-loading .app-icon {
@@ -1013,7 +1028,7 @@ textarea.control {
     padding-left: 52px;
   }
 
-  .resource-actions .btn-primary {
+  .resource-actions .btn-primary:not(.btn-icon) {
     flex: 1;
   }
 

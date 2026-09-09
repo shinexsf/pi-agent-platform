@@ -29,13 +29,13 @@ declare global {
 }
 
 const channels = ref<WechatChannel[]>([]);
+const channelStatus = ref<Record<string, string>>({});
 const agents = ref<AgentRow[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const newChannel = ref({ displayName: '', defaultAgentId: '', storageDir: '' });
 
 const showQrLogin = ref(false);
-const showManualCreate = ref(false);
 const editingChannelId = ref<string | null>(null);
 const editingAgentId = ref<string>('');
 
@@ -74,7 +74,9 @@ async function refresh(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    channels.value = await api.value.list();
+    const [list, statusMap] = await Promise.all([api.value.list(), api.value.listStatus()]);
+    channels.value = list;
+    channelStatus.value = statusMap;
   } catch {
     error.value = '无法加载微信机器人。请检查服务连接并刷新页面重试。';
   } finally {
@@ -82,22 +84,11 @@ async function refresh(): Promise<void> {
   }
 }
 
-async function handleManualCreate(): Promise<void> {
-  if (!api.value || !host.value) return;
-  if (!newChannel.value.displayName || !newChannel.value.defaultAgentId || !newChannel.value.storageDir) {
-    error.value = '请填写机器人名称、默认 Agent 和存储目录。';
-    return;
-  }
-  try {
-    await api.value.create(newChannel.value);
-    newChannel.value = { displayName: '', defaultAgentId: '', storageDir: '' };
-    showManualCreate.value = false;
-    await refresh();
-    host.value.showToast({ message: '微信机器人已创建。', variant: 'success' });
-  } catch {
-    error.value = '无法创建微信机器人。请检查填写内容后重试。';
-  }
+function getStatus(id: string): string {
+  return channelStatus.value[id] ?? 'unknown';
 }
+
+
 
 async function handleStart(id: string): Promise<void> {
   if (!api.value || !host.value) return;
@@ -172,7 +163,7 @@ onMounted(async () => {
   <div class="wechat-channels-page">
     <header class="page-header">
       <h2>微信机器人</h2>
-      <p class="hint">WeChat iLink ClawBot 目前仅支持通过 iOS 微信扫码登录。</p>
+      <p class="hint">WeChat iLink ClawBot 通过扫码登录。</p>
     </header>
 
     <section v-if="error" class="error">{{ error }}</section>
@@ -183,33 +174,11 @@ onMounted(async () => {
         扫码添加微信机器人
       </button>
       <p class="cta-hint">
-        填写机器人名称并选择默认 Agent，然后使用 iOS 微信扫描二维码。授权完成后，机器人会自动创建并启动。
+        填写机器人名称并选择默认 Agent，然后使用微信扫描二维码。授权完成后，机器人会自动创建并启动。
       </p>
     </section>
 
-    <!-- Manual create (advanced) — collapsed by default -->
-    <details class="manual-section">
-      <summary @click.prevent="showManualCreate = !showManualCreate">
-        高级设置：使用现有 iOS ClawBot 凭据手动创建
-      </summary>
-      <div v-if="showManualCreate" class="manual-form">
-        <div class="row">
-          <label>
-            <span>机器人名称</span>
-            <input v-model="newChannel.displayName" placeholder="例如：客服小助手" />
-          </label>
-          <label>
-            <span>默认 Agent ID</span>
-            <input v-model="newChannel.defaultAgentId" placeholder="输入 Agent ID" />
-          </label>
-          <label>
-            <span>存储目录</span>
-            <input v-model="newChannel.storageDir" placeholder="输入绝对路径" />
-          </label>
-          <button @click="handleManualCreate">创建</button>
-        </div>
-      </div>
-    </details>
+
 
     <section class="channel-list">
       <h3>微信机器人（{{ channels.length }}）</h3>
@@ -217,32 +186,31 @@ onMounted(async () => {
       <div v-else-if="channels.length === 0" class="empty">
         还没有微信机器人。点击上方“扫码添加微信机器人”开始配置。
       </div>
-      <table v-else>
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>Agent</th>
-            <th>存储目录</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="ch in channels" :key="ch.id">
-            <td>{{ ch.displayName }}</td>
-            <td>
+      <div v-else class="channel-cards">
+        <div v-for="ch in channels" :key="ch.id" class="channel-card">
+          <div class="card-header">
+            <span class="status-dot" :class="getStatus(ch.id) === 'connected' ? 'status-connected' : 'status-stopped'" :title="getStatus(ch.id)"></span>
+            <span class="card-name">{{ ch.displayName }}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-row">
+              <span class="card-label">Agent</span>
               <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
                 {{ agentLabel(ch.defaultAgentId) }} <span class="edit-label">更改</span>
               </button>
-            </td>
-            <td><code>{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</code></td>
-            <td>
-              <button @click="handleStart(ch.id)">启动</button>
-              <button @click="handleStop(ch.id)">停止</button>
-              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+            <div class="card-row">
+              <span class="card-label">存储目录</span>
+              <code class="card-value">{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</code>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button v-if="getStatus(ch.id) !== 'connected'" @click="handleStart(ch.id)">启动</button>
+            <button v-else @click="handleStop(ch.id)">停止</button>
+            <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- QR Login Dialog -->
@@ -314,32 +282,67 @@ onMounted(async () => {
   margin: 12px 0 0;
 }
 
-/* Manual create — collapsed */
-.manual-section {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 16px;
-}
-.manual-section summary {
-  cursor: pointer;
-  font-size: 13px;
-  color: #6b7280;
-  user-select: none;
-}
-.manual-section summary:hover { color: #111827; }
-.manual-form { margin-top: 12px; }
-.manual-form .row {
-  display: flex; gap: 8px; align-items: center;
-}
-.manual-form label { display: grid; flex: 1; gap: 5px; color: #4b5563; font-size: 12px; }
-.manual-form input { flex: 1; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; }
 
-.channel-list { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+
+.channel-list { padding: 0; }
 .channel-list h3 { margin: 0 0 12px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+
+.channel-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.channel-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-label {
+  color: #6b7280;
+  font-size: 0.85rem;
+  min-width: 70px;
+}
+
+.card-value {
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+}
 button { padding: 6px 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 4px; cursor: pointer; margin-right: 4px; }
 button:hover { background: #f9fafb; }
 button.danger { color: #c00; border-color: #c00; }
@@ -357,4 +360,13 @@ button.primary:hover { background: #2563eb; }
 .modal-field { display: grid; gap: 5px; color: #4b5563; font-size: 13px; }
 .modal select { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-connected { background: #22c55e; }
+.status-stopped { background: #ef4444; }
 </style>

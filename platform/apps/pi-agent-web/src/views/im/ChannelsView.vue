@@ -14,6 +14,7 @@ const channels = ref<ChannelAdminPage[]>([]);
 const selectedChannelType = ref<string>('');
 const loading = ref(true);
 const contentComponent = shallowRef<ReturnType<typeof markRaw> | null>(null);
+const sidebarCollapsed = ref(false);
 
 onMounted(async () => {
   try {
@@ -57,8 +58,13 @@ function getChannelIcon(channelType: string): string {
 
 <template>
   <div class="channels-view">
-    <aside class="channels-sidebar">
-      <h2 class="channels-sidebar-title">IM</h2>
+    <aside class="channels-sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <div class="sidebar-header">
+        <h2 v-if="!sidebarCollapsed" class="channels-sidebar-title">IM</h2>
+        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '折叠'">
+          <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="16" />
+        </button>
+      </div>
       <div v-if="loading" class="loading">加载中...</div>
       <div v-else-if="channels.length === 0" class="empty-state">暂无渠道</div>
       <nav v-else class="channels-list">
@@ -69,7 +75,7 @@ function getChannelIcon(channelType: string): string {
           @click="selectChannel(channel)"
         >
           <AppIcon :name="getChannelIcon(channel.channelType)" :size="24" />
-          <span class="channel-name">{{ channel.displayName }}</span>
+          <span v-if="!sidebarCollapsed" class="channel-name">{{ channel.displayName }}</span>
         </button>
       </nav>
     </aside>
@@ -96,6 +102,47 @@ function getChannelIcon(channelType: string): string {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  transition: width 200ms ease;
+}
+
+.channels-sidebar.collapsed {
+  width: 60px;
+  padding: 16px 8px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.channels-sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.channels-sidebar.collapsed .channels-list {
+  align-items: center;
 }
 
 .channels-sidebar-title {
@@ -126,6 +173,12 @@ function getChannelIcon(channelType: string): string {
   cursor: pointer;
   text-align: left;
   transition: all 150ms ease;
+  width: 100%;
+}
+
+.channels-sidebar.collapsed .channel-card {
+  padding: 12px;
+  justify-content: center;
 }
 
 .channel-card:hover {

@@ -29,12 +29,13 @@ export function createSessionsRouter(
 ) {
   const router = new Hono();
 
-  // GET /api/sessions?agent_id=&workspacePath=&page=&pageSize=
+  // GET /api/sessions?agent_id=&workspacePath=&search=&page=&pageSize=
   // workspacePath filter joins agents table; see session.repo for rationale.
   router.get('/', (c) => {
     const agentId = c.req.query('agent_id');
     const workspacePathRaw = c.req.query('workspacePath');
     const workspacePath = workspacePathRaw ? normalizePath(workspacePathRaw) : undefined;
+    const search = c.req.query('search') ?? undefined;
     const page = Math.max(1, Number.parseInt(c.req.query('page') ?? '1', 10) || 1);
     const pageSizeRaw = Number.parseInt(c.req.query('pageSize') ?? '20', 10);
     const pageSize = Math.min(100, Math.max(1, pageSizeRaw || 20));
@@ -42,6 +43,7 @@ export function createSessionsRouter(
     const { sessions: rows, total } = sessionRepo.listPaged({
       agentId,
       workspacePath,
+      search,
       offset,
       limit: pageSize,
     });

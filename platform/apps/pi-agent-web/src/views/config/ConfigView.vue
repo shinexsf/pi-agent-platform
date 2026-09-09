@@ -12,6 +12,7 @@ import SkillsConfig from './SkillsConfig.vue';
 import PromptsConfig from './PromptsConfig.vue';
 import ExtensionsConfig from './ExtensionsConfig.vue';
 import DefaultSettings from './DefaultSettings.vue';
+import AppIcon from '../../components/ui/AppIcon.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -31,6 +32,7 @@ const menuItems: ConfigMenuItem[] = [
 ];
 
 const activeTab = ref('models');
+const sidebarCollapsed = ref(false);
 
 const activeComponent = computed(() => {
   switch (activeTab.value) {
@@ -50,8 +52,13 @@ function selectTab(id: string) {
 
 <template>
   <div class="config-view">
-    <aside class="config-sidebar">
-      <h2 class="config-sidebar-title">配置管理</h2>
+    <aside class="config-sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <div class="sidebar-header">
+        <h2 v-if="!sidebarCollapsed" class="config-sidebar-title">配置管理</h2>
+        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '折叠'">
+          <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="16" />
+        </button>
+      </div>
       <nav class="config-menu">
         <button
           v-for="item in menuItems"
@@ -59,8 +66,8 @@ function selectTab(id: string) {
           :class="['config-menu-item', { active: activeTab === item.id }]"
           @click="selectTab(item.id)"
         >
-          <span class="config-menu-icon">{{ item.icon }}</span>
-          <span class="config-menu-label">{{ item.label }}</span>
+          <span class="config-menu-icon" :title="item.label">{{ item.icon }}</span>
+          <span v-if="!sidebarCollapsed" class="config-menu-label">{{ item.label }}</span>
         </button>
       </nav>
     </aside>
@@ -82,6 +89,48 @@ function selectTab(id: string) {
   border-right: 1px solid var(--border);
   padding: 16px;
   flex-shrink: 0;
+  transition: width 200ms ease;
+}
+
+.config-sidebar.collapsed {
+  width: 60px;
+  padding: 16px 8px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.config-sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.config-sidebar.collapsed .config-menu {
+  align-items: center;
 }
 
 .config-sidebar-title {
@@ -112,6 +161,12 @@ function selectTab(id: string) {
   cursor: pointer;
   text-align: left;
   transition: all 150ms ease;
+  width: 100%;
+}
+
+.config-sidebar.collapsed .config-menu-item {
+  padding: 12px;
+  justify-content: center;
 }
 
 .config-menu-item:hover {

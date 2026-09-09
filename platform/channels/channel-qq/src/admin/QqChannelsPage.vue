@@ -166,36 +166,31 @@ async function saveAgentEditor(): Promise<void> {
       <div v-else-if="channels.length === 0" class="empty">
         还没有 QQ 机器人。点击上方“扫码添加 QQ 机器人”开始配置。
       </div>
-      <table v-else>
-        <thead>
-          <tr>
-            <th>状态</th>
-            <th>名称</th>
-            <th>Agent</th>
-            <th>App ID</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="ch in channels" :key="ch.id">
-            <td>
-              <span class="status-dot" :class="getStatus(ch.id) === 'connected' ? 'status-connected' : 'status-stopped'" :title="getStatus(ch.id)"></span>
-            </td>
-            <td>{{ ch.displayName }}</td>
-            <td>
+      <div v-else class="channel-cards">
+        <div v-for="ch in channels" :key="ch.id" class="channel-card">
+          <div class="card-header">
+            <span class="status-dot" :class="getStatus(ch.id) === 'connected' ? 'status-connected' : 'status-stopped'" :title="getStatus(ch.id)"></span>
+            <span class="card-name">{{ ch.displayName }}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-row">
+              <span class="card-label">Agent</span>
               <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
                 {{ agentLabel(ch.defaultAgentId) }} <span class="edit-label">更改</span>
               </button>
-            </td>
-            <td><code>{{ ch.appId?.slice(0, 12) ?? ch.extra?.appId?.slice(0, 12) ?? '—' }}…</code></td>
-            <td>
-              <button v-if="getStatus(ch.id) !== 'connected'" @click="handleStart(ch.id)">启动</button>
-              <button v-else @click="handleStop(ch.id)">停止</button>
-              <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+            <div class="card-row">
+              <span class="card-label">App ID</span>
+              <code class="card-value">{{ ch.appId?.slice(0, 12) ?? ch.extra?.appId?.slice(0, 12) ?? '—' }}…</code>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button v-if="getStatus(ch.id) !== 'connected'" @click="handleStart(ch.id)">启动</button>
+            <button v-else @click="handleStop(ch.id)">停止</button>
+            <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Change Agent modal -->
@@ -256,10 +251,65 @@ async function saveAgentEditor(): Promise<void> {
 .btn-qr-login:hover { background: #7c3aed; transform: translateY(-1px); }
 .cta-hint { color: #5b21b6; font-size: 13px; margin: 12px 0 0; }
 
-.channel-list { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+.channel-list { padding: 0; }
 .channel-list h3 { margin: 0 0 12px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+
+.channel-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.channel-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-label {
+  color: #6b7280;
+  font-size: 0.85rem;
+  min-width: 70px;
+}
+
+.card-value {
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+}
 button { padding: 6px 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 4px; cursor: pointer; margin-right: 4px; }
 button:hover { background: #f9fafb; }
 button.link { background: transparent; border: 1px dashed #c4b5fd; color: #6d28d9; padding: 4px 10px; }

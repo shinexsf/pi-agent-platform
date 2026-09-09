@@ -27,6 +27,21 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import { z } from 'zod';
+
+/**
+ * Get the default storage directory for WeChat bot.
+ * - Packaged mode (PI_SERVER_CLI=1): ~/.pi/server/wechat-bot/
+ * - Dev mode: <cwd>/wechat-bot/
+ */
+function getDefaultStorageDir(): string {
+  const isPackaged = process.env.PI_SERVER_CLI === '1';
+  if (isPackaged) {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
+    const sep = home.includes('\\') ? '\\' : '/';
+    return `${home}${sep}.pi${sep}server${sep}wechat-bot`;
+  }
+  return path.join(process.cwd(), 'wechat-bot');
+}
 import type {
   ChannelAdapter,
   ChannelConfig,
@@ -74,6 +89,17 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
   router.get('/channels', (c) => {
     const all = host.listChannelConfigs().filter((cfg) => cfg.type === 'wechat');
     return c.json({ channels: all });
+  });
+
+  // GET /channels/status
+  router.get('/channels/status', (c) => {
+    const all = host.listChannelConfigs().filter((cfg) => cfg.type === 'wechat');
+    const statusMap: Record<string, string> = {};
+    for (const cfg of all) {
+      const adapter = state.activeAdapters.get(cfg.id);
+      statusMap[cfg.id] = adapter ? adapter.getStatus().status : 'stopped';
+    }
+    return c.json({ statusMap });
   });
 
   // POST /channels
@@ -194,7 +220,7 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
     }
     const now = Date.now();
     const id = randomUUID();
-    const storageDir = path.join(os.tmpdir(), `wechat-${id}`);
+    const storageDir = path.join(getDefaultStorageDir(), id);
     // Persist to DB FIRST so the row survives server restarts.
     host.exec(
       `INSERT INTO channels_wechat (id, display_name, enabled, default_agent_id, current_session_id, storage_dir, auto_reconnect, created_at, updated_at) ` +
@@ -274,7 +300,7 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
     if (state.activeAdapters.has(id)) {
       return c.json({ error: 'Channel already started' }, 409);
     }
-    const storageDir = (cfg.extra as { storageDir?: string } | undefined)?.storageDir ?? `/tmp/wechat-${cfg.id}`;
+    const storageDir = (cfg.extra as { storageDir?: string } | undefined)?.storageDir ?? path.join(getDefaultStorageDir(), cfg.id);
     const adapter: ChannelAdapter = new WechatAdapter({
       config: cfg,
       host: { logEvent: (e) => host.logEvent(e) },

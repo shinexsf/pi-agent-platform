@@ -22,6 +22,10 @@ export function createWechatApi(host: ChannelAdminHost) {
       const res = (await host.apiFetch('GET', '/channels')) as { channels: WechatChannel[] };
       return res.channels;
     },
+    listStatus: async (): Promise<Record<string, string>> => {
+      const res = (await host.apiFetch('GET', '/channels/status')) as { statusMap: Record<string, string> };
+      return res.statusMap;
+    },
     create: async (input: { displayName: string; defaultAgentId: string; storageDir: string; autoReconnect?: boolean }): Promise<WechatChannel> => {
       return (await host.apiFetch('POST', '/channels', input)) as WechatChannel;
     },

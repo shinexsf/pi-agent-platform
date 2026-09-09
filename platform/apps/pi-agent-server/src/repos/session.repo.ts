@@ -58,6 +58,7 @@ export function createSessionRepo(db: DB) {
     listPaged(opts: {
       agentId?: string;
       workspacePath?: string;
+      search?: string;
       offset: number;
       limit: number;
     }): { sessions: SessionDTO[]; total: number } {
@@ -76,9 +77,17 @@ export function createSessionRepo(db: DB) {
       let filtered = rawRows;
       if (opts.workspacePath) {
         const target = normalizePath(opts.workspacePath);
-        filtered = rawRows.filter((r) => {
+        filtered = filtered.filter((r) => {
           if (!r.ws) return false; // orphan session (agent deleted) — exclude
           return normalizePath(r.ws) === target;
+        });
+      }
+      if (opts.search) {
+        const searchLower = opts.search.toLowerCase();
+        filtered = filtered.filter((r) => {
+          const title = (r.s.title ?? '').toLowerCase();
+          const id = r.s.id.toLowerCase();
+          return title.includes(searchLower) || id.includes(searchLower);
         });
       }
 

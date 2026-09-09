@@ -70,9 +70,9 @@ onMounted(async () => {
   await loadData();
 });
 
+// Watch for provider changes to validate model selection
 watch(() => settings.value.defaultProvider, () => {
-  // 当 provider 改变时，如果当前 model 不在新 provider 中，清空 selection
-  if (settings.value.defaultProvider && settings.value.defaultModel) {
+  if (!loading.value && settings.value.defaultProvider && settings.value.defaultModel) {
     const exists = currentProviderModels.value.some(
       (m) => m.modelId === settings.value.defaultModel
     );
@@ -91,6 +91,15 @@ async function loadData() {
     ]);
     settings.value = await settingsRes.json();
     allModels.value = await modelsRes.json();
+    // Validate defaultModel after both settings and models are loaded
+    if (settings.value.defaultProvider && settings.value.defaultModel) {
+      const exists = currentProviderModels.value.some(
+        (m) => m.modelId === settings.value.defaultModel
+      );
+      if (!exists) {
+        settings.value.defaultModel = undefined;
+      }
+    }
   } catch (err) {
     console.error('Failed to load settings:', err);
   } finally {
@@ -180,7 +189,7 @@ function deselectAllModels() {
       <!-- Enabled Models -->
       <div class="form-group">
         <div class="models-header">
-          <label>启用的模型（用于 Ctrl+P 切换）</label>
+          <label>启用的模型</label>
           <div class="models-actions">
             <button class="btn btn-sm btn-secondary" @click="selectAllModels">全选</button>
             <button class="btn btn-sm btn-secondary" @click="deselectAllModels">全不选</button>

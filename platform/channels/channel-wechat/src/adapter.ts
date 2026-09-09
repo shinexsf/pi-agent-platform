@@ -368,14 +368,158 @@ export class WechatAdapter implements ChannelAdapter {
       });
       return original !== undefined ? `wechat-reply-${Date.now()}` : `wechat-sent-${Date.now()}`;
     } catch (err) {
-      const anyErr = err as { errcode?: number; message?: string };
+      const errMsg = (err as Error).message ?? String(err);
+      const isSessionTimeout = /session.?timeout|errcode[\s:=]+-?14/i.test(errMsg);
+      
       this.opts.host.logEvent({
         channelId: this._configId,
         channelType: 'wechat',
         kind: 'error',
-        message: `sendText failed errcode=${anyErr?.errcode ?? '?'} ${anyErr?.message ?? String(err)}`,
+        message: `sendText failed: ${errMsg}${isSessionTimeout ? ' (session timeout detected)' : ''}`,
       });
+
+      // Session timeout detected — try to re-login and retry once
+      if (isSessionTimeout && !this._reconnecting) {
+        this.opts.host.logEvent({
+          channelId: this._configId,
+          channelType: 'wechat',
+          kind: 'info',
+          message: 'Attempting auto re-login due to session timeout...',
+        });
+        try {
+          await this.reconnect();
+          // Retry the send after re-login
+          if (original) {
+            await this.bot!.reply(original, { text });
+          } else {
+            await this.bot!.send(target.chatId, { text });
+          }
+          this.opts.host.logEvent({
+            channelId: this._configId,
+            channelType: 'wechat',
+            kind: 'info',
+            message: `wechat reply sent after re-login (length=${text.length})`,
+          });
+          return original !== undefined ? `wechat-reply-${Date.now()}` : `wechat-sent-${Date.now()}`;
+        } catch (retryErr) {
+          this.opts.host.logEvent({
+            channelId: this._configId,
+            channelType: 'wechat',
+            kind: 'error',
+            message: `sendText retry after re-login failed: ${(retryErr as Error).message}`,
+          });
+          throw retryErr;
+        }
+      }
       throw err;
+    }
+  }
+
+  private _reconnecting = false;
+
+  private async reconnect(): Promise<void> {
+    if (this._reconnecting) return;
+    this._reconnecting = true;
+    try {
+      // Clear stale context_tokens
+      const fsSync = require('node:fs');
+      try { fsSync.rmSync(`${this.opts.storageDir}/context_tokens.json`, { force: true }); } catch {}
+
+      // Stop existing bot
+      if (this.bot) {
+        try { this.bot.stop(); } catch {}
+        this.bot = null;
+      }
+
+      this.updateStatus({ status: 'starting' });
+
+      // Create new bot instance
+      this.bot = new WeChatBot({
+        storage: 'file',
+        storageDir: this.opts.storageDir,
+        logLevel: 'debug',
+      });
+
+      // Re-register handlers
+      this.bot.onMessage((msg) => this.handleIncoming(msg));
+      this.bot.on('error', (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.updateStatus({ status: 'error', error: error.message });
+        this.errHandler?.(this._configId, error);
+      });
+
+      // Re-login — try stored creds first (force: false), only QR if that fails
+      try {
+        await this.bot.login({
+          force: false,
+          callbacks: {
+            onQrUrl: (rawContent: string) => {
+              const wrapped = wrapQrImageContent(rawContent);
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'qr-url',
+                message: `WeChat QR ready to scan (${rawContent.length} chars)`,
+                data: { qrUrl: wrapped },
+              });
+            },
+            onScanned: () => {
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'qr-scanned',
+                message: 'WeChat QR scanned, awaiting confirmation',
+              });
+            },
+          },
+        });
+      } catch (loginErr) {
+        // Stored creds failed, try force QR
+        this.opts.host.logEvent({
+          channelId: this._configId,
+          channelType: 'wechat',
+          kind: 'info',
+          message: `Stored login failed, trying QR: ${(loginErr as Error).message}`,
+        });
+        await this.bot.login({
+          force: true,
+          callbacks: {
+            onQrUrl: (rawContent: string) => {
+              const wrapped = wrapQrImageContent(rawContent);
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'qr-url',
+                message: `WeChat QR ready to scan (${rawContent.length} chars)`,
+                data: { qrUrl: wrapped },
+              });
+            },
+            onScanned: () => {
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'qr-scanned',
+                message: 'WeChat QR scanned, awaiting confirmation',
+              });
+            },
+          },
+        });
+      }
+
+      // Start polling
+      this.bot.start().catch((err: Error) => {
+        this.updateStatus({ status: 'error', error: err.message });
+      });
+
+      this.updateStatus({ status: 'connected' });
+      this.opts.host.logEvent({
+        channelId: this._configId,
+        channelType: 'wechat',
+        kind: 'connected',
+        message: 'WeChat bot reconnected after session timeout',
+      });
+    } finally {
+      this._reconnecting = false;
     }
   }
 
@@ -421,6 +565,11 @@ export class WechatAdapter implements ChannelAdapter {
     // Cache so adapter.sendText() can use bot.reply() with the original
     // message (preserves context_token).
     this.lastIncomingByChatId.set(msg.userId, msg);
+
+    // Show "typing..." indicator to user while agent processes the message.
+    // Fire-and-forget — don't block inbound handling on typing API.
+    this.bot?.sendTyping(msg.userId).catch(() => {});
+
     const inbound = {
       channelId: this._configId,
       channelType: 'wechat',
