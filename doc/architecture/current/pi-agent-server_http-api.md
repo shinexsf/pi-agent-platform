@@ -97,6 +97,27 @@ interface SessionContextDTO {
 |---|---|---|
 | `/api/sessions/:id/events` | GET | **SSE 事件流** |
 
+
+## 配置管理（2026-09-09 新增）
+
+| 路径 | 方法 | 用途 |
+|---|---|---|
+| `/api/config/builtin-providers` | GET | 获取内置 provider 列表（22 个）|
+| `/api/config/models` | GET | 获取模型配置（providers + auth）|
+| `/api/config/models` | PUT | 更新模型配置 |
+| `/api/config/models/test` | POST | 测试模型连接 |
+| `/api/config/settings` | GET | 获取全局设置 |
+| `/api/config/settings` | PUT | 更新全局设置 |
+| `/api/config/skills` | GET | 列出 skills |
+| `/api/config/skills/:name` | GET/PUT/DELETE | 读取/更新/删除 skill |
+| `/api/config/prompts` | GET | 列出 prompts |
+| `/api/config/prompts/:name` | GET/PUT/DELETE | 读取/更新/删除 prompt |
+| `/api/config/extensions` | GET | 列出已安装插件 |
+| `/api/config/extensions/install-by-url` | POST | 通过 URL 安装 |
+| `/api/config/extensions/upload-single` | POST | 上传单文件 |
+| `/api/config/extensions/upload-zip` | POST | 上传 zip 包 |
+| `/api/config/extensions/:name` | DELETE | 卸载插件 |
+
 ## Worker（调试）
 
 | 路径 | 方法 | 用途 |

@@ -29,6 +29,7 @@ import {
   loadChannelManifest,
   buildImGatewayRoute,
 } from './modules/im-gateway';
+import ConfigView from './views/config/ConfigView.vue';
 
 // Step 1: base routes (data-driven navLabel for TopNav)
 const baseRoutes = [
@@ -47,6 +48,11 @@ const baseRoutes = [
     path: '/architecture',
     component: () => import('./views/ArchitectureView.vue'),
     meta: { navLabel: '架构图', navOrder: 90, navIcon: 'architecture', fullWidth: true },
+  },
+  {
+    path: '/config',
+    component: ConfigView,
+    meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings' },
   },
   {
     path: '/sessions/:id',

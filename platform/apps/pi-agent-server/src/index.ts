@@ -28,6 +28,7 @@ import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
 import { createDebugRouter } from './routes/debug.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
+import { createConfigRouter } from './routes/config.js';
 import { AttachmentStore } from './services/attachment-store.js';
 import { startTimeoutScanner } from './session-timeout-scanner.js';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
@@ -54,6 +55,13 @@ async function main() {
   await mkdir(config.attachmentsDir, { recursive: true });
   console.log(`[server] attachments root: ${config.attachmentsDir}`);
 
+  // Ensure uploads/extensions directory exists for plugin uploads
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
+  const sep = home.includes('\\') ? '\\' : '/';
+  const uploadsExtensionsDir = `${home}${sep}.pi${sep}server${sep}uploads${sep}extensions`;
+  await mkdir(uploadsExtensionsDir, { recursive: true });
+  console.log(`[server] uploads extensions root: ${uploadsExtensionsDir}`);
+
   const { db, raw } = initDb(config.databasePath);
   const agentRepo = createAgentRepo(db);
   const sessionRepo = createSessionRepo(db);
@@ -77,6 +85,7 @@ async function main() {
   app.route('/api/sessions', createSessionsRouter(agentRepo, sessionRepo, workerPool, attachmentStore));
   app.route('/api/sessions', createEventsRouter(workerPool));
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
+  app.route('/api/config', createConfigRouter(config));
 
   // Debug routes (only in dev/test)
   if (config.isDev) {
