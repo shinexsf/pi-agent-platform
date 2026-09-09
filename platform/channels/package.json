@@ -1,0 +1,9 @@
+{
+  "name": "@pi-agent-platform/channels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pino": "^9.5.0"
+  }
+}

@@ -11,7 +11,10 @@
 
 import pino from 'pino';
 
-export const logger = pino({
+const logger = pino({
   name: 'im-gateway-channel',
   level: process.env.LOG_LEVEL ?? 'info',
 });
+
+export { logger };
+export default logger;

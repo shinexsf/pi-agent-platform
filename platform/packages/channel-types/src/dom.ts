@@ -12,21 +12,6 @@ import type { ChannelType } from './common.js';
 
 export type { ChannelType };
 
-/** Vue Router route record shape (subset). */
-export interface AdminRoute {
-  path: string;
-  component: () => Promise<{ default: unknown }>;
-  meta?: Record<string, unknown>;
-}
-
-/** Top-nav entry metadata. */
-export interface NavItem {
-  path: string;
-  label: string;
-  icon?: string;
-  order?: number;
-}
-
 /** Toast payload. */
 export interface ToastOptions {
   message: string;
@@ -54,12 +39,8 @@ export interface ConfirmDialogOptions {
 export interface ChannelAdminPage {
   readonly channelType: ChannelType;
   readonly displayName: string;
-  /** Top-nav metadata (also mirrored in router meta.navLabel for cross-checking). */
-  readonly navItem: NavItem;
   /** Main component (default page). */
   readonly component: () => Promise<{ default: unknown }>;
-  /** Sub-routes (optional). */
-  readonly subRoutes?: AdminRoute[];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

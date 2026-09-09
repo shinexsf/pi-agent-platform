@@ -6,12 +6,6 @@ import type { ChannelAdminPage } from '@pi-agent-platform/channel-types';
 const QqChannelAdminPage: ChannelAdminPage = {
   channelType: 'qq',
   displayName: 'QQ Channel',
-  navItem: {
-    path: '/im/qq',
-    label: 'QQ Channel',
-    order: 30,
-    icon: 'qq',
-  },
   component: () => import('./QqChannelsPage.vue'),
 };
 

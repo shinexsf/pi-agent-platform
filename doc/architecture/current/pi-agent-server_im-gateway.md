@@ -35,9 +35,9 @@ flowchart TB
 
     subgraph HostFE["pi-agent-web(前端主包,零渠道知识)"]
         Glob["im-gateway/index.ts<br/>import.meta.glob"]
-        Layout["ImGatewayLayout.vue<br/>RequireAuth + ApiFetchProvider"]
+        ChannelsView["views/im/ChannelsView.vue<br/>master-detail 布局"]
         Wrappers["components/<br/>横切 wrapper 集合"]
-        TopNavOuter["components/TopNav.vue<br/>路由 meta 驱动"]
+        TopNavOuter["components/TopNav.vue<br/>数据驱动"]
     end
 
     subgraph AdminUI["渠道 admin 页面(Vue,渠道包自带)"]

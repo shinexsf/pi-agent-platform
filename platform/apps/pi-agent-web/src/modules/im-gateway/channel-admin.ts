@@ -10,7 +10,7 @@
 import { inject, provide, type InjectionKey, type App } from 'vue';
 import type { ChannelAdminHost } from '@pi-agent-platform/channel-types';
 
-export type { ChannelAdminHost, ChannelAdminPage, NavItem, AdminRoute, ToastOptions, ConfirmDialogOptions } from '@pi-agent-platform/channel-types';
+export type { ChannelAdminHost, ChannelAdminPage, ToastOptions, ConfirmDialogOptions } from '@pi-agent-platform/channel-types';
 
 export const ChannelAdminHostKey: InjectionKey<ChannelAdminHost> = Symbol('ChannelAdminHost');
 

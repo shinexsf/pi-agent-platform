@@ -63,21 +63,23 @@ export async function loadChannels(host: ChannelHost): Promise<Array<{ type: str
   const channelEntrySubpath = process.env.PI_SERVER_CLI === '1' ? 'dist/index.js' : 'src/index.ts';
   for (const channelName of manifest.channels) {
     const packagePath = path.resolve(channelsDir, channelName, channelEntrySubpath);
+    logger.info({ channelName, packagePath, channelsDir, channelEntrySubpath }, 'attempting to load channel');
     try {
       // Dynamic import — convert absolute path to file:// URL (Windows requires this).
       // Cache-bust per restart by appending a query string (no-op semantics).
       const fileUrl = `${pathToFileURL(packagePath).href}?t=${Date.now()}`;
+      logger.info({ fileUrl }, 'importing channel module');
       const mod = (await import(fileUrl)) as { default?: ChannelPackage };
         const pkg: ChannelPackage | undefined = mod.default ?? (mod as unknown as ChannelPackage);
         if (!pkg || typeof pkg.register !== 'function') {
-          logger.warn({ channelName }, 'channel package missing default export with register()');
+          logger.warn({ channelName, modKeys: Object.keys(mod) }, 'channel package missing default export with register()');
           continue;
         }
         await pkg.register(host);
         loaded.push({ type: pkg.type, packagePath });
         logger.info({ channelName, type: pkg.type }, 'channel package loaded');
       } catch (err) {
-        logger.error({ err: String(err), channelName, packagePath }, 'channel package load failed');
+        logger.error({ err: String(err), channelName, packagePath, stack: (err as Error).stack }, 'channel package load failed');
         // Don't fail the whole server — missing/breaking one channel shouldn't kill the others.
       }
   }

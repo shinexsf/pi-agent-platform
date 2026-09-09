@@ -27,8 +27,8 @@ import SessionDetailView from './views/SessionDetailView.vue';
 import {
   channelAdminRegistry,
   loadChannelManifest,
-  buildImGatewayRoute,
 } from './modules/im-gateway';
+import ChannelsView from './views/im/ChannelsView.vue';
 import ConfigView from './views/config/ConfigView.vue';
 
 // Step 1: base routes (data-driven navLabel for TopNav)
@@ -50,6 +50,11 @@ const baseRoutes = [
     meta: { navLabel: '架构图', navOrder: 90, navIcon: 'architecture', fullWidth: true },
   },
   {
+    path: '/im',
+    component: ChannelsView,
+    meta: { navLabel: 'IM', navOrder: 30, navIcon: 'im' },
+  },
+  {
     path: '/config',
     component: ConfigView,
     meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings' },
@@ -65,10 +70,7 @@ const baseRoutes = [
 const router = createRouter({
   // 跟随 Vite 的 base：开发环境为 /，Server 托管构建产物时为 /web/。
   history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [
-    ...baseRoutes,
-    buildImGatewayRoute(channelAdminRegistry),
-  ],
+  routes: [...baseRoutes],
 });
 routerRef.router = router;
 installRouteTransitions(router);
@@ -82,18 +84,12 @@ import type { ChannelAdminHost, ChannelLogEvent, ToastOptions, ConfirmDialogOpti
 //  created before the router is constructed.)
 
 function currentChannelType(): string {
-  // Prefer Vue Router's current route meta (set by buildImGatewayRoute)
-  if (routerRef.router) {
-    const matched = routerRef.router.currentRoute.value.matched;
-    for (const r of matched) {
-      const meta = r.meta as { channelType?: string };
-      if (meta.channelType) return meta.channelType;
-    }
-  }
-  // Fallback to URL parsing
+  // 优先使用 ChannelsView 设置的全局 channelType
+  const global = (window as any).__currentChannelType;
+  if (global) return global;
+  // 从 URL 解析
   const path = window.location.pathname;
   const segments = path.split('/').filter(Boolean);
-  if (segments[0] === 'im' && segments[1]) return segments[1];
   return segments[1] || 'wechat';
 }
 

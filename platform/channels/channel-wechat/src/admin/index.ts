@@ -8,12 +8,6 @@ import type { ChannelAdminPage } from '@pi-agent-platform/channel-types';
 const WechatChannelAdminPage: ChannelAdminPage = {
   channelType: 'wechat',
   displayName: 'WeChat Channel',
-  navItem: {
-    path: '/im/wechat',
-    label: 'WeChat Channel',
-    order: 40,
-    icon: 'wechat',
-  },
   component: () => import('./WechatChannelsPage.vue'),
 };
 

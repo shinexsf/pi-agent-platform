@@ -64,7 +64,17 @@ pi-agent-web 是一个 Vue 3 SPA（Vite 构建）。**不引入重型组件库**
 src/views/
 ├── AgentsListView.vue         # /agents（列表 + inline 编辑表单）
 ├── SessionsListView.vue       # /sessions（列表）
-└── SessionDetailView.vue      # /sessions/:id（聊天页，核心）
+├── SessionDetailView.vue      # /sessions/:id（聊天页，核心）
+├── ArchitectureView.vue       # /architecture（架构图）
+├── config/                    # /config（配置管理）
+│   ├── ConfigView.vue         # master-detail 布局容器
+│   ├── ModelsConfig.vue       # 模型 API 管理
+│   ├── DefaultSettings.vue    # 默认设置
+│   ├── SkillsConfig.vue       # Skills 管理
+│   ├── PromptsConfig.vue      # Prompts 管理
+│   └── ExtensionsConfig.vue   # 插件管理
+└── im/                        # /im（IM 渠道管理）
+    └── ChannelsView.vue       # master-detail 布局容器
 ```
 
 > **MVP 范围**：`AgentCreateView` / `AgentDetailView` / `SettingsView` **未单独抽页面**——`AgentsListView` 内嵌 inline 编辑表单（创建 / 修改都走 inline editor）；`Agent` 配置通过 IDE 端管理，web 端只读为主。`SettingsView` 待 web 端设置项需求出现再拆。
