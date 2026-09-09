@@ -140,6 +140,12 @@ importers:
         specifier: ^2.1.0
         version: 2.1.0(typescript@5.6.2)
 
+  channels:
+    dependencies:
+      pino:
+        specifier: ^9.5.0
+        version: 9.5.0
+
   channels/channel-qq:
     dependencies:
       '@pi-agent-platform/channel-types':

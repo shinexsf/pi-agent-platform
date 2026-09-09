@@ -106,36 +106,37 @@ export function createImGatewayRouter(deps: Deps): Hono {
       });
     });
 
-    // SSE: live channel log feed — exposed in all modes (production-safe)
-    // because channel admin pages need it to display QR codes during login.
-    router.get('/events', (c) => {
-      return streamSSE(c, async (stream) => {
-        const handler = (event: import('@pi-agent-platform/channel-types').ChannelLogEvent) => {
-          stream.writeSSE({
-            data: JSON.stringify(event),
-            event: event.kind,
-          }).catch(() => {
-            // Client disconnected — the unsubscriber below handles cleanup.
-          });
-        };
-        // Subscribe via the host's pub/sub. The returned handler is the same
-        // function we passed in, which the host stores; we unsubscribe by
-        // registering a no-op replacement (ChannelHost doesn't expose an
-        // unsubscribe API in MVP).
-        deps.host.onChannelLog(handler);
-        // Hold the connection open for 10 minutes; the client is expected to
-        // reconnect after that.
-        const startTs = Date.now();
-        try {
-          while (Date.now() - startTs < 10 * 60 * 1000) {
-            await stream.sleep(1000);
-          }
-        } catch {
-          // stream closed
-        }
-      });
-    });
   }
+
+  // SSE: live channel log feed — exposed in all modes (production-safe)
+  // because channel admin pages need it to display QR codes during login.
+  router.get('/events', (c) => {
+    return streamSSE(c, async (stream) => {
+      const handler = (event: import('@pi-agent-platform/channel-types').ChannelLogEvent) => {
+        stream.writeSSE({
+          data: JSON.stringify(event),
+          event: event.kind,
+        }).catch(() => {
+          // Client disconnected — the unsubscriber below handles cleanup.
+        });
+      };
+      // Subscribe via the host's pub/sub. The returned handler is the same
+      // function we passed in, which the host stores; we unsubscribe by
+      // registering a no-op replacement (ChannelHost doesn't expose an
+      // unsubscribe API in MVP).
+      deps.host.onChannelLog(handler);
+      // Hold the connection open for 10 minutes; the client is expected to
+      // reconnect after that.
+      const startTs = Date.now();
+      try {
+        while (Date.now() - startTs < 10 * 60 * 1000) {
+          await stream.sleep(1000);
+        }
+      } catch {
+        // stream closed
+      }
+    });
+  });
 
   // Mount channel-type-specific routers under /api/im/<type>/*
   for (const type of deps.helpers.listLoadedTypes()) {

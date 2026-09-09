@@ -73,7 +73,11 @@ function run(cmd, args, opts = {}) {
 }
 
 async function main() {
-  log('step 1/10: compile CLI itself (so dist/bin.js exists)');
+  log('step 1/10: clean CLI dist + compile CLI itself');
+  // Clean CLI dist first to ensure fresh build (tsc incremental may skip unchanged files)
+  if (existsSync(CLI_DIST)) {
+    rmSync(CLI_DIST, { recursive: true, force: true });
+  }
   await run('pnpm', ['--filter', 'pi-server', 'build']);
 
   log('step 2/10: pnpm -r build (compile server + worker + channels + packages)');
@@ -98,11 +102,12 @@ async function main() {
   await run('pnpm', ['build:web']);
 
   log('step 5/10: clear aggregated subdirs and copy server dist');
-  // Only remove the topdirs that we fully replace (worker). For 'server', do
-  // NOT rmSync wholesale because step 3 already wrote server/channels/shared/.
-  // Instead, only clear the sibling dirs we'll re-create in this script.
-  for (const sub of ['worker', 'vendor']) {
-    rmSync(path.join(CLI_DIST, sub), { recursive: true, force: true });
+  // Clear subdirs that will be re-created, but NOT CLI's own dist/ (step 1 compiled bin.js)
+  for (const sub of ['server', 'worker', 'vendor', 'channels']) {
+    const dir = path.join(CLI_DIST, sub);
+    if (existsSync(dir)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
   mkdirSync(path.join(CLI_DIST, 'server'), { recursive: true });
 
@@ -125,6 +130,13 @@ async function main() {
       return true;
     },
   });
+
+  // Re-copy channels/shared after server dist (it was cleared in step 5)
+  log('step 5b/10: re-copy channels/shared (cleared by step 5)');
+  if (existsSync(sharedSrc)) {
+    mkdirSync(sharedOutDir, { recursive: true });
+    cpSync(sharedSrc, sharedOutDir, { recursive: true });
+  }
 
   log('step 6/10: copy SPA public to cli/dist/server/public');
   mkdirSync(path.join(CLI_DIST, 'server', 'public'), { recursive: true });

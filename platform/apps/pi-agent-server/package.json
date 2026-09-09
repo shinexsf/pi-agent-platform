@@ -11,7 +11,7 @@
     "./im-gateway/logger": "./src/im-gateway/logger.ts"
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/index.ts --watch",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
