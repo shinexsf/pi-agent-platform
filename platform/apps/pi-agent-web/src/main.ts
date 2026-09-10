@@ -23,7 +23,7 @@ import { installRouteTransitions } from './motion/routeTransitions';
 const routerRef: { router: import('vue-router').Router | null } = { router: null };
 import AgentsListView from './views/AgentsListView.vue';
 import SessionsListView from './views/SessionsListView.vue';
-import SessionDetailView from './views/SessionDetailView.vue';
+
 import {
   channelAdminRegistry,
   loadChannelManifest,
@@ -59,10 +59,10 @@ const baseRoutes = [
     component: ConfigView,
     meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings' },
   },
+
   {
-    path: '/sessions/:id',
-    component: SessionDetailView,
-    props: true,
+    path: '/chat/:id',
+    component: () => import('./views/ChatView.vue'),
     meta: {}, // no navLabel (sub-page)
   },
 ];

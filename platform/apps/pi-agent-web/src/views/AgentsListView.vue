@@ -139,7 +139,9 @@ async function startSession(agentId: string) {
       throw new Error(`The session couldn't be created (server response ${res.status}). Try again.`);
     }
     const data = (await res.json()) as { sessionId: string; agentId: string };
-    await router.push(`/sessions/${data.sessionId}?agentId=${data.agentId}`);
+    // 打开新的独立会话页面（生产环境base是/web/）
+    const base = import.meta.env.BASE_URL || '/';
+    window.open(`${base}chat/${data.sessionId}?agentId=${data.agentId}`, '_blank');
   } catch {
     showToast('The session couldn\'t be created. Check the server connection and try again.', 'error');
   } finally {

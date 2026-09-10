@@ -111,6 +111,15 @@ importers:
       '@pi-agent-platform/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@types/markdown-it':
+        specifier: ^14.2.0
+        version: 14.2.0
+      highlight.js:
+        specifier: ^11.12.0
+        version: 11.12.0
+      markdown-it:
+        specifier: ^14.3.0
+        version: 14.3.0
       pinia:
         specifier: ^2.2.0
         version: 2.2.0(typescript@5.6.2)(vue@3.5.41(typescript@5.6.2))
@@ -139,12 +148,6 @@ importers:
       vue-tsc:
         specifier: ^2.1.0
         version: 2.1.0(typescript@5.6.2)
-
-  channels:
-    dependencies:
-      pino:
-        specifier: ^9.5.0
-        version: 9.5.0
 
   channels/channel-qq:
     dependencies:

@@ -123,7 +123,10 @@ async function load() {
 }
 
 async function openSession(session: SessionDTO) {
-  await router.push(`/sessions/${session.id}${session.agentId ? `?agentId=${session.agentId}` : ''}`);
+  // 打开新的独立会话页面（生产环境base是/web/）
+  const base = import.meta.env.BASE_URL || '/';
+  const url = `${base}chat/${session.id}${session.agentId ? `?agentId=${session.agentId}` : ''}`;
+  window.open(url, '_blank');
 }
 
 function onAgentFilterChange() {
