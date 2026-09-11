@@ -8,6 +8,29 @@
  *   to keep this package zero-dependency; concrete types live in api-types
  */
 
+// ---------- Agent Config ----------
+/** Agent configuration - stored as JSON in agents/sessions config column. */
+export interface AgentConfig {
+  // System prompt
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+
+  // Builtin tools whitelist (null = all, [] = none, ['read','write'] = only these)
+  builtinTools?: string[];
+
+  // Extension whitelist (names from settings.json packages + extensions)
+  extensions?: string[];
+
+  // Skills whitelist (null = all, [] = none, ['a','b'] = only these)
+  skills?: string[];
+
+  // Prompts whitelist (null = all, [] = none, ['a','b'] = only these)
+  prompts?: string[];
+
+  // MCP servers (future)
+  mcpServers?: Record<string, unknown>;
+}
+
 // ---------- Agent ----------
 export interface AgentDTO {
   id: string;
@@ -17,13 +40,7 @@ export interface AgentDTO {
 
   model: string;
   thinkingLevel?: string;
-  // Optional: when absent, worker creates session WITHOUT passing systemPrompt/tools
-  // to pi SDK's createAgentSession, letting pi's discoverSystemPromptFile() /
-  // defaultActiveToolNames take over.
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[]; // parsed from JSON column
-  config?: Record<string, unknown>;
+  config?: AgentConfig; // parsed from JSON column
 
   createdAt: number; // epoch ms
   updatedAt: number;
@@ -45,12 +62,7 @@ export interface SessionDTO {
 
   model: string;
   thinkingLevel?: string;
-  // Same nullability rule as AgentDTO — null / undefined means "use pi defaults".
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[];
-
-  config?: Record<string, unknown>;
+  config?: AgentConfig; // parsed from JSON column
 
   piSessionPath: string; // normalized absolute path to jsonl history file
 
@@ -146,12 +158,6 @@ export interface MessageDeltaDTO {
 export interface RuntimeConfig {
   model: string;
   thinkingLevel?: string;
-  // systemPrompt + tools are optional: empty/null/undefined means "use pi defaults".
-  // Worker MUST omit the corresponding option from createAgentSession when the
-  // field is absent, so pi SDK's discoverSystemPromptFile() / defaultActiveToolNames kick in.
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[];
   workspacePath: string;
-  config?: Record<string, unknown>;
+  config?: AgentConfig; // All agent config (systemPrompt, tools, extensions, etc.)
 }

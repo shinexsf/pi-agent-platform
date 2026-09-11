@@ -17,7 +17,7 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types';
-import type { RuntimeConfig } from '@pi-agent-platform/shared-types';
+import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';
 import { listAvailableModels } from '../model-registry.js';
 import { normalizePath } from '../utils/normalize-path.js';
 
@@ -778,8 +778,7 @@ const BUILTIN_SERVER_COMMANDS = ['model', 'thinking', 'name', 'session', 'compac
 
 async function spawnPlaceholder(
   sessionId: string,
-  // systemPrompt + tools are optional (null = "use pi defaults"); see shared-types.
-  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; systemPrompt?: string; appendSystemPrompt?: string; tools?: string[]; config?: Record<string, unknown> },
+  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; config?: AgentConfig },
   workerPool: WorkerPool,
 ) {
   await workerPool.spawn(sessionId, agent.workspacePath);
@@ -787,9 +786,6 @@ async function spawnPlaceholder(
     workspacePath: agent.workspacePath,
     model: agent.model,
     thinkingLevel: agent.thinkingLevel,
-    systemPrompt: agent.systemPrompt,
-    appendSystemPrompt: agent.appendSystemPrompt,
-    tools: agent.tools,
     config: agent.config,
   };
   // existingSessionPath is always undefined for placeholders — no row exists yet.
@@ -814,8 +810,7 @@ async function spawnPlaceholder(
 
 async function spawnAndCreate(
   sessionId: string,
-  // systemPrompt + tools are optional (null = "use pi defaults"); see shared-types.
-  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; systemPrompt?: string; appendSystemPrompt?: string; tools?: string[]; config?: Record<string, unknown> },
+  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; config?: AgentConfig },
   sessionRepo: SessionRepo,
   workerPool: WorkerPool,
   existingSessionPath?: string,
@@ -842,9 +837,6 @@ async function spawnAndCreate(
       workspacePath: agent.workspacePath,
       model: agent.model,
       thinkingLevel: agent.thinkingLevel,
-      systemPrompt: agent.systemPrompt,
-      appendSystemPrompt: agent.appendSystemPrompt,
-      tools: agent.tools,
       config: agent.config,
     };
     const result = (await workerPool.call<{

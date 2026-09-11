@@ -17,7 +17,7 @@
  *      - markRowWritten so it's excluded from placeholder timeout / LRU
  */
 
-import type { RuntimeConfig } from '@pi-agent-platform/shared-types';
+import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
@@ -27,10 +27,7 @@ interface AgentLike {
   workspacePath: string;
   model: string;
   thinkingLevel?: string;
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[];
-  config?: Record<string, unknown>;
+  config?: AgentConfig;
 }
 
 interface CreateSessionResult {
@@ -127,9 +124,6 @@ function buildRuntimeConfig(agent: AgentLike): RuntimeConfig {
     workspacePath: agent.workspacePath,
     model: agent.model,
     thinkingLevel: agent.thinkingLevel,
-    systemPrompt: agent.systemPrompt,
-    appendSystemPrompt: agent.appendSystemPrompt,
-    tools: agent.tools,
     config: agent.config,
   };
 }

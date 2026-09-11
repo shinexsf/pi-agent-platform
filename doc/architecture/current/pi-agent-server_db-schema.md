@@ -14,15 +14,9 @@ CREATE TABLE agents (
   -- 核心配置（平铺）
   model                 TEXT    NOT NULL,
   thinking_level        TEXT,
-  -- system_prompt / tools 可选：NULL 意味着 "用 pi 默认"
-  -- (worker 构造 createAgentSession options 时省略 / 使用 pi SDK DefaultResourceLoader
-  --  的 discoverSystemPromptFile() 与 defaultActiveToolNames)。
-  system_prompt         TEXT,
-  append_system_prompt  TEXT,
-  tools                 TEXT,                 -- JSON array
 
-  -- 扩展配置（JSON）
-  config                TEXT,                 -- JSON: extensions 等
+  -- 所有可选配置（JSON）
+  config                TEXT,                 -- AgentConfig JSON
 
   -- 元数据
   created_at            INTEGER NOT NULL,     -- timestamp_ms
@@ -38,15 +32,11 @@ CREATE TABLE sessions (
   agent_id              TEXT    NOT NULL REFERENCES agents(id),
 
   -- 核心配置（平铺，跟 agent 字段对得上）
-  -- 同 agents 表：system_prompt / tools 可选（NULL = 用 pi 默认）
   model                 TEXT    NOT NULL,
   thinking_level        TEXT,
-  system_prompt         TEXT,
-  append_system_prompt  TEXT,
-  tools                 TEXT,
 
-  -- 扩展配置
-  config                TEXT,
+  -- 所有可选配置（JSON）
+  config                TEXT,                 -- AgentConfig JSON
 
   -- pi SDK 关联
   pi_session_path       TEXT    NOT NULL,    -- 历史消息文件绝对路径（jsonl）
@@ -64,6 +54,26 @@ CREATE INDEX idx_sessions_status         ON sessions(status);
 CREATE INDEX idx_sessions_last_active_at ON sessions(last_active_at);
 ```
 
+## AgentConfig 接口
+
+```typescript
+interface AgentConfig {
+  // 系统指令
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+
+  // 内置工具控制（null = 全部启用，[] = 全部禁用）
+  builtinTools?: string[];
+
+  // 插件控制（从 settings.json 筛选）
+  extensions?: string[];
+
+  // 技能/模板控制（null = 全部，[] = 无）
+  skills?: string[];
+  prompts?: string[];
+}
+```
+
 ## TypeScript（drizzle）
 
 ```typescript
@@ -75,12 +85,7 @@ export interface Agent {
 
   model: string;
   thinkingLevel?: string;
-  // systemPrompt / tools 可选：undefined 表示"用 pi 默认"
-  // (与 db nullable 列对齐)。
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[];
-  config?: Record<string, unknown>;
+  config?: AgentConfig;
 
   createdAt: number;
   updatedAt: number;
@@ -92,15 +97,9 @@ export interface Session {
 
   model: string;
   thinkingLevel?: string;
-  // 同 agents.systemPrompt / tools：可选（NULL = 用 pi 默认）
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools: string[];
+  config?: AgentConfig;
 
-  config?: Record<string, unknown>;
-
-  piSessionPath: string;          // 历史消息文件绝对路径（jsonl）
-
+  piSessionPath: string;
   status: 'active' | 'archived';
   title?: string;
 
@@ -126,20 +125,9 @@ export interface Session {
 
 **消息历史文件路径存 `sessions.pi_session_path`**（worker 创建 session 后通过 IPC 返回，master 持久化）。master 用这个路径直接读文件（不调 IPC），即使 worker 已 crash / 超时归档，历史仍可查。
 
-## config JSON 字段
-
-```typescript
-config: {
-  extensions: string[];   // extension 路径列表
-  // 未来扩展字段不需要改 schema
-}
-```
-
-平铺字段（model / tools / systemPrompt 等）高频访问 → 独立列。扩展字段低频 → JSON。
-
 ## session 配置完全独立
 
-session 创建时**完整复制** agent 配置到 sessions 对应字段。session 整个生命周期**不读 agent 表**。session 内修改 → 更新 sessions 对应字段（不写回 agent 表）。
+session 创建时**完整复制** agent 配置到 sessions.config。session 整个生命周期**不读 agent 表**。session 内修改 → 更新 sessions.config（不写回 agent 表）。
 
 ## IM 渠道表（2026-08-26）
 

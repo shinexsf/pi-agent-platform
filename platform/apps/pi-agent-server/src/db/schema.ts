@@ -13,14 +13,8 @@ export const agents = sqliteTable('agents', {
 
   model: text('model').notNull(),
   thinkingLevel: text('thinking_level'),
-  // systemPrompt + tools are OPTIONAL: when null, pi defaults are used
-  // (worker creates session WITHOUT passing these to createAgentSession so
-  // pi SDK's discoverSystemPromptFile() / configuredDefaultToolNames kick in).
-  // Storing NULL (vs "") preserves the "user never set this" semantics.
-  systemPrompt: text('system_prompt'),
-  appendSystemPrompt: text('append_system_prompt'),
-  tools: text('tools'), // JSON array
-  config: text('config'), // JSON
+  // All config (systemPrompt, tools, extensions, etc.) lives in config JSON.
+  config: text('config'), // AgentConfig JSON
 
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
@@ -36,10 +30,7 @@ export const sessions = sqliteTable(
 
     model: text('model').notNull(),
     thinkingLevel: text('thinking_level'),
-    // Same nullability rule as agents — null means "use pi defaults".
-    systemPrompt: text('system_prompt'),
-    appendSystemPrompt: text('append_system_prompt'),
-    tools: text('tools'),
+    // All config lives in config JSON (same structure as agents).
     config: text('config'),
 
     piSessionPath: text('pi_session_path').notNull(),

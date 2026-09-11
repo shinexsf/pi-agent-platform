@@ -12,7 +12,7 @@ import { count, desc, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { DB } from '../db/init.js';
 import { sessions, agents } from '../db/schema.js';
-import type { SessionDTO, SessionStatus } from '@pi-agent-platform/shared-types';
+import type { SessionDTO, SessionStatus, AgentConfig } from '@pi-agent-platform/shared-types';
 import { normalizePath } from '../utils/normalize-path.js';
 
 function rowToDTO(row: typeof sessions.$inferSelect): SessionDTO {
@@ -21,11 +21,7 @@ function rowToDTO(row: typeof sessions.$inferSelect): SessionDTO {
     agentId: row.agentId,
     model: row.model,
     thinkingLevel: row.thinkingLevel ?? undefined,
-    // Same nullability rule as agents — null = use pi defaults.
-    systemPrompt: row.systemPrompt ?? undefined,
-    appendSystemPrompt: row.appendSystemPrompt ?? undefined,
-    tools: row.tools ? (JSON.parse(row.tools) as string[]) : undefined,
-    config: row.config ? (JSON.parse(row.config) as Record<string, unknown>) : undefined,
+    config: row.config ? (JSON.parse(row.config) as AgentConfig) : undefined,
     piSessionPath: row.piSessionPath,
     /** @deprecated — see SessionStatus. Status is no longer mutated; use worker state. */
     status: row.status as SessionStatus,
@@ -123,11 +119,6 @@ export function createSessionRepo(db: DB) {
         agentId: agent.id,
         model: input.modelOverride ?? agent.model,
         thinkingLevel: agent.thinkingLevel ?? null,
-        // Snapshot from agent — agent.systemPrompt / agent.tools are already
-        // nullable (null = "use pi default") so we pass copy the null through.
-        systemPrompt: agent.systemPrompt,
-        appendSystemPrompt: agent.appendSystemPrompt ?? null,
-        tools: agent.tools,
         config: agent.config ?? null,
         piSessionPath: input.piSessionPath,
         status: 'active' as const,
@@ -146,10 +137,7 @@ export function createSessionRepo(db: DB) {
       if (patch.title !== undefined) updates.title = patch.title;
       if (patch.model !== undefined) updates.model = patch.model;
       if (patch.thinkingLevel !== undefined) updates.thinkingLevel = patch.thinkingLevel;
-      if (patch.systemPrompt !== undefined) updates.systemPrompt = patch.systemPrompt;
-      if (patch.appendSystemPrompt !== undefined) updates.appendSystemPrompt = patch.appendSystemPrompt;
-      if (patch.tools !== undefined) updates.tools = JSON.stringify(patch.tools);
-      if (patch.config !== undefined) updates.config = JSON.stringify(patch.config);
+      if (patch.config !== undefined) updates.config = patch.config ? JSON.stringify(patch.config) : null;
       db.update(sessions).set(updates).where(eq(sessions.id, id)).run();
       return this.get(id);
     },

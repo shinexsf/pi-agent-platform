@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
+import { uploadSingleExtension, extractExtensionNames, readSettings } from '../services/extension-utils.js';
 
 // Types
 interface ProviderConfig {
@@ -520,9 +521,16 @@ export function createConfigRouter(config: ServerConfig) {
 
   // GET /api/config/extensions
   router.get('/extensions', async (c) => {
-    const settingsPath = path.join(agentDir, 'settings.json');
-    const settings = await readJson<SettingsConfig>(settingsPath);
+    const settings = await readSettings(agentDir);
+    const names = extractExtensionNames(settings);
+    
+    // Return as simple array of extension names for agent config
+    return c.json({ names, count: names.length });
+  });
 
+  // GET /api/config/extensions/detail
+  router.get('/extensions/detail', async (c) => {
+    const settings = await readSettings(agentDir);
     const extensions: ExtensionInfo[] = [];
 
     // From settings.packages
@@ -548,33 +556,6 @@ export function createConfigRouter(config: ServerConfig) {
           name,
           source: type,
           path: source,
-          enabled: true,
-        });
-      }
-    }
-
-    // From extensions directory
-    const extensionsDir = path.join(agentDir, 'extensions');
-    const entries = await listDir(extensionsDir);
-    for (const entry of entries) {
-      // Skip package.json
-      if (entry === 'package.json') continue;
-
-      const entryPath = path.join(extensionsDir, entry);
-      const stat = await fs.stat(entryPath);
-
-      if (stat.isFile() && (entry.endsWith('.ts') || entry.endsWith('.js'))) {
-        extensions.push({
-          name: entry.replace(/\.(ts|js)$/, ''),
-          source: 'local',
-          path: entryPath,
-          enabled: true,
-        });
-      } else if (stat.isDirectory()) {
-        extensions.push({
-          name: entry,
-          source: 'local',
-          path: entryPath,
           enabled: true,
         });
       }
@@ -624,13 +605,9 @@ export function createConfigRouter(config: ServerConfig) {
     }
 
     const content = await file.text();
-    const extensionsDir = path.join(agentDir, 'extensions');
-    const filePath = path.join(extensionsDir, file.name);
+    const { name, filePath } = await uploadSingleExtension(agentDir, file.name, content);
 
-    await fs.mkdir(extensionsDir, { recursive: true });
-    await fs.writeFile(filePath, content, 'utf-8');
-
-    return c.json({ ok: true, name: file.name.replace(/\.(ts|js)$/, ''), filePath }, 201);
+    return c.json({ ok: true, name, filePath }, 201);
   });
 
   // POST /api/config/extensions/upload-zip

@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { DB } from '../db/init.js';
 import { agents } from '../db/schema.js';
-import type { AgentDTO } from '@pi-agent-platform/shared-types';
+import type { AgentDTO, AgentConfig } from '@pi-agent-platform/shared-types';
 import { normalizePath } from '../utils/normalize-path.js';
 
 function rowToDTO(row: typeof agents.$inferSelect): AgentDTO {
@@ -18,12 +18,7 @@ function rowToDTO(row: typeof agents.$inferSelect): AgentDTO {
     workspacePath: row.workspacePath,
     model: row.model,
     thinkingLevel: row.thinkingLevel ?? undefined,
-    // systemPrompt / tools can be null in DB (= "use pi defaults"); surface
-    // as undefined so the AgentDTO shape stays "absent means default".
-    systemPrompt: row.systemPrompt ?? undefined,
-    appendSystemPrompt: row.appendSystemPrompt ?? undefined,
-    tools: row.tools ? (JSON.parse(row.tools) as string[]) : undefined,
-    config: row.config ? (JSON.parse(row.config) as Record<string, unknown>) : undefined,
+    config: row.config ? (JSON.parse(row.config) as AgentConfig) : undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -60,10 +55,6 @@ export function createAgentRepo(db: DB) {
         workspacePath: normalizePath(input.workspacePath),
         model: input.model,
         thinkingLevel: input.thinkingLevel ?? null,
-        // Null / empty / undefined all collapse to NULL — meaning "use pi default".
-        systemPrompt: input.systemPrompt?.trim() ? input.systemPrompt : null,
-        appendSystemPrompt: input.appendSystemPrompt?.trim() ? input.appendSystemPrompt : null,
-        tools: input.tools && input.tools.length > 0 ? JSON.stringify(input.tools) : null,
         config: input.config ? JSON.stringify(input.config) : null,
         createdAt: now,
         updatedAt: now,
@@ -82,11 +73,7 @@ export function createAgentRepo(db: DB) {
       if (patch.workspacePath !== undefined) updates.workspacePath = normalizePath(patch.workspacePath);
       if (patch.model !== undefined) updates.model = patch.model;
       if (patch.thinkingLevel !== undefined) updates.thinkingLevel = patch.thinkingLevel;
-      // Empty / whitespace string also clears back to NULL (= pi default).
-      if (patch.systemPrompt !== undefined) updates.systemPrompt = patch.systemPrompt.trim() ? patch.systemPrompt : null;
-      if (patch.appendSystemPrompt !== undefined) updates.appendSystemPrompt = patch.appendSystemPrompt.trim() ? patch.appendSystemPrompt : null;
-      if (patch.tools !== undefined) updates.tools = patch.tools.length > 0 ? JSON.stringify(patch.tools) : null;
-      if (patch.config !== undefined) updates.config = JSON.stringify(patch.config);
+      if (patch.config !== undefined) updates.config = patch.config ? JSON.stringify(patch.config) : null;
 
       db.update(agents).set(updates).where(eq(agents.id, id)).run();
       return this.get(id);

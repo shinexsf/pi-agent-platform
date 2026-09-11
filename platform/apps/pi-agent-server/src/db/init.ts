@@ -13,8 +13,8 @@ import path from 'node:path';
 /** Migration versions. Append-only; bumping the version adds new CREATE TABLE
  *  statements to the idempotent init above. Renumbered as the schema evolves. */
 export const MIGRATIONS = [
-  'agents_v1',
-  'sessions_v1',
+  'agents_v2',  // config consolidation: removed system_prompt, append_system_prompt, tools
+  'sessions_v2',  // config consolidation: removed system_prompt, append_system_prompt, tools
   'attachments_v1',
 ] as const;
 
@@ -35,9 +35,6 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       workspace_path TEXT NOT NULL,
       model TEXT NOT NULL,
       thinking_level TEXT,
-      system_prompt TEXT,
-      append_system_prompt TEXT,
-      tools TEXT,
       config TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -48,9 +45,6 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       agent_id TEXT NOT NULL REFERENCES agents(id),
       model TEXT NOT NULL,
       thinking_level TEXT,
-      system_prompt TEXT,
-      append_system_prompt TEXT,
-      tools TEXT,
       config TEXT,
       pi_session_path TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('active', 'archived')),

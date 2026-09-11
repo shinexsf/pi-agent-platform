@@ -14,6 +14,7 @@
 import { createAgentSession, DefaultResourceLoader, formatSkillsForPrompt, ModelRegistry, ModelRuntime, SessionManager, } from '@earendil-works/pi-coding-agent';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 function defaultAgentDir() {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
     const sep = home.includes('\\') ? '\\' : '/';
@@ -296,7 +297,8 @@ function toDelta(event, stableMessageId) {
 export async function createSession(config, sessionId, emit, existingSessionPath) {
     const agentDir = process.env.PI_AGENT_DIR ?? defaultAgentDir();
     const acc = new DeltaAccumulator();
-    console.log(`[worker] creating session sessionId=${sessionId} model=${config.model} thinkingLevel=${config.thinkingLevel ?? '(none)'} tools=${config.tools?.join(',') ?? '(default)'} cwd=${config.workspacePath}`);
+    const agentConfig = config.config;
+    console.log(`[worker] creating session sessionId=${sessionId} model=${config.model} thinkingLevel=${config.thinkingLevel ?? '(none)'} tools=${agentConfig?.builtinTools?.join(',') ?? '(default)'} cwd=${config.workspacePath}`);
     // If caller supplies an existing session file path, resume that session.
     // Otherwise create a brand new session.
     const sessionManager = existingSessionPath && existsSync(existingSessionPath)
@@ -313,8 +315,22 @@ export async function createSession(config, sessionId, emit, existingSessionPath
     const resourceLoader = new DefaultResourceLoader({
         cwd: config.workspacePath,
         agentDir,
-        systemPrompt: config.systemPrompt?.trim() ? config.systemPrompt : undefined,
-        appendSystemPrompt: config.appendSystemPrompt?.trim() ? [config.appendSystemPrompt] : undefined,
+        systemPrompt: agentConfig?.systemPrompt?.trim() ? agentConfig.systemPrompt : undefined,
+        appendSystemPrompt: agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : undefined,
+        // Resource filters based on agent config
+        extensionsOverride: agentConfig?.extensions ? (base) => {
+            console.log(`[worker] extensionsOverride: before=${base.extensions.length}`);
+            base.extensions.forEach(ext => {
+                const name = extractExtensionName(ext.path);
+                const resolvedName = extractExtensionName(ext.resolvedPath);
+                console.log(`  ext path="${ext.path}" resolvedPath="${ext.resolvedPath}" extractedName="${name}" resolvedName="${resolvedName}"`);
+            });
+            const result = createExtensionsFilter(agentConfig.extensions)(base);
+            console.log(`[worker] extensionsOverride: after=${result.extensions.length}`);
+            return result;
+        } : undefined,
+        skillsOverride: agentConfig?.skills ? createSkillsFilter(agentConfig.skills) : undefined,
+        promptsOverride: agentConfig?.prompts ? createPromptsFilter(agentConfig.prompts) : undefined,
     });
     // Per E: pi SDK's createAgentSession only auto-reloads the resourceLoader when we
     // DON'T pass one in (sdk.js: `if (!resourceLoader) { ... await resourceLoader.reload() }`).
@@ -328,9 +344,9 @@ export async function createSession(config, sessionId, emit, existingSessionPath
         cwd: config.workspacePath,
         agentDir,
         thinkingLevel: (config.thinkingLevel ?? undefined),
-        // Omit `tools` entirely when empty — pi SDK treats `[]` as "no tools at all",
-        // while undefined lets it pick from configuredDefaultToolNames / defaultActiveToolNames.
-        ...(config.tools && config.tools.length > 0 ? { tools: config.tools } : {}),
+        // Don't pass `tools` parameter — let pi SDK use all available tools.
+        // When `tools` is passed, it sets `allowedToolNames` which blocks extension tools.
+        // builtinTools filtering will be done via session.setActiveToolsByName() after creation.
         sessionManager, // undefined → create new; defined → continue existing
         resourceLoader,
     });
@@ -338,6 +354,16 @@ export async function createSession(config, sessionId, emit, existingSessionPath
     // If model not registered in models.json, supportsThinking() returns false
     // and thinkingLevel is silently ignored.
     const realSession = result.session;
+    // Apply builtinTools filtering after session creation if configured
+    // This doesn't set allowedToolNames, just deactivates specific tools.
+    if (agentConfig?.builtinTools !== undefined && agentConfig.builtinTools !== null) {
+        const allTools = realSession.getAllTools();
+        const builtinToolNames = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+        const activeBuiltinTools = builtinToolNames.filter(t => agentConfig.builtinTools.includes(t));
+        // Also keep extension tools active
+        const extensionTools = allTools.filter(t => !builtinToolNames.includes(t.name)).map(t => t.name);
+        realSession.setActiveToolsByName([...activeBuiltinTools, ...extensionTools]);
+    }
     // ─── Custom systemPrompt takeover ───
     // Per change: custom-systemprompt-takeover. When agent.systemPrompt is configured,
     // pi SDK's customPrompt branch silently drops Available tools / "In addition to..." /
@@ -357,9 +383,9 @@ export async function createSession(config, sessionId, emit, existingSessionPath
     // SDK dependency: _toolPromptSnippets / _toolPromptGuidelines / _systemPromptOverride
     // are `_`-prefixed (private) fields on AgentSession. Tracked for breakage across
     // pi-coding-agent upgrades.
-    if (config.systemPrompt?.trim()) {
+    if (agentConfig?.systemPrompt?.trim()) {
         const ses = realSession;
-        const userPrompt = config.systemPrompt.trim();
+        const userPrompt = agentConfig.systemPrompt.trim();
         const toolSnippets = [...ses._toolPromptSnippets.entries()];
         const promptGuidelines = [...ses._toolPromptGuidelines.values()].flat();
         let suffix = '';
@@ -377,8 +403,8 @@ export async function createSession(config, sessionId, emit, existingSessionPath
             suffix += `\n\nGuidelines:\n${promptGuidelines.map((g) => `- ${g.trim()}`).join('\n')}`;
         }
         // appendSystemPrompt
-        if (config.appendSystemPrompt?.trim()) {
-            suffix += `\n\n${config.appendSystemPrompt.trim()}`;
+        if (agentConfig?.appendSystemPrompt?.trim()) {
+            suffix += `\n\n${agentConfig.appendSystemPrompt.trim()}`;
         }
         // <project_context> (AGENTS.md 等)
         const agentsFiles = ses._resourceLoader.getAgentsFiles().agentsFiles;

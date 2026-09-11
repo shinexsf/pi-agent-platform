@@ -7,11 +7,17 @@ import AppIcon from '../components/ui/AppIcon.vue';
 const router = useRouter();
 const agents = ref<AgentDTO[]>([]);
 const allModels = ref<{ provider: string; modelId: string; displayName: string }[]>([]);
+const availableSkills = ref<{ name: string }[]>([]);
+const availablePrompts = ref<{ name: string }[]>([]);
+const availableExtensions = ref<{ names: string[] }>({ names: [] });
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const startingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
 const searchQuery = ref('');
+
+// Builtin tools (fixed list)
+const BUILTIN_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
 
 // Modal state
 const showModal = ref(false);
@@ -22,9 +28,14 @@ const formData = ref({
   model: '',
   description: '',
   workspacePath: '',
-  systemPrompt: '',
-  appendSystemPrompt: '',
-  tools: [] as string[],
+  config: {
+    systemPrompt: '',
+    appendSystemPrompt: '',
+    builtinTools: null as string[] | null,
+    extensions: null as string[] | null,
+    skills: null as string[] | null,
+    prompts: null as string[] | null,
+  },
 });
 
 const filteredAgents = computed(() => {
@@ -47,15 +58,19 @@ async function loadAgents(showLoading = true) {
   if (showLoading) loading.value = true;
   loadError.value = null;
   try {
-    const [agentsRes, modelsRes] = await Promise.all([
+    const [agentsRes, modelsRes, skillsRes, promptsRes, extensionsRes] = await Promise.all([
       fetch('/api/agents'),
       allModels.value.length === 0 ? fetch('/api/models') : Promise.resolve(null),
+      availableSkills.value.length === 0 ? fetch('/api/config/skills') : Promise.resolve(null),
+      availablePrompts.value.length === 0 ? fetch('/api/config/prompts') : Promise.resolve(null),
+      availableExtensions.value.names.length === 0 ? fetch('/api/config/extensions') : Promise.resolve(null),
     ]);
     if (!agentsRes.ok) throw new Error(`Server response ${agentsRes.status}`);
     agents.value = await agentsRes.json();
-    if (modelsRes?.ok) {
-      allModels.value = await modelsRes.json();
-    }
+    if (modelsRes?.ok) allModels.value = await modelsRes.json();
+    if (skillsRes?.ok) availableSkills.value = await skillsRes.json();
+    if (promptsRes?.ok) availablePrompts.value = await promptsRes.json();
+    if (extensionsRes?.ok) availableExtensions.value = await extensionsRes.json();
   } catch {
     loadError.value = 'Check the server connection and try again.';
     if (agents.value.length > 0) {
@@ -73,9 +88,14 @@ function openCreateModal() {
     model: '',
     description: '',
     workspacePath: '',
-    systemPrompt: '',
-    appendSystemPrompt: '',
-    tools: [],
+    config: {
+      systemPrompt: '',
+      appendSystemPrompt: '',
+      builtinTools: null,
+      extensions: null,
+      skills: null,
+      prompts: null,
+    },
   };
   showModal.value = true;
 }
@@ -87,9 +107,14 @@ function openEditModal(agent: AgentDTO) {
     model: agent.model,
     description: agent.description ?? '',
     workspacePath: agent.workspacePath,
-    systemPrompt: agent.systemPrompt ?? '',
-    appendSystemPrompt: agent.appendSystemPrompt ?? '',
-    tools: [...(agent.tools ?? [])],
+    config: {
+      systemPrompt: agent.config?.systemPrompt ?? '',
+      appendSystemPrompt: agent.config?.appendSystemPrompt ?? '',
+      builtinTools: agent.config?.builtinTools ?? null,
+      extensions: agent.config?.extensions ?? null,
+      skills: agent.config?.skills ?? null,
+      prompts: agent.config?.prompts ?? null,
+    },
   };
   showModal.value = true;
 }
@@ -166,17 +191,6 @@ async function deleteAgent(agent: AgentDTO) {
   }
 }
 
-function toolsString(tools: string[]): string {
-  return tools.join(', ');
-}
-
-function setToolsString(value: string) {
-  formData.value.tools = value
-    .split(',')
-    .map((tool) => tool.trim())
-    .filter(Boolean);
-}
-
 function initials(name: string): string {
   return name
     .split(/\s+/)
@@ -184,6 +198,14 @@ function initials(name: string): string {
     .slice(0, 2)
     .map((word) => word[0])
     .join('');
+}
+
+function selectAllSkills() {
+  formData.value.config.skills = availableSkills.value.map(s => s.name);
+}
+
+function selectAllPrompts() {
+  formData.value.config.prompts = availablePrompts.value.map(p => p.name);
 }
 
 onMounted(() => loadAgents());
@@ -263,7 +285,7 @@ onMounted(() => loadAgents());
                   </span>
                 </div>
                 <p v-if="agent.description" class="resource-description">{{ agent.description }}</p>
-                <p class="resource-tools">Tools: {{ (agent.tools ?? []).join(', ') || '—' }}</p>
+                <p class="resource-tools">Tools: {{ (agent.config?.builtinTools ?? []).join(', ') || 'default' }}</p>
               </div>
             </div>
             <div class="resource-actions">
@@ -342,20 +364,109 @@ onMounted(() => loadAgents());
               </label>
               <label class="field field-span-2">
                 <span class="field-label">System prompt</span>
-                <textarea v-model="formData.systemPrompt" class="control" rows="4" />
+                <textarea v-model="formData.config.systemPrompt" class="control" rows="4" />
               </label>
               <label class="field field-span-2">
                 <span class="field-label">Append system prompt</span>
-                <textarea v-model="formData.appendSystemPrompt" class="control" rows="4" />
+                <textarea v-model="formData.config.appendSystemPrompt" class="control" rows="4" />
               </label>
               <label class="field field-span-2">
-                <span class="field-label">Tools (comma-separated)</span>
-                <input
-                  :value="toolsString(formData.tools)"
-                  class="control mono"
-                  autocomplete="off"
-                  @input="(event: Event) => setToolsString((event.target as HTMLInputElement).value)"
-                />
+                <div class="field-header">
+                  <span class="field-label">Builtin tools</span>
+                </div>
+                <div class="config-section">
+                  <label class="checkbox-item default-option">
+                    <input type="checkbox" :checked="formData.config.builtinTools === null" @change="formData.config.builtinTools = $event.target.checked ? null : ['read', 'write', 'edit', 'bash']" />
+                    <span>Use default (all enabled)</span>
+                  </label>
+                  <div v-if="formData.config.builtinTools !== null" class="custom-options">
+                    <div class="option-actions">
+                      <button type="button" class="btn-link" @click="formData.config.builtinTools = [...BUILTIN_TOOLS]">Select All</button>
+                      <button type="button" class="btn-link" @click="formData.config.builtinTools = []">Clear All</button>
+                    </div>
+                    <div class="checkbox-group">
+                      <label v-for="tool in BUILTIN_TOOLS" :key="tool" class="checkbox-item">
+                        <input type="checkbox" :value="tool" v-model="formData.config.builtinTools" />
+                        <span>{{ tool }}</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="field field-span-2">
+                <div class="field-header">
+                  <span class="field-label">Extensions</span>
+                </div>
+                <div class="config-section">
+                  <label class="checkbox-item default-option">
+                    <input type="checkbox" :checked="formData.config.extensions === null" @change="formData.config.extensions = $event.target.checked ? null : []" />
+                    <span>Use default (all enabled)</span>
+                  </label>
+                  <div v-if="formData.config.extensions !== null" class="custom-options">
+                    <div class="option-actions">
+                      <button type="button" class="btn-link" @click="formData.config.extensions = [...availableExtensions.names]">Select All</button>
+                      <button type="button" class="btn-link" @click="formData.config.extensions = []">Clear All</button>
+                    </div>
+                    <div class="checkbox-group">
+                      <label v-for="ext in availableExtensions.names" :key="ext" class="checkbox-item">
+                        <input type="checkbox" :value="ext" v-model="formData.config.extensions" />
+                        <span>{{ ext }}</span>
+                      </label>
+                      <span v-if="availableExtensions.names.length === 0" class="text-muted">No extensions installed</span>
+                    </div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="field field-span-2">
+                <div class="field-header">
+                  <span class="field-label">Skills</span>
+                </div>
+                <div class="config-section">
+                  <label class="checkbox-item default-option">
+                    <input type="checkbox" :checked="formData.config.skills === null" @change="formData.config.skills = $event.target.checked ? null : []" />
+                    <span>Use default (all enabled)</span>
+                  </label>
+                  <div v-if="formData.config.skills !== null" class="custom-options">
+                    <div class="option-actions">
+                      <button type="button" class="btn-link" @click="selectAllSkills">Select All</button>
+                      <button type="button" class="btn-link" @click="formData.config.skills = []">Clear All</button>
+                    </div>
+                    <div class="checkbox-group">
+                      <label v-for="skill in availableSkills" :key="skill.name" class="checkbox-item">
+                        <input type="checkbox" :value="skill.name" v-model="formData.config.skills" />
+                        <span>{{ skill.name }}</span>
+                      </label>
+                      <span v-if="availableSkills.length === 0" class="text-muted">No skills installed</span>
+                    </div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="field field-span-2">
+                <div class="field-header">
+                  <span class="field-label">Prompts</span>
+                </div>
+                <div class="config-section">
+                  <label class="checkbox-item default-option">
+                    <input type="checkbox" :checked="formData.config.prompts === null" @change="formData.config.prompts = $event.target.checked ? null : []" />
+                    <span>Use default (all enabled)</span>
+                  </label>
+                  <div v-if="formData.config.prompts !== null" class="custom-options">
+                    <div class="option-actions">
+                      <button type="button" class="btn-link" @click="selectAllPrompts">Select All</button>
+                      <button type="button" class="btn-link" @click="formData.config.prompts = []">Clear All</button>
+                    </div>
+                    <div class="checkbox-group">
+                      <label v-for="prompt in availablePrompts" :key="prompt.name" class="checkbox-item">
+                        <input type="checkbox" :value="prompt.name" v-model="formData.config.prompts" />
+                        <span>{{ prompt.name }}</span>
+                      </label>
+                      <span v-if="availablePrompts.length === 0" class="text-muted">No prompts installed</span>
+                    </div>
+                  </div>
+                </div>
               </label>
             </div>
             <div class="modal-actions">
@@ -454,5 +565,67 @@ onMounted(() => loadAgents());
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
+}
+
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 0;
+}
+
+.checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.checkbox-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.text-muted {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.config-section {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg);
+}
+
+.default-option {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.custom-options {
+  padding-top: 4px;
+}
+
+.option-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
 }
 </style>

@@ -79,7 +79,7 @@ interface SessionContextDTO {
 | ❌ | 无（placeholder 已被 scanner 杀）| `commands: []`、`models: [...全局]`、`session: null`（不主动重建，`systemPrompt: null`）|
 
 **`systemPrompt` 字段说明**（2026-08-30+）：
-- `source: "override"` — worker 接管拼接（agent 配置了 `system_prompt`），拼接 user prompt + Available tools + tool promptGuidelines + `<project_context>` + `<available_skills>` + cwd
+- `source: "override"` — worker 接管拼接（agent 配置了 `config.systemPrompt`），拼接 user prompt + Available tools + tool promptGuidelines + `<project_context>` + `<available_skills>` + cwd
 - `source: "default"` — pi SDK 默认 prompt 分支（agent.systemPrompt 为空），含 Role def / 硬编码 Guidelines / Pi documentation
 - `text` — 完整 system prompt 字符串
 - `length` — 字符数

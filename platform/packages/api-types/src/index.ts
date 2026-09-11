@@ -5,6 +5,7 @@
 
 export type {
   AgentDTO,
+  AgentConfig,
   SessionDTO,
   SessionStatus,
   MessageDTO,
@@ -13,7 +14,7 @@ export type {
   RuntimeConfig,
 } from '@pi-agent-platform/shared-types';
 
-import type { AgentDTO, SessionDTO, MessageDTO } from '@pi-agent-platform/shared-types';
+import type { AgentDTO, AgentConfig, SessionDTO, MessageDTO } from '@pi-agent-platform/shared-types';
 
 // ---------- Agents ----------
 
@@ -23,10 +24,7 @@ export interface CreateAgentRequest {
   workspacePath: string;
   model: string;
   thinkingLevel?: string;
-  systemPrompt: string;
-  appendSystemPrompt?: string;
-  tools: string[];
-  config?: Record<string, unknown>;
+  config?: AgentConfig;
 }
 
 export interface UpdateAgentRequest {
@@ -35,10 +33,7 @@ export interface UpdateAgentRequest {
   workspacePath?: string;
   model?: string;
   thinkingLevel?: string;
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  tools?: string[];
-  config?: Record<string, unknown>;
+  config?: AgentConfig;
 }
 
 export type CreateAgentResponse = AgentDTO;
