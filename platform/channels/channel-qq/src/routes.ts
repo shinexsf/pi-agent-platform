@@ -34,6 +34,7 @@ function sqlStr(s: string | null | undefined): string {
 
 const UpdateChannelSchema = CreateChannelSchema.partial().extend({
   enabled: z.boolean().optional(),
+  currentSessionId: z.string().optional(),
 });
 
 interface ChannelRoutesState {
@@ -121,6 +122,7 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
     const setParts: string[] = [];
     if (parsed.data.displayName !== undefined) setParts.push(`display_name = '${escape(parsed.data.displayName)}'`);
     if (parsed.data.defaultAgentId !== undefined) setParts.push(`default_agent_id = ${sqlStr(parsed.data.defaultAgentId)}`);
+    if (parsed.data.currentSessionId !== undefined) setParts.push(`current_session_id = ${sqlStr(parsed.data.currentSessionId)}`);
     if (parsed.data.appId !== undefined) setParts.push(`app_id = '${escape(parsed.data.appId)}'`);
     if (parsed.data.appSecret !== undefined) setParts.push(`app_secret = '${escape(parsed.data.appSecret)}'`);
     if (parsed.data.autoReconnect !== undefined) setParts.push(`auto_reconnect = ${parsed.data.autoReconnect ? 1 : 0}`);

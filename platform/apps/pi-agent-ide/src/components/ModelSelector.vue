@@ -163,6 +163,8 @@ onUnmounted(() => {
 <style scoped>
 .model-selector {
   position: relative;
+  flex: 1 1 0%;
+  min-width: 0;
 }
 
 .model-trigger {
@@ -177,7 +179,10 @@ onUnmounted(() => {
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
-  max-width: 200px;
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 .model-trigger:hover {
   background: var(--hover-bg);
@@ -191,13 +196,17 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 180px;
+  min-width: 0;
 }
 
 .model-label-provider {
   font-size: 10px;
   color: var(--text-secondary);
   font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .model-chevron {

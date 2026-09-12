@@ -62,6 +62,7 @@ const CreateChannelSchema = z.object({
 
 const UpdateChannelSchema = CreateChannelSchema.partial().extend({
   enabled: z.boolean().optional(),
+  currentSessionId: z.string().optional(),
 });
 
 interface ChannelRoutesState {
@@ -166,6 +167,7 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
     const setParts: string[] = [];
     if (parsed.data.displayName !== undefined) setParts.push(`display_name = '${escape(parsed.data.displayName)}'`);
     if (parsed.data.defaultAgentId !== undefined) setParts.push(`default_agent_id = ${sqlStr(parsed.data.defaultAgentId)}`);
+    if (parsed.data.currentSessionId !== undefined) setParts.push(`current_session_id = ${sqlStr(parsed.data.currentSessionId)}`);
     if (parsed.data.storageDir !== undefined) setParts.push(`storage_dir = '${escape(parsed.data.storageDir)}'`);
     if (parsed.data.autoReconnect !== undefined) setParts.push(`auto_reconnect = ${parsed.data.autoReconnect ? 1 : 0}`);
     if (parsed.data.enabled !== undefined) setParts.push(`enabled = ${parsed.data.enabled ? 1 : 0}`);

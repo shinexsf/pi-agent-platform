@@ -9,6 +9,7 @@ export interface QqChannel {
   displayName: string;
   enabled: boolean;
   defaultAgentId?: string;
+  currentSessionId?: string;
   appId: string;
   appSecret: string;
   autoReconnect?: boolean;

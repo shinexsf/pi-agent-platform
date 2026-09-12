@@ -22,6 +22,12 @@ interface AgentRow {
   model: string;
 }
 
+interface SessionRow {
+  id: string;
+  title?: string;
+  agentId: string;
+}
+
 declare global {
   interface Window {
     __channelAdminHost?: import('@pi-agent-platform/channel-types').ChannelAdminHost;
@@ -38,6 +44,8 @@ const newChannel = ref({ displayName: '', defaultAgentId: '', storageDir: '' });
 const showQrLogin = ref(false);
 const editingChannelId = ref<string | null>(null);
 const editingAgentId = ref<string>('');
+const editingSessionId = ref<string | null>(null);
+const sessions = ref<Array<{ id: string; title?: string; agentId: string }>>([]);
 
 const host = computed(() => window.__channelAdminHost);
 const api = computed(() => (host.value ? createWechatApi(host.value) : null));
@@ -66,6 +74,19 @@ async function loadAgents(): Promise<void> {
     }
   } catch (err) {
     console.warn('[wechat-page] failed to load agents', err);
+  }
+}
+
+async function loadSessions(agentId?: string): Promise<void> {
+  try {
+    const url = agentId ? `/api/sessions?agent_id=${agentId}` : '/api/sessions';
+    const res = await fetch(url).catch(() => null);
+    if (res && typeof res.ok === 'boolean' && res.ok) {
+      const data = await res.json().catch(() => ({ sessions: [] }));
+      sessions.value = data.sessions ?? [];
+    }
+  } catch (err) {
+    console.warn('[wechat-page] failed to load sessions', err);
   }
 }
 
@@ -154,8 +175,36 @@ async function saveAgentEditor(): Promise<void> {
   }
 }
 
+function openSessionEditor(ch: WechatChannel): void {
+  editingChannelId.value = ch.id;
+  editingSessionId.value = ch.currentSessionId ?? '';
+  // Load sessions for this agent
+  loadSessions(ch.defaultAgentId);
+}
+
+async function saveSessionEditor(): Promise<void> {
+  if (!api.value || !host.value || !editingChannelId.value) return;
+  const id = editingChannelId.value;
+  const newSessionId = editingSessionId.value;
+  try {
+    await api.value.update(id, { currentSessionId: newSessionId || undefined });
+    host.value.showToast({ message: '当前会话已更新。', variant: 'success' });
+    editingChannelId.value = null;
+    editingSessionId.value = null;
+    await refresh();
+  } catch {
+    host.value.showToast({ message: '无法更新当前会话。请稍后重试。', variant: 'error' });
+  }
+}
+
+function sessionLabel(sessionId?: string | null): string {
+  if (!sessionId) return '—';
+  const session = sessions.value.find(s => s.id === sessionId);
+  return session?.title ?? `${sessionId.slice(0, 8)}…`;
+}
+
 onMounted(async () => {
-  await Promise.all([refresh(), loadAgents()]);
+  await Promise.all([refresh(), loadAgents(), loadSessions()]);
 });
 </script>
 
@@ -200,6 +249,12 @@ onMounted(async () => {
               </button>
             </div>
             <div class="card-row">
+              <span class="card-label">当前会话</span>
+              <button class="link" @click="openSessionEditor(ch)" :title="ch.currentSessionId">
+                {{ sessionLabel(ch.currentSessionId) }} <span class="edit-label">更改</span>
+              </button>
+            </div>
+            <div class="card-row">
               <span class="card-label">存储目录</span>
               <code class="card-value">{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</code>
             </div>
@@ -222,7 +277,7 @@ onMounted(async () => {
     />
 
     <!-- Change Agent modal -->
-    <div v-if="editingChannelId" class="modal-backdrop" @click.self="editingChannelId = null">
+    <div v-if="editingChannelId && !editingSessionId" class="modal-backdrop" @click.self="editingChannelId = null">
       <div class="modal">
         <h3>更改 Agent</h3>
         <p class="hint">更改后，当前会话进程将停止；收到下一条消息时，系统会使用新 Agent 启动会话。</p>
@@ -238,6 +293,27 @@ onMounted(async () => {
         <div class="modal-actions">
           <button @click="editingChannelId = null">取消</button>
           <button class="primary" @click="saveAgentEditor">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Change Session modal -->
+    <div v-if="editingChannelId && editingSessionId !== null" class="modal-backdrop" @click.self="editingChannelId = null; editingSessionId = null;">
+      <div class="modal">
+        <h3>更改当前会话</h3>
+        <p class="hint">选择该 Agent 下的一个会话作为当前会话。</p>
+        <label class="modal-field">
+          <span>当前会话</span>
+          <select v-model="editingSessionId">
+            <option value="">无会话</option>
+            <option v-for="s in sessions" :key="s.id" :value="s.id">
+              {{ s.title ?? s.id.slice(0, 8) + '…' }}
+            </option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button @click="editingChannelId = null; editingSessionId = null;">取消</button>
+          <button class="primary" @click="saveSessionEditor">保存</button>
         </div>
       </div>
     </div>

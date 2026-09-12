@@ -552,58 +552,60 @@ onUnmounted(() => {
     />
 
     <div class="input-toolbar">
-      <button
-        class="toolbar-icon-btn attach-btn"
-        type="button"
-        title="Attach image (PNG/JPEG/GIF/WebP, ≤ 25 MB)"
-        :disabled="attachmentsUploader ? undefined : true"
-        @click="fileInputEl?.click()"
-      >+</button>
-      <input
-        ref="fileInputEl"
-        type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
-        multiple
-        hidden
-        @change="onPickerChange"
-      />
+      <div class="toolbar-left">
+        <button
+          class="toolbar-icon-btn attach-btn"
+          type="button"
+          title="Attach image (PNG/JPEG/GIF/WebP, ≤ 25 MB)"
+          :disabled="attachmentsUploader ? undefined : true"
+          @click="fileInputEl?.click()"
+        >+</button>
+        <input
+          ref="fileInputEl"
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          hidden
+          @change="onPickerChange"
+        />
 
-      <ModelSelector
-        :session-id="sessionId"
-        @select="(p: string, mid: string) => emit('setModel', p, mid)"
-      />
-      <ThinkingSelector
-        :session-id="sessionId"
-        @select="(l: 'off' | 'low' | 'medium' | 'high') => emit('setThinkingLevel', l)"
-      />
-      <ContextUsage :session-id="sessionId" />
+        <ModelSelector
+          :session-id="sessionId"
+          @select="(p: string, mid: string) => emit('setModel', p, mid)"
+        />
+        <ThinkingSelector
+          :session-id="sessionId"
+          @select="(l: 'off' | 'low' | 'medium' | 'high') => emit('setThinkingLevel', l)"
+        />
+        <ContextUsage :session-id="sessionId" />
+      </div>
 
-      <div class="input-toolbar-spacer" />
-
-      <!-- Steer button: only visible when agent is working -->
-      <button
-        v-if="sending"
-        class="steer-btn"
-        type="button"
-        data-tooltip="Send steer message (Enter)"
-        aria-label="Send steer message"
-        @click="sendSteer"
-      >⚡</button>
-      <button
-        v-if="sending"
-        class="abort-btn"
-        type="button"
-        title="Stop agent"
-        aria-label="Stop agent"
-        @click="abortSend"
-      >■</button>
-      <button
-        v-else
-        class="send-btn"
-        type="button"
-        :disabled="disabled || !input.trim()"
-        @click="send"
-      >▶</button>
+      <div class="toolbar-right">
+        <!-- Steer button: only visible when agent is working -->
+        <button
+          v-if="sending"
+          class="steer-btn"
+          type="button"
+          data-tooltip="Send steer message (Enter)"
+          aria-label="Send steer message"
+          @click="sendSteer"
+        >⚡</button>
+        <button
+          v-if="sending"
+          class="abort-btn"
+          type="button"
+          title="Stop agent"
+          aria-label="Stop agent"
+          @click="abortSend"
+        >■</button>
+        <button
+          v-else
+          class="send-btn"
+          type="button"
+          :disabled="disabled || !input.trim()"
+          @click="send"
+        >▶</button>
+      </div>
     </div>
   </div>
 </template>
@@ -697,9 +699,24 @@ onUnmounted(() => {
 .input-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
   padding: 2px 8px 3px;
   /* no border-top: toolbar visually merges with textarea above */
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
 }
 
@@ -719,7 +736,7 @@ onUnmounted(() => {
 }
 
 .input-toolbar-spacer {
-  flex: 1;
+  display: none;
 }
 
 .send-btn,
@@ -732,6 +749,7 @@ onUnmounted(() => {
   cursor: pointer;
   font-size: 13px;
   border-radius: 4px;
+  flex-shrink: 0;
 }
 .send-btn:hover:not(:disabled),
 .abort-btn:hover,

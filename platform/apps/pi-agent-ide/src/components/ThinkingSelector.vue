@@ -142,6 +142,8 @@ onUnmounted(() => {
 <style scoped>
 .thinking-selector {
   position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .thinking-trigger {
@@ -156,6 +158,9 @@ onUnmounted(() => {
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 .thinking-trigger:hover {
   background: var(--hover-bg);
@@ -167,6 +172,9 @@ onUnmounted(() => {
 
 .thinking-label {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .thinking-chevron {
