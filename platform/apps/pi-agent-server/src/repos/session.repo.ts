@@ -73,9 +73,12 @@ export function createSessionRepo(db: DB) {
       let filtered = rawRows;
       if (opts.workspacePath) {
         const target = normalizePath(opts.workspacePath);
+        // Include sessions whose agent's workspacePath is the target itself
+        // OR a subdirectory of the target (prefix match with trailing / separator).
         filtered = filtered.filter((r) => {
           if (!r.ws) return false; // orphan session (agent deleted) — exclude
-          return normalizePath(r.ws) === target;
+          const wp = normalizePath(r.ws);
+          return wp === target || wp.startsWith(target + '/');
         });
       }
       if (opts.search) {

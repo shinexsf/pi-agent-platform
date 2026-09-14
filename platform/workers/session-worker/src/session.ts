@@ -7,9 +7,9 @@
  * 3. Forward each pi SDK event as a WorkerEvent with simplified DTO data
  * 4. Expose prompt / abort / setModel / setThinkingLevel / setTools
  *
- * Note: createAgentSession accepts an optional `model` (Model<Api>). For MVP we
- * don't pass it — SDK picks from settings.json. Future change: master passes
- * a fully-resolved Model<Api> via IPC payload so workers don't re-resolve.
+ * Note: createAgentSession accepts an optional `model` (Model<Api>). We resolve
+ * the agent's configured model from ModelRegistry and pass it so pi SDK uses it
+ * instead of falling back to settings.json defaultModel.
  */
 
 import {
@@ -60,8 +60,8 @@ function defaultAgentDir(): string {
  * (session row / UI).
  *
  * Priority:
- *   1. pi settings.json `defaultModel` (what pi SDK actually uses)
- *   2. agent config `model` if it resolves to a registered model (fallback)
+ *   1. agent config `model` if it resolves to a registered model
+ *   2. pi settings.json `defaultModel` (fallback when agent config not set or unregistered)
  *   3. first available model from the ModelRegistry
  */
 export function resolveActualModel(
@@ -83,8 +83,13 @@ export function resolveActualModel(
       return m ? { provider: m.provider, modelId: m.id } : undefined;
     };
 
-    // 1) pi settings.json default (worker actually uses this — createAgentSession
-    //    receives no model, so pi SDK picks settings.defaultModel)
+    // 1) agent config (what the user configured for this agent)
+    if (agentModel) {
+      const hit = find(agentModel);
+      if (hit) return hit;
+    }
+
+    // 2) pi settings.json default (fallback when agent config not set or model not registered)
     //    NOTE: must use top-level imports (readFileSync/join) — this module is ESM,
     //    `require` throws ReferenceError which silently falls through to agent config.
     try {
@@ -98,12 +103,6 @@ export function resolveActualModel(
         }
       }
     } catch { /* ignore */ }
-
-    // 2) agent config
-    if (agentModel) {
-      const hit = find(agentModel);
-      if (hit) return hit;
-    }
 
     // 3) first available
     const fallback = all[0];
@@ -393,9 +392,24 @@ export async function createSession(
   // prompt + no skills, regardless of what's on disk.
   await resourceLoader.reload();
 
+  // Resolve the agent's configured model from ModelRegistry so pi SDK uses it
+  // instead of falling back to settings.json defaultModel.
+  const registry = new ModelRegistry(runtime);
+  const agentModelEntry = config.model
+    ? (() => {
+        const slashIdx = config.model.indexOf('/');
+        if (slashIdx > 0) {
+          return registry.find(config.model.slice(0, slashIdx), config.model.slice(slashIdx + 1));
+        }
+        // No slash — try matching by model id alone
+        return registry.getAvailable().find((m) => m.id === config.model);
+      })()
+    : undefined;
+
   const result = await createAgentSession({
     cwd: config.workspacePath,
     agentDir,
+    model: agentModelEntry, // undefined → pi SDK falls back to settings.json default
     thinkingLevel: (config.thinkingLevel ?? undefined) as ThinkingLevel | undefined,
     // Don't pass `tools` parameter — let pi SDK use all available tools.
     // When `tools` is passed, it sets `allowedToolNames` which blocks extension tools.
@@ -563,8 +577,8 @@ export async function createSession(
     throw new Error('pi SDK returned no session file path');
   }
   // Actual model the worker will use: read DIRECTLY from the session object —
-  // createAgentSession already resolved it internally (settings.json defaultModel).
-  // This is more accurate than re-resolving from settings.json + ModelRegistry.
+  // createAgentSession resolved it from the passed model (agent config) or settings.json fallback.
+  // This is more accurate than re-resolving from ModelRegistry.
   const realModel = (realSession as unknown as { model?: { provider?: string; id?: string } }).model;
   const model = realModel?.provider && realModel?.id
     ? { provider: realModel.provider, modelId: realModel.id }

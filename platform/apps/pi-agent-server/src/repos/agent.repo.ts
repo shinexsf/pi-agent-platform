@@ -35,7 +35,12 @@ export function createAgentRepo(db: DB) {
       let rows = db.select().from(agents).all();
       if (filter?.workspacePath) {
         const target = normalizePath(filter.workspacePath);
-        rows = rows.filter((r) => r.workspacePath === target);
+        // Include agents whose workspacePath is the target itself OR a subdirectory
+        // of the target (prefix match with trailing / separator).
+        rows = rows.filter((r) => {
+          const wp = normalizePath(r.workspacePath);
+          return wp === target || wp.startsWith(target + '/');
+        });
       }
       return rows.map(rowToDTO);
     },

@@ -36,11 +36,13 @@ import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.JScrollPane
 import javax.swing.JSeparator
 import javax.swing.JTextField
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
+import javax.swing.plaf.basic.BasicScrollBarUI
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.ui.JBColor
 import com.intellij.openapi.application.ApplicationManager
@@ -118,6 +120,39 @@ class ChatToolWindowFactory : ToolWindowFactory {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             isOpaque = false
         }
+        val chatTabsScrollPane: JScrollPane = JScrollPane(chatTabsPanel).apply {
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_NEVER
+            border = null
+            isOpaque = false
+            viewport.isOpaque = false
+            horizontalScrollBar.unitIncrement = 40
+            horizontalScrollBar.blockIncrement = 120
+            // Thin scrollbar + no arrow buttons for a compact tab bar look
+            horizontalScrollBar.preferredSize = Dimension(0, 6)
+            horizontalScrollBarUI = object : BasicScrollBarUI() {
+                override fun configureScrollBarColors() {
+                    thumbColor = JBColor(0xBBBBBB, 0x555555)
+                    trackColor = JBColor(0xF0F0F0, 0x2B2B2B)
+                }
+                override fun createDecreaseButton(orientation: Int) = zeroBtn()
+                override fun createIncreaseButton(orientation: Int) = zeroBtn()
+                private fun zeroBtn() = JButton().apply {
+                    preferredSize = Dimension(0, 0)
+                    minimumSize = Dimension(0, 0)
+                    maximumSize = Dimension(0, 0)
+                }
+            }
+            // Shift + mouse wheel → horizontal scroll
+            addMouseWheelListener { e ->
+                if (e.isShiftDown) {
+                    val sb = horizontalScrollBar
+                    val delta = if (e.wheelRotation < 0) sb.unitIncrement else -sb.unitIncrement
+                    sb.value = sb.value + delta
+                    e.consume()
+                }
+            }
+        }
         val fixedTabsPanel: JPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             isOpaque = false
@@ -127,7 +162,7 @@ class ChatToolWindowFactory : ToolWindowFactory {
         val sessionPanel: SessionPanel
 
         init {
-            tabBar.add(chatTabsPanel, BorderLayout.CENTER)
+            tabBar.add(chatTabsScrollPane, BorderLayout.CENTER)
             tabBar.add(fixedTabsPanel, BorderLayout.EAST)
             addFixedTabs(this)
             revalidateTabBar(this)
@@ -443,6 +478,11 @@ class ChatToolWindowFactory : ToolWindowFactory {
         })
         state.chatTabPanels[serverSessionId] = tabPanel
         state.chatTabsPanel.add(tabPanel)
+        // Auto-scroll to show the newly added tab
+        SwingUtilities.invokeLater {
+            val sb = state.chatTabsScrollPane.horizontalScrollBar
+            sb.value = sb.maximum
+        }
         // Per A3.8: register with SessionTabManager (close → dispose JCEF + kill worker).
         state.sessionTabManager.register(
             serverSessionId = serverSessionId,
@@ -603,6 +643,7 @@ class ChatToolWindowFactory : ToolWindowFactory {
     }
 
     private fun revalidateTabBar(state: WindowState) {
+        state.chatTabsScrollPane.viewport.revalidate()
         state.tabBar.revalidate()
         state.tabBar.repaint()
     }
