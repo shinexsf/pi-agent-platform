@@ -376,7 +376,7 @@ export async function createSession(
         const resolvedName = extractExtensionName(ext.resolvedPath);
         console.log(`  ext path="${ext.path}" resolvedPath="${ext.resolvedPath}" extractedName="${name}" resolvedName="${resolvedName}"`);
       });
-      const result = createExtensionsFilter(agentConfig.extensions)(base);
+      const result = createExtensionsFilter(agentConfig.extensions, config.workspacePath)(base);
       console.log(`[worker] extensionsOverride: after=${result.extensions.length}`);
       return result;
     } : undefined,
