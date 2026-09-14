@@ -19,6 +19,15 @@ class ServerApiClient(private val serverUrl: String) {
     private val baseUrl: String = serverUrl.trimEnd('/')
     private val mapper: ObjectMapper = jacksonObjectMapper()
 
+    data class AgentConfig(
+        val systemPrompt: String? = null,
+        val appendSystemPrompt: String? = null,
+        val builtinTools: List<String>? = null,
+        val extensions: List<String>? = null,
+        val skills: List<String>? = null,
+        val prompts: List<String>? = null,
+    )
+
     data class Agent(
         val id: String,
         val name: String,
@@ -26,12 +35,7 @@ class ServerApiClient(private val serverUrl: String) {
         val workspacePath: String,
         val model: String,
         val thinkingLevel: String?,
-        // Nullable to match server-side schema (null = "use pi default" for systemPrompt/tools).
-        // The IDE plugin only reads these for display + re-edit; the worker side
-        // handles the "absent means default" semantics, so leaving these null is safe.
-        val systemPrompt: String? = null,
-        val appendSystemPrompt: String?,
-        val tools: List<String>? = null,
+        val config: AgentConfig? = null,
         val createdAt: Long,
         val updatedAt: Long,
     )
@@ -46,6 +50,7 @@ class ServerApiClient(private val serverUrl: String) {
     data class Session(
         val id: String,
         val agentId: String,
+        val agentName: String?,
         val model: String,
         val piSessionPath: String,
         val status: String,  // deprecated but still present
@@ -75,9 +80,7 @@ class ServerApiClient(private val serverUrl: String) {
         val workspacePath: String,
         val model: String,
         val thinkingLevel: String? = null,
-        val systemPrompt: String = "",
-        val appendSystemPrompt: String? = null,
-        val tools: List<String> = emptyList(),
+        val config: AgentConfig? = null,
     )
 
     /**
@@ -312,6 +315,52 @@ class ServerApiClient(private val serverUrl: String) {
         }
     }
 
+    /** Skill info from GET /api/config/skills. */
+    data class SkillInfo(val name: String)
+
+    /** Prompt info from GET /api/config/prompts. */
+    data class PromptInfo(val name: String)
+
+    fun listSkills(): List<SkillInfo> {
+        return try {
+            val conn = openConnection("$baseUrl/api/config/skills", "GET")
+            val body = readBody(conn)
+            conn.disconnect()
+            mapper.readTree(body).mapNotNull { node ->
+                node.get("name")?.asText()?.let { SkillInfo(it) }
+            }
+        } catch (e: Exception) {
+            PluginLogger.warn("listSkills failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    fun listPrompts(): List<PromptInfo> {
+        return try {
+            val conn = openConnection("$baseUrl/api/config/prompts", "GET")
+            val body = readBody(conn)
+            conn.disconnect()
+            mapper.readTree(body).mapNotNull { node ->
+                node.get("name")?.asText()?.let { PromptInfo(it) }
+            }
+        } catch (e: Exception) {
+            PluginLogger.warn("listPrompts failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    fun listExtensions(): List<String> {
+        return try {
+            val conn = openConnection("$baseUrl/api/config/extensions", "GET")
+            val body = readBody(conn)
+            conn.disconnect()
+            mapper.readTree(body).get("names")?.mapNotNull { it.asText() } ?: emptyList()
+        } catch (e: Exception) {
+            PluginLogger.warn("listExtensions failed: ${e.message}")
+            emptyList()
+        }
+    }
+
     /**
      * Hard-delete an agent. Server cascades: kills session workers, unlinks
      * pi session files on disk, removes session rows, then deletes the agent.
@@ -412,11 +461,16 @@ class ServerApiClient(private val serverUrl: String) {
         workspacePath = node.get("workspacePath").asText(),
         model = node.get("model").asText(),
         thinkingLevel = node.get("thinkingLevel")?.takeIf { !it.isNull }?.asText(),
-        // systemPrompt / tools became nullable server-side (null = "use pi default").
-        // Absent fields surface as null on the wire, so handle defensively.
-        systemPrompt = node.get("systemPrompt")?.takeIf { !it.isNull }?.asText(),
-        appendSystemPrompt = node.get("appendSystemPrompt")?.takeIf { !it.isNull }?.asText(),
-        tools = node.get("tools")?.takeIf { !it.isNull }?.map { it.asText() },
+        config = node.get("config")?.takeIf { !it.isNull }?.let { cfg ->
+            AgentConfig(
+                systemPrompt = cfg.get("systemPrompt")?.takeIf { !it.isNull }?.asText(),
+                appendSystemPrompt = cfg.get("appendSystemPrompt")?.takeIf { !it.isNull }?.asText(),
+                builtinTools = cfg.get("builtinTools")?.takeIf { !it.isNull }?.map { it.asText() },
+                extensions = cfg.get("extensions")?.takeIf { !it.isNull }?.map { it.asText() },
+                skills = cfg.get("skills")?.takeIf { !it.isNull }?.map { it.asText() },
+                prompts = cfg.get("prompts")?.takeIf { !it.isNull }?.map { it.asText() },
+            )
+        },
         createdAt = node.get("createdAt").asLong(),
         updatedAt = node.get("updatedAt").asLong(),
     )
@@ -427,6 +481,7 @@ class ServerApiClient(private val serverUrl: String) {
         return Session(
             id = id,
             agentId = agentId,
+            agentName = node.get("agentName")?.takeIf { !it.isNull }?.asText(),
             model = node.get("model")?.asText() ?: "",
             piSessionPath = node.get("piSessionPath")?.asText() ?: "",
             status = node.get("status")?.asText() ?: "active",
@@ -447,7 +502,7 @@ class ServerApiClient(private val serverUrl: String) {
 
     private fun skipSession(reason: String): Session {
         PluginLogger.warn("Skipping malformed session: $reason")
-        return Session("", "", "", "", "active", null, 0L, 0L, null, null)
+        return Session("", "", null, "", "", "active", null, 0L, 0L, null, null)
     }
 }
 

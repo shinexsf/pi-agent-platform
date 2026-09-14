@@ -90,7 +90,7 @@ import com.intellij.util.messages.MessageBusConnection
  *   - SessionPanel / AgentPanel 硬编码 Color 改为 JBColor
  *   - LafManagerListener 切主题时触发所有面板 repaint
  */
-class ChatToolWindowFactory : ToolWindowFactory {
+class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
 
     private lateinit var settings: PluginSettings
     private val connectionStatusAction = ConnectionStatusAction()
@@ -130,7 +130,7 @@ class ChatToolWindowFactory : ToolWindowFactory {
             horizontalScrollBar.blockIncrement = 120
             // Thin scrollbar + no arrow buttons for a compact tab bar look
             horizontalScrollBar.preferredSize = Dimension(0, 6)
-            horizontalScrollBarUI = object : BasicScrollBarUI() {
+            horizontalScrollBar.ui = object : BasicScrollBarUI() {
                 override fun configureScrollBarColors() {
                     thumbColor = JBColor(0xBBBBBB, 0x555555)
                     trackColor = JBColor(0xF0F0F0, 0x2B2B2B)

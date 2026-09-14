@@ -163,8 +163,10 @@ onUnmounted(() => {
 <style scoped>
 .model-selector {
   position: relative;
-  flex: 1 1 0%;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .model-trigger {
@@ -179,10 +181,9 @@ onUnmounted(() => {
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
-  flex: 1 1 0%;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  width: 100%;
 }
 .model-trigger:hover {
   background: var(--hover-bg);

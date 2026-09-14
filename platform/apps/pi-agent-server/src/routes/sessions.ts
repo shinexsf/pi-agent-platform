@@ -62,7 +62,8 @@ export function createSessionsRouter(
     const id = c.req.param('id');
     const session = sessionRepo.get(id);
     if (!session) return c.json({ error: 'Session not found' }, 404);
-    return c.json({ ...session, worker: workerPool.toSummary(id) });
+    const agent = agentRepo.get(session.agentId);
+    return c.json({ ...session, agentName: agent?.name ?? null, worker: workerPool.toSummary(id) });
   });
 
   // GET /api/sessions/:id/context — unified context endpoint.
