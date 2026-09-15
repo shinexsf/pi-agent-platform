@@ -69,6 +69,10 @@ export interface ModelInfo {
   modelId: string;
   displayName: string;
   hasAuth: boolean;
+  /** Whether this model supports reasoning / thinking. */
+  reasoning?: boolean;
+  /** Maps thinking levels to provider-specific values. null = unsupported. */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 /** Unified session context returned by GET /api/sessions/:id/context.

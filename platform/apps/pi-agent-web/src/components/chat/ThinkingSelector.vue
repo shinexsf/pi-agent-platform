@@ -4,46 +4,80 @@
  *
  * Per user feedback:
  *   - No "thinking" / 🧠 label
- *   - Show current level only (off / low / medium / high)
+ *   - Show current level only
  *   - Empty state: subtle placeholder
  *   - Right-aligned chevron-up SVG icon
  *   - Not bold
  *   - Popup rendered via <Teleport to="body"> so it's not clipped by the
  *     input-wrapper's overflow:hidden.
  */
-import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useSSE } from '../../composables/useSSE'
+import type { ModelInfo } from '@pi-agent-platform/api-types'
 
 const props = defineProps<{
   sessionId: string
 }>()
 
 const emit = defineEmits<{
-  select: [level: 'off' | 'low' | 'medium' | 'high']
+  select: [level: string]
 }>()
 
-// Subscribe to context.currentThinkingLevel (works for both placeholder + active sessions).
+// All possible thinking levels from pi SDK
+const ALL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+// Subscribe to context (currentThinkingLevel, currentModel, models)
 const sse = useSSE({ sessionId: props.sessionId })
-const current = ref<'off' | 'low' | 'medium' | 'high' | null>(null)
-let unsubscribe: (() => void) | null = null
+const current = ref<string | null>(null)
+const currentModel = ref<{ provider: string; modelId: string } | null>(null)
+const models = ref<ModelInfo[]>([])
+let unsubscribeCurrent: (() => void) | null = null
+let unsubscribeModel: (() => void) | null = null
+let unsubscribeModels: (() => void) | null = null
 
 onMounted(() => {
-  unsubscribe = sse.registerContextHandler('currentThinkingLevel', (l) => {
+  unsubscribeCurrent = sse.registerContextHandler('currentThinkingLevel', (l) => {
     current.value = l ?? null
+  })
+  unsubscribeModel = sse.registerContextHandler('currentModel', (m) => {
+    currentModel.value = m ?? null
+  })
+  unsubscribeModels = sse.registerContextHandler('models', (m) => {
+    models.value = m ?? []
   })
 })
 
 onUnmounted(() => {
-  unsubscribe?.()
-  unsubscribe = null
+  unsubscribeCurrent?.()
+  unsubscribeModel?.()
+  unsubscribeModels?.()
+})
+
+// Compute available levels for current model
+const availableLevels = computed(() => {
+  if (!currentModel.value) {
+    // No model selected, show defaults
+    return ['off', 'low', 'medium', 'high']
+  }
+  
+  // Find current model in models list
+  const model = models.value.find(
+    m => m.provider === currentModel.value!.provider && m.modelId === currentModel.value!.modelId
+  )
+  
+  if (!model?.thinkingLevelMap) {
+    // No thinkingLevelMap, show defaults
+    return ['off', 'low', 'medium', 'high']
+  }
+  
+  // Filter levels based on thinkingLevelMap (null = unsupported)
+  return ALL_LEVELS.filter(l => model.thinkingLevelMap![l] !== null)
 })
 
 const open = ref(false)
 const triggerEl = ref<HTMLElement | null>(null)
 const panelEl = ref<HTMLElement | null>(null)
 const panelStyle = ref<Record<string, string>>({})
-
-const LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 function repositionPanel() {
   if (!triggerEl.value) return
@@ -65,7 +99,7 @@ async function toggle() {
   }
 }
 
-function pick(l: typeof LEVELS[number]) {
+function pick(l: string) {
   emit('select', l)
   open.value = false
 }
@@ -125,7 +159,7 @@ onUnmounted(() => {
         @click.stop
       >
         <div
-          v-for="l in LEVELS"
+          v-for="l in availableLevels"
           :key="l"
           class="thinking-item"
           :class="{ 'thinking-current': current === l }"

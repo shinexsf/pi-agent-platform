@@ -134,11 +134,13 @@ export function createPromptsFilter(
 /**
  * Extract extension name from a file path or source string.
  * - "/path/to/node_modules/pi-mcp-adapter/index.ts" → "pi-mcp-adapter"
+ * - "/path/to/node_modules/@scope/pkg-name/src/index.ts" → "@scope/pkg-name"
  * - "/path/to/plugin-dir/src/index.ts" → "plugin-dir"
  * - "npm:pi-mcp-adapter" → "pi-mcp-adapter"
+ * - "npm:@scope/pkg-name" → "@scope/pkg-name"
  */
 export function extractExtensionName(filePath: string): string {
-  // Handle npm packages
+  // Handle npm packages (preserve scope)
   if (filePath.startsWith('npm:')) {
     return filePath.slice(4);
   }
@@ -150,10 +152,11 @@ export function extractExtensionName(filePath: string): string {
   }
   
   // Handle file paths - try to extract from node_modules structure first
-  // e.g., /path/to/node_modules/@scope/pkg-name/src/index.ts → pkg-name
-  const nodeModulesMatch = filePath.match(/node_modules[/\\](?:@[^/\\]+[/\\])?([^/\\]+)/);
+  // e.g., /path/to/node_modules/@scope/pkg-name/src/index.ts → @scope/pkg-name
+  const nodeModulesMatch = filePath.match(/node_modules[/\\]((?:@[^/\\]+[/\\])?[^/\\]+)/);
   if (nodeModulesMatch?.[1]) {
-    return nodeModulesMatch[1];
+    // Normalize path separators and return with scope
+    return nodeModulesMatch[1].replace(/\\/g, '/');
   }
   
   // Fallback: use parent directory name

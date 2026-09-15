@@ -783,6 +783,8 @@ export class PiSessionAdapter {
     modelId: string;
     displayName: string;
     hasAuth: boolean;
+    reasoning?: boolean;
+    thinkingLevelMap?: Record<string, string | null>;
   }>> {
     const registry = new ModelRegistry(this.modelRuntime);
     const models = registry.getAvailable();
@@ -791,6 +793,8 @@ export class PiSessionAdapter {
       modelId: m.id,
       displayName: m.name || `${m.provider}/${m.id}`,
       hasAuth: registry.hasConfiguredAuth(m),
+      reasoning: (m as unknown as { reasoning?: boolean }).reasoning,
+      thinkingLevelMap: (m as unknown as { thinkingLevelMap?: Record<string, string | null> }).thinkingLevelMap,
     }));
   }
 

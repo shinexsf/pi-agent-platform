@@ -62,7 +62,7 @@ const emit = defineEmits<{
   abort: []
   dispatchCommand: [name: string, args: string]
   setModel: [provider: string, modelId: string]
-  setThinkingLevel: [level: 'off' | 'low' | 'medium' | 'high']
+  setThinkingLevel: [level: string]
 }>()
 
 // Subscribed via useSSE().registerContextHandler (commands + models + session fields).
@@ -575,7 +575,7 @@ onUnmounted(() => {
         />
         <ThinkingSelector
           :session-id="sessionId"
-          @select="(l: 'off' | 'low' | 'medium' | 'high') => emit('setThinkingLevel', l)"
+          @select="(l: string) => emit('setThinkingLevel', l)"
         />
         <ContextUsage :session-id="sessionId" />
       </div>

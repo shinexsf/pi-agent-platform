@@ -32,7 +32,7 @@ onMounted(async () => {
 async function loadExtensions() {
   loading.value = true;
   try {
-    const res = await fetch('/api/config/extensions');
+    const res = await fetch('/api/config/extensions/detail');
     extensions.value = await res.json();
   } catch (err) {
     console.error('Failed to load extensions:', err);

@@ -5,16 +5,29 @@
  * 功能：
  * - defaultProvider 下拉选择
  * - defaultModel 下拉选择（联动 provider）
- * - defaultThinkingLevel 选择
+ * - defaultThinkingLevel 选择（根据模型动态显示可用等级）
  * - enabledModels 列表管理
  */
 import { ref, computed, onMounted, watch } from 'vue';
+
+// All possible thinking levels from pi SDK
+const ALL_THINKING_LEVELS = [
+  { value: 'off', label: '关闭' },
+  { value: 'minimal', label: '极低' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'xhigh', label: '很高' },
+  { value: 'max', label: '最高' },
+];
 
 interface ModelInfo {
   provider: string;
   modelId: string;
   displayName: string;
   hasAuth: boolean;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 interface Settings {
@@ -29,13 +42,6 @@ const settings = ref<Settings>({});
 const allModels = ref<ModelInfo[]>([]);
 const loading = ref(true);
 const saving = ref(false);
-
-const thinkingLevels = [
-  { value: 'off', label: '关闭' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-];
 
 // 按 provider 分组的模型列表
 const modelsByProvider = computed(() => {
@@ -64,6 +70,37 @@ const allAvailableModels = computed(() => {
     ...m,
     enabled: settings.value.enabledModels?.includes(`${m.provider}/${m.modelId}`) ?? false,
   }));
+});
+
+// 当前选中模型的可用思考等级
+const availableThinkingLevels = computed(() => {
+  if (!settings.value.defaultProvider || !settings.value.defaultModel) {
+    // 没有选中模型，显示默认选项
+    return [
+      { value: 'off', label: '关闭' },
+      { value: 'low', label: '低' },
+      { value: 'medium', label: '中' },
+      { value: 'high', label: '高' },
+    ];
+  }
+  
+  // 找到当前选中的模型
+  const model = allModels.value.find(
+    m => m.provider === settings.value.defaultProvider && m.modelId === settings.value.defaultModel
+  );
+  
+  if (!model?.thinkingLevelMap) {
+    // 模型没有 thinkingLevelMap，显示默认选项
+    return [
+      { value: 'off', label: '关闭' },
+      { value: 'low', label: '低' },
+      { value: 'medium', label: '中' },
+      { value: 'high', label: '高' },
+    ];
+  }
+  
+  // 根据 thinkingLevelMap 过滤可用等级
+  return ALL_THINKING_LEVELS.filter(l => model.thinkingLevelMap![l.value] !== null);
 });
 
 onMounted(async () => {
@@ -180,7 +217,7 @@ function deselectAllModels() {
       <div class="form-group">
         <label>默认 Thinking Level</label>
         <select v-model="settings.defaultThinkingLevel" class="form-select">
-          <option v-for="level in thinkingLevels" :key="level.value" :value="level.value">
+          <option v-for="level in availableThinkingLevels" :key="level.value" :value="level.value">
             {{ level.label }}
           </option>
         </select>
