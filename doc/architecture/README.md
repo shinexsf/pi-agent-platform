@@ -16,7 +16,7 @@
 | pi-agent-server | session-lifecycle | [Session 生命周期](current/pi-agent-server_session-lifecycle.md) | 创建 / 销毁 / 配置管理 / 状态机 |
 | pi-agent-server | db-schema | [DB Schema](current/pi-agent-server_db-schema.md) | agents + sessions 两张表 |
 | pi-agent-server | http-api | [HTTP API](current/pi-agent-server_http-api.md) | v1 路由 + SSE 协议 |
-| pi-agent-server | im-gateway | [IM Gateway](current/pi-agent-server_im-gateway.md) | QQ + 微信渠道包（后端 + 前端一体化）；5 个接口；manifest dynamic import；21 条 API；30min IM session timeout |
+| pi-agent-server | im-gateway | [IM Gateway](current/pi-agent-server_im-gateway.md) | QQ + 微信渠道包（后端 + 前端一体化）；5 个接口；manifest dynamic import；23 条 API；30min IM session timeout；附件管道（adapter→store→prompt-resolver→worker）；重启会话恢复 B2 fallback |
 | pi-agent-server | debug-testing | [Debug Testing](current/pi-agent-server_debug-testing.md) | Debug 接口 = unit tests 替代品；server `/debug/*` 5 端点 + IM `/api/im/debug/*` 2 端点；dev-only gating；不要写 unit tests 用 curl 端到端 |
 | **pi-agent-server** | **packaging** | **[Packaging & Distribution](current/pi-agent-server_packaging.md)** | **`pi-server` npm tarball；`PI_SERVER_CLI` marker 双模式启动；6 个打包态环境变量；channels/shared/ 副本解决 workspace 内部包依赖；tarball 不含 node_modules；better-sqlite3 走 npm 标准 install hook** | **2026-09-02** |
 | pi-agent-server | invariants | [不变量](current/pi-agent-server_invariants.md) | 架构层 hard rules（不能动） |
