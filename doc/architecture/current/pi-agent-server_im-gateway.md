@@ -152,6 +152,8 @@ QQ 渠道(9 条,与微信同模板,渠道包自挂 /api/im/qq/*):
 
 > **MVP 简化**:**bindings 4 条路由 MVP 不暴露**(群聊 / per-chat binding 推迟到下个 change)。QQ 渠道 MVP 只走"单 channel 单 agent"模式(用 `defaultAgentId`),不暴露 bindings 子表路由。完整 11+ 条在群聊支持时再加。
 
+> **斜杠命令变更**(2026-09-16):`POST /:id/command` 现在调 `runBuiltinCommand()`(统一入口),命令名对齐 IM 端(`think` 替代 `thinking`,保留 alias)。新增 `name`、`hotkeys` 命令。
+
 ## sendFileToUser 工具(MVP 跳过,推下个 change)
 
 MVP **不实现** `sendFileToUser` 工具。完整设计文档保留在 v2 git history,实施时按 `specs/send-file-to-user/spec.md`(v1)和设计文档实现。
@@ -168,15 +170,62 @@ worker 端 `agent_end` event 不含回复文本(`delta` 是空 sentinel),实际�
 2. **触发**`message_end` 时取最终文本
 3. **关联**用 `messageId.parentId` 关联到 user prompt,保证多消息排队时回复顺序正确
 
+## 附件管道(adapter → store → prompt-resolver → worker)
+
+### 数据流
+```
+adapter 收到文件
+  → host.uploadAttachment(sessionId, bytes, mime, filename)
+  → attachmentStore.upsert → 写磁盘(uuid.ext) + INSERT DB(id, sha, filename)
+  → 返回 att_id
+  → adapter 拼 [pi-attachment:att_xxx] 到文本
+  → routing.ts → resolvePrompt(sessionId, text)
+    → 正则匹配 [pi-attachment:att_xxx]
+    → attachmentStore.lookupForPrompt(sessionId, ids)
+    → 返回 { path, mimeType, originalFilename }
+  → worker:
+    ├── isImageMimeType → base64 (resizeImage 管线)
+    └── 非图片 → <file path="..." name="原始文件名" type="mimeType"></file>
+```
+
+### attachment-store
+- **存储布局**: `~/.pi-agent-server/attachments/<sessionId>/<uuid>.<ext>`
+- **文件名**: UUID 格式（`uuid.ext`），不使用 SHA（太长）
+- **内容寻址**: SHA-256 用于 dedup（同 session 同 sha 不重复写入）
+- **MIME 白名单**: 已移除，支持所有文件类型
+- **附件 ID**: `att_<uuid-no-dashes-12chars>`（如 `att_452a8fcc9e32`）
+- **DB 新增列**: `filename TEXT NOT NULL DEFAULT ''`（存磁盘文件名）
+
+### prompt-resolver.ts（独立模块）
+统一处理：斜杠命令检查 → `[pi-attachment:att_xxx]` 占位符解析 → agent config 加载 → streamingBehavior 判断。HTTP 和 IM 两端都调它。
+
+### worker 分流
+- 图片（png/jpeg/gif/webp）→ `resizeImage` → base64 → multimodal
+- 非图片 → `<file path name type></file>` → agent 用 read 工具读取
+
 ## IM session idle timeout(30 分钟,内存实现)
 
 现有 `session-timeout-scanner` 只杀 placeholder,active session 永不回收 — IM 场景会占满 `maxWorkers`。新增规则:
 - IM 网关自己维护 `Map<sessionId, SessionMeta>`,内容 `{ agentId, channelId, chatId, lastActiveAt }`
 - 定时扫描(每分钟一次),`Date.now() - lastActiveAt > 30 * 60 * 1000` → kill worker(reason='im-idle-timeout')
 - sessions row 保留(status='active'),下次消息触发自然 respawn
-- 重启后从 `channels_wechat.current_session_id` 和 `channels_qq.current_session_id` 反查恢复 map
-- web / IDE session 不适用此规则(走原 placeholder timeout + LRU 驱逐)
 - 下次消息触发自然 respawn(`spawnAndCreate` 已支持按 `pi_session_path` 恢复)
+- web / IDE session 不适用此规则(走原 placeholder timeout + LRU 驱逐)
+
+## 重启会话恢复（State B2 fallback）
+
+`session-channel-map` 是内存 Map，重启即丢失。`channels_qq.current_session_id` 存了 sessionId 但没存 chatId，`seedSessionFromConfig` 传 chatId=undefined 导致 map key 不匹配（`channelId+''` vs `channelId+openId`）。
+
+**解决方案**：`ensureSession`（routing.ts 版本）加 State B2 fallback：
+```
+ensureSession(channelId, chatId):
+  A. map 命中 + worker 活着 → 复用
+  B. map 命中 + worker 死了 → respawn
+  B2. map 没命中 + cfg.currentSessionId 有值 + session 存在 → respawn + 绑定当前 chatId  ← 新增
+  C. 都不满足 → 创建新 session
+```
+
+**假设**：一个 bot 对一个用户（私聊场景）。多用户场景需重新设计（加 chatId 列或独立映射表）。
 
 ## 关键决策
 
@@ -199,6 +248,14 @@ worker 端 `agent_end` event 不含回复文本(`delta` 是空 sentinel),实际�
 | D15 | web 加载机制 | `import.meta.glob`(不用模板字符串 import) |
 | D16 | IM session timeout | 30 分钟,内存 Map,kill worker 留 row |
 | D17 | web 顶部菜单 | Agents / Sessions / QQ / WeChat Channel,数据驱动(meta.navLabel) |
+| D18 | prompt-resolver 位置 | 独立文件,不塞 session-bridge |
+| D19 | adapter 附件处理 | adapter 下载 + host.uploadAttachment + 占位符 |
+| D20 | attachment MIME | 移除白名单,支持所有类型 |
+| D21 | 非图片附件呈现 | `<file path>` 标签,agent 主动 read |
+| D22 | attachment ID 格式 | `att_<uuid-12hex>` |
+| D23 | 磁盘文件名 | UUID 格式(`uuid.ext`) |
+| D24 | 重启会话恢复 | ensureSession B2 fallback: cfg.currentSessionId → respawn |
+| D25 | QQ 原始文件名 | 用 QQ API 的 `att.filename` 字段 |
 
 完整决策见 `openspec/changes/im-gateway/design.md`(955 行,16 个 D)。
 

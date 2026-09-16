@@ -152,6 +152,32 @@ session 创建时**完整复制** agent 配置到 sessions.config。session 整�
 
 **会话生命周期**:渠道表里的 `current_session_id` 是渠道级状态（哪个 chat 跟到哪个 session），不属于 sessions 表。IM 网关 session idle timeout 走**内存 Map**（不动 sessions 表）。详见 `pi-agent-server_im-gateway.md` 的 D16 段。
 
+## attachments 表
+
+```sql
+CREATE TABLE attachments (
+  session_id          TEXT NOT NULL,
+  sha                 TEXT NOT NULL,        -- SHA-256 hex (内容寻址)
+  id                  TEXT NOT NULL,        -- att_<uuid-12hex> (客户端 ID)
+  mime_type           TEXT NOT NULL,
+  original_filename   TEXT NOT NULL DEFAULT '',
+  filename            TEXT NOT NULL DEFAULT '',  -- 磁盘文件名 (uuid.ext)
+  size_bytes          INTEGER NOT NULL,
+  created_at          INTEGER NOT NULL,
+  PRIMARY KEY (session_id, sha)
+);
+
+CREATE INDEX idx_attachments_session ON attachments(session_id);
+```
+
+**存储布局**: `~/.pi-agent-server/attachments/<sessionId>/<filename>`
+- 文件名用 UUID 格式（`uuid.ext`），不使用 SHA（64 字符太长）
+- SHA-256 用于内容 dedup（同 session 同 sha 不重复写入）
+- `original_filename`: 用户上传时的原始文件名（QQ 从 API `att.filename` 获取，WeChat 从 SDK 获取）
+- `filename`: 实际磁盘文件名（UUID 格式）
+- 附件 ID: `att_<uuid-no-dashes-12chars>`（如 `att_452a8fcc9e32`）
+- MIME 白名单已移除，支持所有文件类型
+
 ## 路径规范化
 
 **所有路径字段**（`agents.workspace_path`、`sessions.pi_session_path`）入库前 MUST 经过 `normalizePath()`：
