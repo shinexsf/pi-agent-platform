@@ -107,6 +107,7 @@ async function main() {
       sessionRepo,
       workerPool,
       rawDb: raw,
+      attachmentStore,
     });
     app.route('/api/im', imGatewayHandle.imRouter);
     console.log(`[server] im-gateway started (${imGatewayHandle.loadedCount} channels: ${imGatewayHandle.loadedTypes.join(', ')})`);

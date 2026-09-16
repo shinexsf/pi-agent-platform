@@ -20,6 +20,7 @@ function makeHost() {
     agentExists: () => true,
     promptWorker: async () => undefined,
     killWorker: async () => undefined,
+    attachmentStore: { upsert: async () => ({ row: { id: 'att_test', sha: 'abc', mimeType: 'image/png', sizeBytes: 0 }, alreadyExisted: false }) } as never,
     runBuiltin: async () => null,
     routeInbound: async () => undefined,
     getAdapter: () => null,

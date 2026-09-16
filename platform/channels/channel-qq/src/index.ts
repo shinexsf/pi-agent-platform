@@ -49,6 +49,10 @@ const QqChannelPackage: ChannelPackage = {
             autoReconnect: r.auto_reconnect === 1,
           },
         });
+        // Rebuild session-channel-map for sessions that survived restart
+        if (r.current_session_id) {
+          host.seedSessionFromConfig(r.id, r.current_session_id, undefined, r.default_agent_id ?? undefined);
+        }
         seeded++;
       }
       if (seeded > 0) {

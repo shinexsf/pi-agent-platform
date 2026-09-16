@@ -42,7 +42,13 @@ import { WECHAT_SYSTEM_PROMPT } from './system-prompt.js';
 
 export interface WechatAdapterOptions {
   config: ChannelConfig;
-  host: { logEvent: (e: { channelId: ChannelId; channelType: string; kind: string; message?: string; data?: Record<string, unknown> }) => void };
+  host: {
+    logEvent: (e: { channelId: ChannelId; channelType: string; kind: string; message?: string; data?: Record<string, unknown> }) => void;
+    /** Ensure a session exists for the given chat, returning sessionId. */
+    ensureSession?: (channelId: string, chatId: string) => Promise<string>;
+    /** Upload raw bytes to attachment-store. */
+    uploadAttachment?: (sessionId: string, input: { bytes: Uint8Array; mimeType: string; filename?: string }) => Promise<{ id: string; mimeType: string; sizeBytes: number }>;
+  };
   /** storage directory (per-channel). Required for iLink ClawBot. */
   storageDir: string;
   /**
@@ -84,6 +90,23 @@ function generateMockQrPng(): string {
   const pngBase64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   return `data:image/png;base64,${pngBase64}`;
+}
+
+/** Magic-byte MIME sniffing for common file types. Returns null if unrecognized. */
+function sniffMime(bytes: Uint8Array): string | null {
+  if (bytes.length < 12) return null;
+  // PNG
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  // JPEG
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  // GIF
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
+  // WebP
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  // PDF
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'application/pdf';
+  return null;
 }
 
 /** Real WeChat adapter backed by @wechatbot/wechatbot. */
@@ -570,27 +593,90 @@ export class WechatAdapter implements ChannelAdapter {
     // Fire-and-forget — don't block inbound handling on typing API.
     this.bot?.sendTyping(msg.userId).catch(() => {});
 
-    const inbound = {
+    // Process attachments: download → upload → build placeholder text
+    void this.processAttachmentsAndForward(msg);
+  }
+
+  private async processAttachmentsAndForward(msg: IncomingMessage): Promise<void> {
+    if (!this.msgHandler) return;
+    let text = msg.text;
+
+    const hasAttachments = (msg.images && msg.images.length > 0)
+      || (msg.files && msg.files.length > 0);
+
+    if (hasAttachments && this.bot && this.opts.host.uploadAttachment && this.opts.host.ensureSession) {
+      try {
+        const sessionId = await this.opts.host.ensureSession(this._configId, msg.userId);
+
+        // Download images via SDK MediaDownloader
+        if (msg.images) {
+          for (const img of msg.images) {
+            if (!img.media) continue;
+            try {
+              const buf = await this.bot.downloader.download(img.media, img.aeskey);
+              if (!buf || buf.length === 0) continue;
+              const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+              const mimeType = sniffMime(bytes) ?? 'image/jpeg';
+              const result = await this.opts.host.uploadAttachment!(sessionId, {
+                bytes,
+                mimeType,
+              });
+              text += ` [pi-attachment:${result.id}]`;
+            } catch (err) {
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'warn',
+                message: `image download failed: ${(err as Error).message}`,
+              });
+            }
+          }
+        }
+
+        // Download files via SDK MediaDownloader
+        if (msg.files) {
+          for (const f of msg.files) {
+            if (!f.media) continue;
+            try {
+              const buf = await this.bot.downloader.download(f.media);
+              if (!buf || buf.length === 0) continue;
+              const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+              const mimeType = sniffMime(bytes) ?? 'application/octet-stream';
+              const result = await this.opts.host.uploadAttachment!(sessionId, {
+                bytes,
+                mimeType,
+                filename: f.fileName,
+              });
+              text += ` [pi-attachment:${result.id}]`;
+            } catch (err) {
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'wechat',
+                kind: 'warn',
+                message: `file download failed: ${(err as Error).message}`,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        this.opts.host.logEvent({
+          channelId: this._configId,
+          channelType: 'wechat',
+          kind: 'warn',
+          message: `session creation failed for attachments: ${(err as Error).message}`,
+        });
+      }
+    }
+
+    this.msgHandler({
       channelId: this._configId,
       channelType: 'wechat',
       chatId: msg.userId,
       isGroup: false,
       senderId: msg.userId,
-      text: msg.text,
+      text,
       timestamp: msg.timestamp.toISOString(),
-      images: msg.images?.map((img) => ({
-        localPath: '',
-        mimeType: 'image/jpeg',
-        media: img.media,
-      })),
-      files: msg.files?.map((f) => ({
-        localPath: '',
-        mimeType: 'application/octet-stream',
-        fileName: f.fileName,
-        media: f.media,
-      })),
-    };
-    void this.msgHandler(inbound);
+    });
   }
 
   private updateStatus(patch: Partial<ChannelStatusSnapshot>): void {

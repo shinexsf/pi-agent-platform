@@ -61,6 +61,8 @@ export const attachments = sqliteTable(
     mimeType: text('mime_type').notNull(),
     /** User-visible filename (preserved across re-upload for the same content). */
     originalFilename: text('original_filename').notNull().default(''),
+    /** Actual filename on disk (uuid.ext). */
+    filename: text('filename').notNull().default(''),
     /** Raw byte count (post base64 decode). Used for hard-cap validation. */
     sizeBytes: integer('size_bytes').notNull(),
     createdAt: integer('created_at').notNull(),

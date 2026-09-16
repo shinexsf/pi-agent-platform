@@ -32,12 +32,10 @@ export interface InboundMessage {
   senderId?: ExternalChatId;
   /** Sender display name. */
   senderName?: string;
-  /** Plain text body. Image-only messages have empty text. */
+  /** Plain text body. Image-only messages have empty text.
+   * Attachments are downloaded by the adapter, persisted via host.uploadAttachment(),
+   * and referenced as `[pi-attachment:att_xxx]` placeholders in this text. */
   text: string;
-  /** Image attachments (already downloaded to a local path on the adapter). */
-  images?: Array<{ localPath: string; mimeType: string }>;
-  /** File attachments. */
-  files?: Array<{ localPath: string; mimeType: string; filename?: string }>;
   /** Platform-side message id (for replies / quoting). */
   platformMessageId?: string;
   /** ISO timestamp. */

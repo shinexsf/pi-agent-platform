@@ -31,6 +31,8 @@ import {
 import { spawnAndCreate, spawnPlaceholder, type AgentLike } from './session-bridge.js';
 import { runBuiltinCommand } from './slash-commands.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
+import { resolvePrompt } from '../prompt-resolver.js';
+import type { AttachmentStore } from '../services/attachment-store.js';
 
 export interface RouteContext {
   channelType: string;
@@ -38,6 +40,7 @@ export interface RouteContext {
   agentRepo: AgentRepo;
   sessionRepo: SessionRepo;
   workerPool: WorkerPool;
+  attachmentStore: AttachmentStore;
   /** Host reference for setCurrentSession / getCurrentSession / etc. */
   host: ChannelHost;
   /** Channel config getter (channel packages implement). */
@@ -142,11 +145,27 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
   subscribeReplySender(ensured, ctx);
 
   // ── 5. Forward prompt to worker ──────────────────────────────────────────────
+  // Resolve attachment placeholders so worker receives promptOptions.attachments
+  console.warn(`[ROUTING-DIAG] resolvePrompt sessionId=${ensured}`);
+  const resolved = await resolvePrompt(ensured, msg.text, {
+    allowSteer: true,
+  }, {
+    sessionRepo: ctx.sessionRepo,
+    agentRepo: ctx.agentRepo,
+    attachmentStore: ctx.attachmentStore,
+  });
+
+  if (resolved.intercepted) {
+    await ctx.adapter.sendText(
+      { channelId: msg.channelId, chatId: msg.chatId },
+      resolved.intercepted.content,
+    );
+    return { handled: 'command', sessionId: ensured, reply: resolved.intercepted.content };
+  }
+
+  console.warn(`[ROUTING-DIAG] prompt: sessionId=${ensured}, textLen=${resolved.message.length}, attachments=${resolved.promptOptions.attachments?.length ?? 0}`);
   try {
-    await ctx.workerPool.call(ensured, 'prompt', [
-      msg.text,
-      msg.images?.map((img: { localPath: string; mimeType: string }) => ({ localPath: img.localPath, mimeType: img.mimeType })) ?? [],
-    ]);
+    await ctx.workerPool.call(ensured, 'prompt', [resolved.message, resolved.promptOptions]);
   } catch (err) {
     logger.error({ err: String(err), sessionId: ensured }, 'prompt failed');
     await ctx.adapter.sendText(
@@ -191,6 +210,31 @@ async function ensureSession(
         lastActiveAt: Date.now(),
       });
       return existingId;
+    }
+  }
+
+  // State B2 — post-restart fallback: map empty but channel config has currentSessionId
+  // (private chat only: one bot → one user, so currentSessionId is unambiguous)
+  if (channel.currentSessionId) {
+    const saved = ctx.sessionRepo.get(channel.currentSessionId);
+    if (saved) {
+      const result = await spawnAndCreate(
+        channel.currentSessionId,
+        agent,
+        ctx.sessionRepo,
+        ctx.workerPool,
+        saved.piSessionPath,
+      );
+      if (result) {
+        setSessionMeta(channel.currentSessionId, {
+          agentId: agent.id,
+          channelId: msg.channelId,
+          chatId: msg.chatId,
+          lastActiveAt: Date.now(),
+        });
+        logger.info({ channelId: msg.channelId, chatId: msg.chatId, sessionId: channel.currentSessionId }, 'ensureSession: restored from channel config');
+        return channel.currentSessionId;
+      }
     }
   }
 

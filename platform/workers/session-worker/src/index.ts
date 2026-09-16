@@ -84,7 +84,7 @@ async function dispatch(req: CallRequest): Promise<void> {
           string,
           {
             streamingBehavior?: 'steer' | 'followUp';
-            attachments?: Array<{ id: string; sha: string; mimeType: string }>;
+            attachments?: Array<{ id: string; sha: string; mimeType: string; filename: string; originalFilename: string }>;
           }?,
         ];
         if (!promptOptions?.attachments || promptOptions.attachments.length === 0) {
@@ -93,60 +93,68 @@ async function dispatch(req: CallRequest): Promise<void> {
           respond(req.id, true, null);
           return;
         }
-        // Resolve each attachment to bytes via sha256.content-addressed path,
-        // normalize via pi SDK's processImage (same pipeline as the read tool),
-        // then hand augmented text + images[] to session.prompt.
+        // Resolve each attachment: images → base64 via processImage pipeline,
+        // non-images → <file path> tag prompting agent to read.
         const images: Array<{ type: 'image'; mimeType: string; data: string }> = [];
         let augmentedText = message;
         for (const att of promptOptions.attachments) {
-          let bytes: Uint8Array;
-          try {
-            bytes = readAttachmentBytes(currentHandle ?? '', att.sha, att.mimeType);
-          } catch (err) {
-            // Path-escape / sha-mismatch — degrade to text-only marker, do not
-            // throw; other attachments should still deliver.
-            console.warn(`[worker] skip attachment ${att.id}: ${(err as Error).message}`);
-            const ext = extForMimeType(att.mimeType);
-            augmentedText += `\n<file name="${att.sha}.${ext}">[attachment load failed: ${(err as Error).message}]</file>`;
-            continue;
-          }
-          let processed;
-          try {
-            // Inline replication of pi SDK's processImage for the supported mime
-            // whitelist. resizeImage returns `{data, mimeType, originalWidth, ...}`
-            // on success, or null on failure (mirrors processImage.ok=false path).
-            const resized = await resizeImage(bytes, att.mimeType);
-            if (!resized) {
-              processed = {
-                ok: false as const,
-                message: '[Image omitted: could not be resized below the inline image size limit.]',
-              };
-            } else {
-              const hints: string[] = [];
-              const dimensionNote = formatDimensionNote(resized);
-              if (dimensionNote) hints.push(dimensionNote);
-              processed = {
-                ok: true as const,
-                data: resized.data,
-                mimeType: resized.mimeType,
-                hints,
-              };
+          const absPath = path.join(ATTACHMENTS_ROOT!, currentHandle ?? '', att.filename);
+
+          // Branch: image vs non-image
+          if (isImageMimeType(att.mimeType)) {
+            // ── Image path: existing base64 pipeline ──
+            let bytes: Uint8Array;
+            try {
+              bytes = readAttachmentBytes(currentHandle ?? '', att.filename, att.sha, att.mimeType);
+            } catch (err) {
+              console.warn(`[worker] skip image ${att.id}: ${(err as Error).message}`);
+              const ext = extForMimeType(att.mimeType);
+              augmentedText += `\n<file path="${absPath}">[attachment load failed: ${(err as Error).message}]</file>`;
+              continue;
             }
-          } catch (err) {
-            console.warn(`[worker] resizeImage failed for ${att.id}: ${(err as Error).message}`);
-            const ext = extForMimeType(att.mimeType);
-            augmentedText += `\n<file name="${att.sha}.${ext}">[image processing failed]</file>`;
-            continue;
+            let processed;
+            try {
+              const resized = await resizeImage(bytes, att.mimeType);
+              if (!resized) {
+                processed = {
+                  ok: false as const,
+                  message: '[Image omitted: could not be resized below the inline image size limit.]',
+                };
+              } else {
+                const hints: string[] = [];
+                const dimensionNote = formatDimensionNote(resized);
+                if (dimensionNote) hints.push(dimensionNote);
+                processed = {
+                  ok: true as const,
+                  data: resized.data,
+                  mimeType: resized.mimeType,
+                  hints,
+                };
+              }
+            } catch (err) {
+              console.warn(`[worker] resizeImage failed for ${att.id}: ${(err as Error).message}`);
+              augmentedText += `\n<file path="${absPath}">[image processing failed]</file>`;
+              continue;
+            }
+            if (!processed.ok) {
+              augmentedText += `\n<file path="${absPath}">${processed.message}</file>`;
+              continue;
+            }
+            const ext = extForMimeType(processed.mimeType);
+            const hintLines = processed.hints.length ? processed.hints : [];
+            augmentedText += `\n<file path="${absPath}">${hintLines.join('\n')}</file>`;
+            images.push({ type: 'image', mimeType: processed.mimeType, data: processed.data });
+          } else {
+            // ── Non-image path: <file> tag with metadata ──
+            try {
+              readAttachmentBytes(currentHandle ?? '', att.filename, att.sha, att.mimeType);
+              const displayName = att.originalFilename || att.id;
+              augmentedText += `\n<file path="${absPath}" name="${displayName}" type="${att.mimeType}"></file>`;
+            } catch (err) {
+              console.warn(`[worker] skip non-image ${att.id}: ${(err as Error).message}`);
+              augmentedText += `\n<file path="${absPath}">[attachment load failed: ${(err as Error).message}]</file>`;
+            }
           }
-          if (!processed.ok) {
-            const ext = extForMimeType(att.mimeType);
-            augmentedText += `\n<file name="${att.sha}.${ext}">${processed.message}</file>`;
-            continue;
-          }
-          const ext = extForMimeType(processed.mimeType);
-          const hintLines = processed.hints.length ? processed.hints : [];
-          augmentedText += `\n<file name="${att.sha}.${ext}">${hintLines.join('\n')}</file>`;
-          images.push({ type: 'image', mimeType: processed.mimeType, data: processed.data });
         }
         await currentSession.prompt(augmentedText, {
           streamingBehavior: promptOptions.streamingBehavior,
@@ -279,11 +287,21 @@ function extForMimeType(mime: string): string {
   }
 }
 
-function readAttachmentBytes(sessionId: string, sha: string, mimeType: string): Uint8Array {
-  if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error('sha format invalid');
+/** Check if a mimeType is a supported image type (goes through resizeImage pipeline). */
+function isImageMimeType(mime: string): boolean {
+  return mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/gif' || mime === 'image/webp';
+}
+
+/** Construct the absolute path for an attachment on disk. */
+function attachmentAbsPath(sessionId: string, sha: string, mimeType: string): string {
   const ext = extForMimeType(mimeType);
+  return path.join(ATTACHMENTS_ROOT!, sessionId, `${sha}.${ext}`);
+}
+
+function readAttachmentBytes(sessionId: string, filename: string, sha: string, mimeType: string): Uint8Array {
+  if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error('sha format invalid');
   const rootReal = realpathSync(ATTACHMENTS_ROOT!);
-  const candidate = path.join(rootReal, sessionId, `${sha}.${ext}`);
+  const candidate = path.join(rootReal, sessionId, filename);
   // Path sandbox: ensure candidate is inside root. realpathSync requires the
   // file to exist; if it doesn't, the next line throws ENOENT.
   let realPath: string;

@@ -224,6 +224,8 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
       config: cfg,
       host: {
         logEvent: (e) => host.logEvent(e),
+        ensureSession: (channelId, chatId) => host.ensureSession(channelId, chatId),
+        uploadAttachment: (sessionId, input) => host.uploadAttachment(sessionId, input),
         onCredentials: (creds) => {
           // Persist to DB
           const now = Date.now();
@@ -276,7 +278,11 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
     const extra = cfg.extra as { appId?: string; appSecret?: string } | undefined;
     const adapter = new QqAdapter({
       config: cfg,
-      host: { logEvent: (e) => host.logEvent(e) },
+      host: {
+        logEvent: (e) => host.logEvent(e),
+        ensureSession: (channelId, chatId) => host.ensureSession(channelId, chatId),
+        uploadAttachment: (sessionId, input) => host.uploadAttachment(sessionId, input),
+      },
       appId: extra?.appId ?? '',
       appSecret: extra?.appSecret ?? '',
     });

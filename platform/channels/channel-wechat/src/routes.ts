@@ -262,7 +262,11 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
     }
     const adapter = new WechatAdapter({
       config: cfg,
-      host: { logEvent: (e) => host.logEvent(e) },
+      host: {
+        logEvent: (e) => host.logEvent(e),
+        ensureSession: (channelId, chatId) => host.ensureSession(channelId, chatId),
+        uploadAttachment: (sessionId, input) => host.uploadAttachment(sessionId, input),
+      },
       storageDir,
       force: true, // explicit QR scan (fresh setup or post-clear)
     });
@@ -305,7 +309,11 @@ export function createWechatRoutes(host: ChannelHost): { router: Hono; state: Ch
     const storageDir = (cfg.extra as { storageDir?: string } | undefined)?.storageDir ?? path.join(getDefaultStorageDir(), cfg.id);
     const adapter: ChannelAdapter = new WechatAdapter({
       config: cfg,
-      host: { logEvent: (e) => host.logEvent(e) },
+      host: {
+        logEvent: (e) => host.logEvent(e),
+        ensureSession: (channelId, chatId) => host.ensureSession(channelId, chatId),
+        uploadAttachment: (sessionId, input) => host.uploadAttachment(sessionId, input),
+      },
       storageDir,
       // Reconnect — reuse stored creds from storageDir when present, only
       // fall back to QR if storage is empty / invalidated. This is what the

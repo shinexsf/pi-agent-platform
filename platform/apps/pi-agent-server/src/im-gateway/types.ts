@@ -43,7 +43,7 @@ export interface ChatKey {
 }
 
 /** Builtin slash command identifiers (kept server-side, not channel-specific). */
-export type BuiltinCommand = 'help' | 'new' | 'session' | 'model' | 'think' | 'compact';
+export type BuiltinCommand = 'help' | 'new' | 'session' | 'model' | 'think' | 'compact' | 'name' | 'hotkeys';
 
 /** A slash command declared by a channel package (extensible). */
 export interface ChannelCommand {

@@ -47,6 +47,10 @@ export interface QqAdapterOptions {
     /** Optional: persist final appId/appSecret/displayName to the channels_qq
      * row. Called only on successful QR scan. */
     onCredentials?: (creds: { appId: string; appSecret: string; displayName: string }) => void;
+    /** Ensure a session exists for the given chat, returning sessionId. */
+    ensureSession?: (channelId: string, chatId: string) => Promise<string>;
+    /** Upload raw bytes to attachment-store. */
+    uploadAttachment?: (sessionId: string, input: { bytes: Uint8Array; mimeType: string; filename?: string }) => Promise<{ id: string; mimeType: string; sizeBytes: number }>;
   };
   appId: string; // placeholder (empty for fresh QR login)
   appSecret: string; // placeholder
@@ -453,26 +457,76 @@ export class QqAdapter implements ChannelAdapter {
     return this._status;
   }
 
-  private handleC2C(msg: unknown): void {
+  private async handleC2C(msg: unknown): Promise<void> {
     if (!this.msgHandler) return;
     const m = msg as {
       author?: { user_openid?: string };
       content?: string;
       timestamp?: string;
-      attachments?: Array<{ content_type: string; url: string }>;
+      attachments?: Array<{ content_type: string; url: string; filename?: string; size?: number }>;
     };
     const openId = m.author?.user_openid ?? '';
+    let text = m.content ?? '';
+    // DIAG: log raw message shape
+    console.warn(`[QQ-DIAG] handleC2C: content=${JSON.stringify(m.content)}, attachments=${m.attachments?.length ?? 0}, text=${JSON.stringify(text)}`);
+
+    // Download and persist attachments → build placeholder text
+    if (m.attachments && m.attachments.length > 0
+        && this.opts.host.uploadAttachment && this.opts.host.ensureSession) {
+      try {
+        // Ensure session exists so we have a valid sessionId for uploadAttachment
+        const sessionId = await this.opts.host.ensureSession(this._configId, openId);
+        console.warn(`[QQ-DIAG] ensureSession returned: ${sessionId}`);
+        for (const att of m.attachments) {
+          try {
+            const resp = await fetch(att.url);
+            if (!resp.ok) {
+              this.opts.host.logEvent({
+                channelId: this._configId,
+                channelType: 'qq',
+                kind: 'warn',
+                message: `attachment download failed: ${resp.status} ${att.url}`,
+              });
+              continue;
+            }
+            const buf = await resp.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const mimeType = att.content_type === 'image' ? 'image/jpeg' : att.content_type;
+            const result = await this.opts.host.uploadAttachment(sessionId, {
+              bytes,
+              mimeType,
+              filename: att.filename ?? att.url.split('/').pop(),
+            });
+            text += ` [pi-attachment:${result.id}]`;
+          } catch (err) {
+            this.opts.host.logEvent({
+              channelId: this._configId,
+              channelType: 'qq',
+              kind: 'warn',
+              message: `attachment processing failed: ${(err as Error).message}`,
+            });
+          }
+        }
+      } catch (err) {
+        this.opts.host.logEvent({
+          channelId: this._configId,
+          channelType: 'qq',
+          kind: 'warn',
+          message: `session creation failed for attachments: ${(err as Error).message}`,
+        });
+      }
+    }
+
+    // DIAG: log final text before sending to routing
+    console.warn(`[QQ-DIAG] msgHandler: text=${JSON.stringify(text)}, openId=${openId}`);
     this.msgHandler({
       channelId: this._configId,
       channelType: 'qq',
       chatId: openId,
       isGroup: false,
       senderId: openId,
-      text: m.content ?? '',
+      text,
       timestamp: m.timestamp ?? new Date().toISOString(),
-      images: m.attachments
-        ?.filter((a) => a.content_type === 'image')
-        .map((a) => ({ localPath: a.url, mimeType: 'image/jpeg' })),
     });
   }
 

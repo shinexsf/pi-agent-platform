@@ -70,6 +70,8 @@ function makeTestHost() {
     setCurrentSession: () => undefined,
     getCurrentSession: () => null,
     seedSessionFromConfig: () => undefined,
+    ensureSession: async () => 'test-session',
+    uploadAttachment: async () => ({ id: 'att_test', mimeType: 'image/png', sizeBytes: 0 }),
     prompt: async () => undefined,
     killWorker: async () => undefined,
     handleInbound: async () => undefined,

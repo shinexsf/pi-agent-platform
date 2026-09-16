@@ -163,8 +163,21 @@ export interface ChannelHost {
 
   // ── Worker pool access ───────────────────────────────────────────────────────
 
+  /** Ensure a session exists for the given chat, creating one if needed.
+   * Handles the three-state lifecycle: alive worker → reuse, dead worker → respawn,
+   * no session → create. Returns the sessionId. */
+  ensureSession(channelId: ChannelId, chatId: ExternalChatId): Promise<SessionId>;
+
+  /** Upload an attachment (raw bytes) to the attachment-store. Returns the
+   * persisted attachment metadata. Supports all MIME types. */
+  uploadAttachment(sessionId: SessionId, input: {
+    bytes: Uint8Array;
+    mimeType: string;
+    filename?: string;
+  }): Promise<{ id: string; mimeType: string; sizeBytes: number }>;
+
   /** Prompt a worker with a message (creates session if needed). */
-  prompt(sessionId: SessionId, text: string, images?: Array<{ localPath: string; mimeType: string }>): Promise<void>;
+  prompt(sessionId: SessionId, text: string): Promise<void>;
 
   /** Kill a worker (reason for logging). */
   killWorker(sessionId: SessionId, reason: string): Promise<void>;

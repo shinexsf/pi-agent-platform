@@ -14,7 +14,6 @@ import type { WorkerPool } from '../worker-pool.js';
 import {
   AttachmentStore,
   MAX_ATTACHMENT_BYTES,
-  SUPPORTED_MIME_TYPES_READONLY,
   sha256Hex,
 } from '../services/attachment-store.js';
 
@@ -110,12 +109,11 @@ export function createAttachmentsRouter(deps: AttachmentsRouterDeps) {
     }
 
     // Magic-byte sniff — overrides client claim, the truth is what the bytes actually are.
+    // HTTP upload endpoint restricts to images (IDE only pastes images).
+    // IM adapter goes through host.uploadAttachment() → upsert() directly.
     const sniffedMime = detectImageMime(bytes);
     if (!sniffedMime) {
       return c.json({ error: 'Unsupported media type (not a recognized image format)', code: 'unsupported_mime' }, 415);
-    }
-    if (!SUPPORTED_MIME_TYPES_READONLY.has(sniffedMime)) {
-      return c.json({ error: 'Unsupported media type', code: 'unsupported_mime' }, 415);
     }
 
     const mimeType = sniffedMime;

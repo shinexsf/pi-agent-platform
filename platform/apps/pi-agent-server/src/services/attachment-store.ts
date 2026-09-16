@@ -1,5 +1,5 @@
 /**
- * AttachmentStore — server-side image attachment storage for user-pasted images.
+ * AttachmentStore — server-side attachment storage for user-pasted files.
  *
  * Storage layout: <attachmentsDir>/<sessionId>/<sha>.<ext>
  *   - sha = lowercase hex of sha256 over the raw bytes
@@ -7,14 +7,18 @@
  *   - files written under <attachmentsDir>/<sessionId>/ so a session delete
  *     can `rm -rf` a whole subdir to reclaim everything atomically.
  *
+ * Supports ALL mime types (no whitelist). MIME validation is the consumer's
+ * responsibility (e.g. HTTP upload endpoint restricts to images; IM adapter
+ * accepts anything).
+ *
  * NOTE: read-tool images do NOT flow through this store. They are owned by
  * the source filesystem path the model chose to read. See the spec at
  * `openspec/changes/image-attachments-via-server/specs/session-deletion-cascade-attachments`
  * for the boundary rules.
  */
 
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile, unlink, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, writeFile, unlink, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/init.js';
@@ -25,25 +29,38 @@ import { attachments, type attachments as attachmentsTable } from '../db/schema.
  *  Client-side upload MUST pre-check against this same value (see tasks 10.7a/10.7b). */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
-/** Supported mimeType whitelist. Anything else → unsupported_mime rejection.
- *  HD formats (HEIC etc.) are auto-converted to PNG by pi SDK's processImage at
- *  prompt-time, but only when the original bytes are valid + already-supplied. */
-const SUPPORTED_MIME_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-]);
-
-/** Map MIME → file extension. lowercase mime bytes drive ext. */
+/** Map MIME → file extension. */
 function extForMimeType(mimeType: string): string {
   switch (mimeType) {
     case 'image/png': return 'png';
     case 'image/jpeg': return 'jpg';
     case 'image/gif': return 'gif';
     case 'image/webp': return 'webp';
+    case 'application/pdf': return 'pdf';
+    case 'text/plain': return 'txt';
+    case 'text/markdown': return 'md';
+    case 'text/csv': return 'csv';
+    case 'text/html': return 'html';
+    case 'text/css': return 'css';
+    case 'text/javascript': return 'js';
+    case 'application/json': return 'json';
+    case 'application/xml': return 'xml';
+    case 'application/zip': return 'zip';
+    case 'audio/mpeg': return 'mp3';
+    case 'video/mp4': return 'mp4';
     default: return 'bin';
   }
+}
+
+/** Extract extension from original filename, or derive from mimeType. */
+function resolveExt(mimeType: string, originalFilename?: string): string {
+  if (originalFilename) {
+    const dot = originalFilename.lastIndexOf('.');
+    if (dot > 0 && dot < originalFilename.length - 1) {
+      return originalFilename.slice(dot + 1).toLowerCase();
+    }
+  }
+  return extForMimeType(mimeType);
 }
 
 /** Lowercase SHA-256 hex digest of bytes. */
@@ -100,6 +117,8 @@ export interface AttachmentLookupForPromptResult {
   id: string;
   sha: string;
   mimeType: string;
+  originalFilename: string;
+  sizeBytes: number;
   /** Absolute path on disk. Provided for the worker IPC contract. */
   path: string;
 }
@@ -122,9 +141,10 @@ export class AttachmentStore {
     sessionId: string;
     bytes: Uint8Array;
     mimeType: string;
-    originalFilename: string;
+    originalFilename?: string;
   }): Promise<AttachmentWriteResult> {
-    const { sessionId, bytes, mimeType, originalFilename } = input;
+    const { sessionId, bytes, mimeType } = input;
+    const originalFilename = input.originalFilename ?? 'unknown';
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
       const err = new Error('File too large');
       (err as Error & { code: string }).code = 'file_too_large';
@@ -132,9 +152,11 @@ export class AttachmentStore {
       throw err;
     }
     const sha = sha256Hex(bytes);
-    const ext = extForMimeType(mimeType);
+    const ext = resolveExt(mimeType, originalFilename);
     const sessionDir = path.join(this.attachmentsDir, sessionId);
-    const filePath = path.join(sessionDir, `${sha}.${ext}`);
+    const uuid = randomUUID();
+    const diskFilename = `${uuid}.${ext}`;
+    const filePath = path.join(sessionDir, diskFilename);
 
     // Fast path: row + file already present → return existing.
     const existing = this.db
@@ -152,7 +174,8 @@ export class AttachmentStore {
     await mkdir(sessionDir, { recursive: true });
     await writeFile(filePath, bytes);
 
-    const id = `att_${attIdFromSha(sha)}`;
+    // Use first 12 chars of UUID as compact attachment ID (att_xxxxxxxxxxxx)
+    const id = `att_${uuid.replace(/-/g, '').slice(0, 12)}`;
     const createdAt = Date.now();
     const sizeBytes = bytes.byteLength;
 
@@ -164,6 +187,7 @@ export class AttachmentStore {
         id,
         mimeType,
         originalFilename,
+        filename: diskFilename,
         sizeBytes,
         createdAt,
       })
@@ -194,22 +218,52 @@ export class AttachmentStore {
    * Caller (route) is responsible for distinguishing "missing ids" vs "found ids"
    * (input ids - returned ids = missingIds for 400 response).
    */
-  lookupForPrompt(sessionId: string, ids: string[]): AttachmentLookupForPromptResult[] {
+  async lookupForPrompt(sessionId: string, ids: string[]): Promise<AttachmentLookupForPromptResult[]> {
     if (ids.length === 0) return [];
     const rows = this.db
       .select()
       .from(attachments)
       .where(and(eq(attachments.sessionId, sessionId), inArray(attachments.id, ids)))
       .all();
-    return rows.map((r) => {
-      const ext = extForMimeType(r.mimeType);
-      return {
+    const results: AttachmentLookupForPromptResult[] = [];
+    // Batch-load file listings per session directory (most IDs share one session)
+    const sessionDirs = new Map<string, string[]>();
+    const getFiles = async (sessionId: string): Promise<string[]> => {
+      if (sessionDirs.has(sessionId)) return sessionDirs.get(sessionId)!;
+      try {
+        const files = await readdir(path.join(this.attachmentsDir, sessionId));
+        sessionDirs.set(sessionId, files);
+        return files;
+      } catch {
+        sessionDirs.set(sessionId, []);
+        return [];
+      }
+    };
+    for (const r of rows) {
+      const sessionDir = path.join(this.attachmentsDir, r.sessionId);
+      const files = await getFiles(r.sessionId);
+      // Find file by: exact filename match → SHA prefix match → fallback
+      let diskFile = '';
+      const hasFilename = !!(r.filename && files.includes(r.filename));
+      console.warn(`[ATT-DIAG] id=${r.id} filename=${r.filename} files=${JSON.stringify(files)} hasFilename=${hasFilename}`);
+      if (hasFilename) {
+        diskFile = r.filename!;
+      } else {
+        diskFile = files.find((f) => f.startsWith(r.sha)) ?? '';
+      }
+      const diskPath = diskFile
+        ? path.join(sessionDir, diskFile)
+        : path.join(sessionDir, `${r.sha}.${resolveExt(r.mimeType, r.originalFilename)}`);
+      results.push({
         id: r.id,
         sha: r.sha,
         mimeType: r.mimeType,
-        path: path.join(this.attachmentsDir, r.sessionId, `${r.sha}.${ext}`),
-      };
-    });
+        originalFilename: r.originalFilename,
+        sizeBytes: r.sizeBytes,
+        path: diskPath,
+      });
+    }
+    return results;
   }
 
   /**
@@ -240,10 +294,6 @@ export class AttachmentStore {
     return { rowsDeleted: result.changes };
   }
 
-  /** True if this mimeType is supported for upload. */
-  static isSupportedMimeType(mime: string): boolean {
-    return SUPPORTED_MIME_TYPES.has(mime);
-  }
 }
 
 function rowToDTO(row: typeof attachmentsTable.$inferSelect): AttachmentRow {
@@ -258,8 +308,6 @@ function rowToDTO(row: typeof attachmentsTable.$inferSelect): AttachmentRow {
   };
 }
 
-/** Helper used by routes/attachments to map unsupported mimeTypes to a 415. */
-export const SUPPORTED_MIME_TYPES_READONLY = SUPPORTED_MIME_TYPES;
 export { extForMimeType };
 
 /** Quick test-only utility: remove a single file (used in tests + internal cleanup). */

@@ -17,8 +17,9 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types';
-import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';
 import { listAvailableModels } from '../model-registry.js';
+import { spawnPlaceholder, spawnAndCreate } from '../im-gateway/session-bridge.js';
+import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
 
 export function createSessionsRouter(
@@ -113,7 +114,7 @@ export function createSessionsRouter(
       sessionId: id,
       hasRow: !!session,
       session,
-      commands: [],
+      commands: PLACEHOLDER_BUILTIN_COMMANDS,
       models: await listAvailableModels(),
       currentModel: computeCurrentModel(session, null),
       currentThinkingLevel: computeCurrentThinkingLevel(session, null),
@@ -372,38 +373,20 @@ export function createSessionsRouter(
       await spawnAndCreate(id, agent, sessionRepo, workerPool);
     }
 
-    // Resolve attachment placeholders: extract `[pi-attachment:att_<id>]` markers
-    // from message text, look them up in `attachments` table, forward to worker
-    // via the second arg's `attachments` field. Read-tool images do NOT enter
-    // here — they're owned by the source filesystem path the model read.
-    // See proposal.md §'Concept boundary' for the user-attachment vs read-tool
-    // distinction that this branch enforces.
-    const messageText: string = typeof body.message === 'string' ? body.message : '';
-    const referencedIds = Array.from(
-      new Set(
-        [...messageText.matchAll(/\[pi-attachment:(att_[a-z2-7]{13})\]/g)].map((m) => m[1] as string),
-      ),
-    );
-    let attachmentMeta: Array<{ id: string; sha: string; mimeType: string }> | undefined;
-    if (referencedIds.length > 0) {
-      const found = attachmentStore.lookupForPrompt(id, referencedIds);
-      const foundIds = new Set(found.map((r) => r.id));
-      const missing = referencedIds.filter((rid) => !foundIds.has(rid));
-      if (missing.length > 0) {
-        return c.json(
-          { error: 'Unknown attachment id', code: 'unknown_attachment', missingIds: missing },
-          400,
-        );
-      }
-      attachmentMeta = found.map((r) => ({ id: r.id, sha: r.sha, mimeType: r.mimeType }));
+    // Use prompt-resolver to handle slash commands, attachment placeholders,
+    // agent config loading, and streamingBehavior — shared with IM path.
+    const resolved = await resolvePrompt(id, body.message, {
+      streamingBehavior: body.streamingBehavior,
+      agentId: body.agentId,
+    }, { sessionRepo, agentRepo, attachmentStore });
+
+    if (resolved.intercepted) {
+      return c.json({ ok: true, result: resolved.intercepted });
     }
 
     await workerPool.call(id, 'prompt', [
-      body.message,
-      {
-        streamingBehavior: body.streamingBehavior,
-        attachments: attachmentMeta,
-      },
+      resolved.message,
+      resolved.promptOptions,
     ]);
     sessionRepo.update(id, {});
 
@@ -711,7 +694,7 @@ export function createSessionsRouter(
  */
 const PLACEHOLDER_BUILTIN_COMMANDS = [
   { name: 'model', description: 'Select model', argumentHint: '<provider/model>', source: 'builtin' },
-  { name: 'thinking', description: 'Set thinking level', argumentHint: '<level>', source: 'builtin' },
+  { name: 'think', description: 'Set thinking level', argumentHint: '<level>', source: 'builtin' },
   { name: 'name', description: 'Set session display name', argumentHint: '<name>', source: 'builtin' },
   { name: 'session', description: 'Show session info and stats', source: 'builtin' },
   { name: 'compact', description: 'Manually compact the session context', source: 'builtin' },
@@ -751,131 +734,7 @@ function computeCurrentThinkingLevel(
 }
 
 /**
- * Fetch the worker's system prompt over IPC and cache it on the WorkerEntry so
- * /:id/context can return the full systemPrompt text without re-fetching 10K+ chars
- * on every context call. Non-fatal: if it fails, /:id/context just omits the field.
- */
-async function cacheSystemPrompt(
-  sessionId: string,
-  workerPool: WorkerPool,
-): Promise<void> {
-  try {
-    const sp = await workerPool.call<{ text: string; length: number; source: 'override' | 'default' }>(
-      sessionId,
-      'getSystemPrompt',
-      [],
-    );
-    if (sp) workerPool.setSystemPrompt(sessionId, sp);
-  } catch (err) {
-    console.warn(`[sessions] cacheSystemPrompt failed for ${sessionId}:`, err);
-  }
-}
-
-/**
  * Builtin slash commands handled server-side by POST /:id/command.
  * Keep in sync with PLACEHOLDER_BUILTIN_COMMANDS above.
  */
-const BUILTIN_SERVER_COMMANDS = ['model', 'thinking', 'name', 'session', 'compact', 'hotkeys']
-
-async function spawnPlaceholder(
-  sessionId: string,
-  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; config?: AgentConfig },
-  workerPool: WorkerPool,
-) {
-  await workerPool.spawn(sessionId, agent.workspacePath);
-  const runtimeConfig: RuntimeConfig = {
-    workspacePath: agent.workspacePath,
-    model: agent.model,
-    thinkingLevel: agent.thinkingLevel,
-    config: agent.config,
-  };
-  // existingSessionPath is always undefined for placeholders — no row exists yet.
-  const result = await workerPool.call<{
-    piSessionPath: string;
-    model?: { provider: string; modelId: string } | null;
-    thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
-  }>(sessionId, 'createSession', [runtimeConfig, sessionId, undefined]);
-  // Cache piSessionPath on the entry so a subsequent spawnAndCreate on this still-alive
-  // placeholder worker can persist the row without re-creating the session.
-  workerPool.setSessionPath(sessionId, result.piSessionPath);
-  // Cache the actual model the worker will use (drives /:id/context's currentModel
-  // for placeholder sessions that don't yet have a DB row).
-  workerPool.setModel(sessionId, result.model ?? null);
-  // Same for thinkingLevel — placeholder sessions also need this immediately.
-  workerPool.setThinkingLevel(sessionId, result.thinkingLevel ?? null);
-  // Cache the system prompt for /:id/context (avoid re-fetching 10K+ chars per call).
-  await cacheSystemPrompt(sessionId, workerPool);
-  // NOTE: deliberately NOT calling markRowWritten. The worker stays `hasRow=false`
-  // so it participates in placeholder timeout + LRU eviction.
-}
-
-async function spawnAndCreate(
-  sessionId: string,
-  agent: { id: string; workspacePath: string; model: string; thinkingLevel?: string; config?: AgentConfig },
-  sessionRepo: SessionRepo,
-  workerPool: WorkerPool,
-  existingSessionPath?: string,
-) {
-  // If a worker is already alive (placeholder scenario from POST /agents/:agentId),
-  // reuse it instead of spawning again — workerPool.spawn() throws 'worker already exists'.
-  let piSessionPath: string;
-  let actualModelOverride: string | undefined;
-  let actualThinkingLevelOverride: 'off' | 'low' | 'medium' | 'high' | undefined;
-  if (workerPool.has(sessionId)) {
-    const entry = workerPool.get(sessionId);
-    if (!entry?.piSessionPath) {
-      // Defensive: shouldn't happen if spawnPlaceholder always sets the path.
-      throw new Error(`placeholder worker ${sessionId} has no cached piSessionPath`);
-    }
-    piSessionPath = entry.piSessionPath;
-    // Reuse cached model from entry — worker was already initialized by spawnPlaceholder.
-    actualModelOverride = entry.model ? `${entry.model.provider}/${entry.model.modelId}` : undefined;
-    // Reuse cached thinkingLevel too — same reason.
-    actualThinkingLevelOverride = entry.thinkingLevel ?? undefined;
-  } else {
-    await workerPool.spawn(sessionId, agent.workspacePath);
-    const runtimeConfig: RuntimeConfig = {
-      workspacePath: agent.workspacePath,
-      model: agent.model,
-      thinkingLevel: agent.thinkingLevel,
-      config: agent.config,
-    };
-    const result = (await workerPool.call<{
-      sessionHandle: string;
-      piSessionPath: string;
-      model?: { provider: string; modelId: string } | null;
-      thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
-    }>(sessionId, 'createSession', [runtimeConfig, sessionId, existingSessionPath]));
-    piSessionPath = result.piSessionPath;
-    actualModelOverride = result.model ? `${result.model.provider}/${result.model.modelId}` : undefined;
-    actualThinkingLevelOverride = result.thinkingLevel ?? undefined;
-    workerPool.setSessionPath(sessionId, piSessionPath);
-    workerPool.setModel(sessionId, result.model ?? null);
-    workerPool.setThinkingLevel(sessionId, result.thinkingLevel ?? null);
-    // Cache the system prompt for /:id/context (avoid re-fetching 10K+ chars per call).
-    await cacheSystemPrompt(sessionId, workerPool);
-  }
-
-  // Persist the model the worker will actually use. When the worker was just spawned
-  // (actualModelOverride set above), use it; otherwise (worker reused) fall back to agent.model.
-  const actualModel = actualModelOverride ?? agent.model;
-
-  // Update existing placeholder row (or create new) with worker output.
-  const existing = sessionRepo.get(sessionId);
-  const created = existing
-    ? sessionRepo.update(sessionId, { model: actualModel }) ?? sessionRepo.get(sessionId)
-    : sessionRepo.createFromAgent({
-        sessionId,
-        agentId: agent.id,
-        piSessionPath: piSessionPath,
-        modelOverride: actualModel,
-      });
-
-  if (!created) {
-    await workerPool.kill(sessionId, 'create-failed');
-    return undefined;
-  }
-  // Mark the worker as active so it's excluded from placeholder timeout + LRU eviction.
-  workerPool.markRowWritten(sessionId);
-  return created;
-}
+const BUILTIN_SERVER_COMMANDS = ['model', 'think', 'name', 'session', 'compact', 'hotkeys']

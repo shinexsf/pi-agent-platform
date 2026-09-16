@@ -41,6 +41,8 @@ export interface ImGatewayDeps {
   workerPool: WorkerPool;
   /** Raw better-sqlite3 handle for executeMigration(). */
   rawDb: Database.Database;
+  /** Attachment store for IM adapter uploads. */
+  attachmentStore: import('../services/attachment-store.js').AttachmentStore;
 }
 
 export interface ImGatewayHandle {
@@ -63,12 +65,10 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
   // 1. Build host
   const { host, helpers } = createChannelHostImpl({
     agentExists: (id) => !!deps.agentRepo.get(id),
-    promptWorker: async (sessionId, text, images) => {
-      await deps.workerPool.call(sessionId, 'prompt', [
-        text,
-        images ?? [],
-      ]);
+    promptWorker: async (sessionId, text) => {
+      await deps.workerPool.call(sessionId, 'prompt', [text]);
     },
+    attachmentStore: deps.attachmentStore,
     killWorker: async (sessionId, reason) => {
       await deps.workerPool.kill(sessionId, reason);
     },

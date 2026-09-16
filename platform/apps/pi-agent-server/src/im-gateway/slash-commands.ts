@@ -1,7 +1,7 @@
 /**
- * Builtin slash commands for IM gateway.
+ * Builtin slash commands for IM gateway + HTTP command endpoint.
  *
- * 6 commands: /help /new /session /model /think /compact
+ * 8 commands: /help /new /session /model /think /compact /name /hotkeys
  * Each returns either a string response (sent back to user via adapter.sendText)
  * or null if the command requires routing to the worker (e.g. /compact → worker).
  *
@@ -20,15 +20,19 @@ export const BUILTIN_COMMAND_NAMES: BuiltinCommand[] = [
   'model',
   'think',
   'compact',
+  'name',
+  'hotkeys',
 ];
 
 const HELP_TEXT = `可用命令:
-/help   显示此帮助
-/new    创建新会话(旧会话保留)
+/help    显示此帮助
+/new     创建新会话(旧会话保留)
 /session 显示当前 session 信息
-/model  切换模型(下一条消息生效)
-/think  切换思考深度(off/low/medium/high)
+/model   切换模型(下一条消息生效)
+/think   切换思考深度(off/low/medium/high)
 /compact 压缩当前 session 历史
+/name    重命名当前 session
+/hotkeys 显示快捷键说明
 
 任何其他文字将作为 prompt 发送给 agent。`;
 
@@ -52,6 +56,8 @@ interface BuiltinContext {
     compact?: () => Promise<void>;
     /** Start a brand-new session for the same chat (old session row preserved). */
     startNewSession: () => Promise<{ sessionId: SessionId }>;
+    /** Rename the current session (1-200 chars). */
+    setTitle?: (title: string) => Promise<void>;
   };
 }
 
@@ -66,7 +72,10 @@ export async function runBuiltinCommand(name: string, ctx: BuiltinContext): Prom
   }
   logger.debug({ name: normalized, sessionId: ctx.sessionId, args: ctx.args }, 'builtin command');
 
-  switch (normalized) {
+  // Alias: /thinking → /think (HTTP compat)
+  const aliased = normalized === 'thinking' ? 'think' : normalized;
+
+  switch (aliased) {
     case 'help':
       return HELP_TEXT;
     case 'new':
@@ -79,6 +88,10 @@ export async function runBuiltinCommand(name: string, ctx: BuiltinContext): Prom
       return await handleThink(ctx);
     case 'compact':
       return await handleCompact(ctx);
+    case 'name':
+      return await handleName(ctx);
+    case 'hotkeys':
+      return HOTKEYS_TEXT;
     default:
       return null;
   }
@@ -133,3 +146,27 @@ async function handleCompact(ctx: BuiltinContext): Promise<string> {
   await ctx.ctx.compact();
   return '已请求 compact';
 }
+
+async function handleName(ctx: BuiltinContext): Promise<string> {
+  const s = await ctx.ctx.getSessionSummary();
+  if (!ctx.args) {
+    return `当前标题: ${s.title ?? '(未命名)'}\n\n用法: /name <标题>`;
+  }
+  if (ctx.args.length > 200) {
+    return '标题过长（最多 200 字符）';
+  }
+  if (!ctx.ctx.setTitle) {
+    return '当前 channel 不支持重命名';
+  }
+  await ctx.ctx.setTitle(ctx.args);
+  return `Session 已重命名为 \`${ctx.args}\``;
+}
+
+const HOTKEYS_TEXT = [
+  '**键盘快捷键**',
+  '- `Enter` — 发送消息',
+  '- `Shift+Enter` — 换行',
+  '- `/` — 打开斜杠命令菜单',
+  '- `@` — 引用文件',
+  '- `Esc` — 关闭菜单',
+].join('\n');

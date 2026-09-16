@@ -43,9 +43,11 @@ interface Deps {
   /** Resolve agent by id (channel package needs this to validate defaultAgentId). */
   agentExists: (agentId: string) => boolean;
   /** Worker prompt dispatch. */
-  promptWorker: (sessionId: SessionId, text: string, images?: Array<{ localPath: string; mimeType: string }>) => Promise<void>;
+  promptWorker: (sessionId: SessionId, text: string) => Promise<void>;
   /** Worker kill. */
   killWorker: (sessionId: SessionId, reason: string) => Promise<void>;
+  /** Attachment store for uploadAttachment. */
+  attachmentStore: import('../services/attachment-store.js').AttachmentStore;
   /** Run a builtin slash command. */
   runBuiltin: (name: string, sessionId: SessionId, args: string) => Promise<string | null>;
   /** Inbound message routing: resolve session, spawn/reuse worker, stream reply. */
@@ -193,6 +195,7 @@ export function createChannelHostImpl(deps: Deps) {
     },
 
     seedSessionFromConfig(channelId: ChannelId, sessionId: SessionId, chatId?: ExternalChatId, agentId?: AgentId): void {
+      console.warn(`[SESSION-DIAG] seedSessionFromConfig: channelId=${channelId} sessionId=${sessionId} chatId=${chatId ?? 'UNDEF'}`);
       // Find channel config to extract defaultAgentId when not provided
       const cfg = this.getChannelConfig(channelId);
       const finalAgentId = agentId ?? cfg?.defaultAgentId ?? '';
@@ -210,12 +213,108 @@ export function createChannelHostImpl(deps: Deps) {
       });
     },
 
+    async ensureSession(channelId: ChannelId, chatId: ExternalChatId): Promise<SessionId> {
+      console.warn(`[SESSION-DIAG] ensureSession called: channelId=${channelId} chatId=${chatId}`);
+      const existingId = mapGetSessionIdByChat(channelId, chatId);
+
+      // State A — alive worker, reuse
+      if (existingId && deps.workerPool.has(existingId)) {
+        return existingId;
+      }
+
+      const cfg = this.getChannelConfig(channelId);
+      if (!cfg || !cfg.defaultAgentId) {
+        throw new Error(`ensureSession: channel ${channelId} not found or has no defaultAgentId`);
+      }
+      const agent = deps.agentRepo.get(cfg.defaultAgentId);
+      if (!agent) {
+        throw new Error(`ensureSession: agent ${cfg.defaultAgentId} not found`);
+      }
+
+      // State B — session row exists, worker dead → respawn
+      if (existingId) {
+        const existing = deps.sessionRepo.get(existingId);
+        if (existing) {
+          const { spawnAndCreate } = await import('./session-bridge.js');
+          const result = await spawnAndCreate(
+            existingId,
+            agent,
+            deps.sessionRepo,
+            deps.workerPool,
+            existing.piSessionPath,
+          );
+          if (!result) throw new Error(`ensureSession: respawn failed for ${existingId}`);
+          setSessionMeta(existingId, {
+            agentId: agent.id,
+            channelId,
+            chatId,
+            lastActiveAt: Date.now(),
+          });
+          return existingId;
+        }
+      }
+
+      // State B2 — post-restart fallback: map empty but channel config has currentSessionId
+      // (private chat only: one bot → one user, so currentSessionId is unambiguous)
+      console.warn(`[SESSION-DIAG] B2 check: cfg.currentSessionId=${cfg.currentSessionId ?? 'UNDEF'}`);
+      if (cfg.currentSessionId) {
+        const savedSession = deps.sessionRepo.get(cfg.currentSessionId);
+        if (savedSession) {
+          const { spawnAndCreate } = await import('./session-bridge.js');
+          const result = await spawnAndCreate(
+            cfg.currentSessionId,
+            agent,
+            deps.sessionRepo,
+            deps.workerPool,
+            savedSession.piSessionPath,
+          );
+          if (result) {
+            setSessionMeta(cfg.currentSessionId, {
+              agentId: agent.id,
+              channelId,
+              chatId,
+              lastActiveAt: Date.now(),
+            });
+            logger.info({ channelId, chatId, sessionId: cfg.currentSessionId }, 'ensureSession: restored from channel config');
+            return cfg.currentSessionId;
+          }
+        }
+      }
+
+      // State C — new session
+      const { spawnPlaceholder, spawnAndCreate } = await import('./session-bridge.js');
+      const newSessionId = deps.sessionRepo.newSessionId();
+      await spawnPlaceholder(newSessionId, agent, deps.workerPool);
+      const result = await spawnAndCreate(newSessionId, agent, deps.sessionRepo, deps.workerPool);
+      if (!result) throw new Error(`ensureSession: create failed for ${newSessionId}`);
+      this.setCurrentSession(channelId, chatId, newSessionId);
+      setSessionMeta(newSessionId, {
+        agentId: agent.id,
+        channelId,
+        chatId,
+        lastActiveAt: Date.now(),
+      });
+      return newSessionId;
+    },
+
+    async uploadAttachment(
+      sessionId: SessionId,
+      input: { bytes: Uint8Array; mimeType: string; filename?: string },
+    ): Promise<{ id: string; mimeType: string; sizeBytes: number }> {
+      const result = await deps.attachmentStore.upsert({
+        sessionId,
+        bytes: input.bytes,
+        mimeType: input.mimeType,
+        originalFilename: input.filename,
+      });
+      return { id: result.row.id, mimeType: result.row.mimeType, sizeBytes: result.row.sizeBytes };
+    },
+
     async prompt(
       sessionId: SessionId,
       text: string,
-      images?: Array<{ localPath: string; mimeType: string }>,
     ): Promise<void> {
-      await deps.promptWorker(sessionId, text, images);
+      await deps.promptWorker(sessionId, text);
     },
 
     async killWorker(sessionId: SessionId, reason: string): Promise<void> {
@@ -238,6 +337,7 @@ export function createChannelHostImpl(deps: Deps) {
         agentRepo: deps.agentRepo,
         sessionRepo: deps.sessionRepo,
         workerPool: deps.workerPool,
+        attachmentStore: deps.attachmentStore,
         host: this,
         getChannelConfig: (channelId) => this.getChannelConfig(channelId),
         setChannelCurrentSession: (channelId, chatId, sessionId) => {
