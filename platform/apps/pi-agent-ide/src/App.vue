@@ -91,7 +91,7 @@ onUnmounted(() => {
       @abort="sse.abort"
       @dispatch-command="(name: string, args: string) => sse.dispatchCommand(name, args)"
       @set-model="(p: string, m: string) => sse.setModel(p, m)"
-      @set-thinking-level="(l: 'off' | 'low' | 'medium' | 'high') => sse.setThinkingLevel(l)"
+      @set-thinking-level="(l: string) => sse.setThinkingLevel(l)"
     />
   </div>
 </template>

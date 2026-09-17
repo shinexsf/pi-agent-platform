@@ -11,20 +11,26 @@
  *   - Popup rendered via <Teleport to="body"> so it's not clipped by the
  *     input-wrapper's overflow:hidden.
  */
-import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useSSE } from '../composables/useSSE'
+import type { ModelInfo } from '@pi-agent-platform/api-types'
 
 const props = defineProps<{
   sessionId: string
 }>()
 
 const emit = defineEmits<{
-  select: [level: 'off' | 'low' | 'medium' | 'high']
+  select: [level: string]
 }>()
 
-// Subscribe to context.currentThinkingLevel (works for both placeholder + active sessions).
+// All possible thinking levels from pi SDK
+const ALL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+// Subscribe ONLY to currentThinkingLevel via registerContextHandler (single handler per key).
+// models and currentModel are read directly from contextCache to avoid overwriting
+// ModelSelector's handlers (contextHandlers Map is keyed by field name — one handler per key).
 const sse = useSSE({ sessionId: props.sessionId })
-const current = ref<'off' | 'low' | 'medium' | 'high' | null>(null)
+const current = ref<string | null>(null)
 let unsubscribe: (() => void) | null = null
 
 onMounted(() => {
@@ -38,12 +44,32 @@ onUnmounted(() => {
   unsubscribe = null
 })
 
+// Compute available levels for current model — read directly from contextCache
+// to avoid overwriting ModelSelector's 'models'/'currentModel' handlers.
+const availableLevels = computed(() => {
+  const ctx = sse.contextCache.value
+  const currentModel = ctx?.currentModel ?? null
+  const models: ModelInfo[] = ctx?.models ?? []
+
+  if (!currentModel) {
+    return ['off', 'low', 'medium', 'high']
+  }
+
+  const model = models.find(
+    m => m.provider === currentModel.provider && m.modelId === currentModel.modelId,
+  )
+
+  if (!model?.thinkingLevelMap) {
+    return ['off', 'low', 'medium', 'high']
+  }
+
+  return ALL_LEVELS.filter(l => model.thinkingLevelMap![l] !== null)
+})
+
 const open = ref(false)
 const triggerEl = ref<HTMLElement | null>(null)
 const panelEl = ref<HTMLElement | null>(null)
 const panelStyle = ref<Record<string, string>>({})
-
-const LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 function repositionPanel() {
   if (!triggerEl.value) return
@@ -65,7 +91,7 @@ async function toggle() {
   }
 }
 
-function pick(l: typeof LEVELS[number]) {
+function pick(l: string) {
   emit('select', l)
   open.value = false
 }
@@ -125,7 +151,7 @@ onUnmounted(() => {
         @click.stop
       >
         <div
-          v-for="l in LEVELS"
+          v-for="l in availableLevels"
           :key="l"
           class="thinking-item"
           :class="{ 'thinking-current': current === l }"

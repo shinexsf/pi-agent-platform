@@ -26,43 +26,38 @@ const emit = defineEmits<{
 // All possible thinking levels from pi SDK
 const ALL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-// Subscribe to context (currentThinkingLevel, currentModel, models)
+// Subscribe ONLY to currentThinkingLevel via registerContextHandler (single handler per key).
+// models and currentModel are read directly from contextCache to avoid overwriting
+// ModelSelector's handlers (contextHandlers Map is keyed by field name — one handler per key).
 const sse = useSSE({ sessionId: props.sessionId })
 const current = ref<string | null>(null)
-const currentModel = ref<{ provider: string; modelId: string } | null>(null)
-const models = ref<ModelInfo[]>([])
 let unsubscribeCurrent: (() => void) | null = null
-let unsubscribeModel: (() => void) | null = null
-let unsubscribeModels: (() => void) | null = null
 
 onMounted(() => {
   unsubscribeCurrent = sse.registerContextHandler('currentThinkingLevel', (l) => {
     current.value = l ?? null
   })
-  unsubscribeModel = sse.registerContextHandler('currentModel', (m) => {
-    currentModel.value = m ?? null
-  })
-  unsubscribeModels = sse.registerContextHandler('models', (m) => {
-    models.value = m ?? []
-  })
 })
 
 onUnmounted(() => {
   unsubscribeCurrent?.()
-  unsubscribeModel?.()
-  unsubscribeModels?.()
 })
 
-// Compute available levels for current model
+// Compute available levels for current model — read directly from contextCache
+// to avoid overwriting ModelSelector's 'models'/'currentModel' handlers.
 const availableLevels = computed(() => {
-  if (!currentModel.value) {
+  const ctx = sse.contextCache.value
+  const currentModel = ctx?.currentModel ?? null
+  const models: ModelInfo[] = ctx?.models ?? []
+
+  if (!currentModel) {
     // No model selected, show defaults
     return ['off', 'low', 'medium', 'high']
   }
   
   // Find current model in models list
-  const model = models.value.find(
-    m => m.provider === currentModel.value!.provider && m.modelId === currentModel.value!.modelId
+  const model = models.find(
+    m => m.provider === currentModel.provider && m.modelId === currentModel.modelId
   )
   
   if (!model?.thinkingLevelMap) {
