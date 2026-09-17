@@ -1,13 +1,13 @@
 # pi-agent-server ipc
 
-> IPC 协议。master 通过 `child_process` IPC 跟 worker 通信。
+> IPC 协议。master 通过 `child_process` IPC 跟 worker 通信。支持双向 RPC。
 
 ## 设计目标
 
 - ✅ **代码层透明**：master 端像直接调 pi SDK
-- ✅ **零自定义协议**：method 直接是 pi SDK API 名
 - ✅ **零依赖**：不引入 RPC 框架
 - ✅ **类型安全**：复用 pi SDK 类型（`AgentSession`）
+- ✅ **双向 RPC**：worker 可回调 master（sendFileToUser 等工具）
 
 ## 协议格式
 
@@ -20,9 +20,15 @@
 // worker → master
 { kind: 'response', id: number, result?: any, error?: string }
 { kind: 'event', event: any }    // 透传 pi SDK 事件
+{ kind: 'reverse-call', id: number, method: ReverseMethod, args: unknown[] }  // worker → master RPC
+
+// master → worker（响应反向调用）
+{ kind: 'reverse-response', id: number, ok: boolean, result?: any, error?: { message: string } }
 ```
 
-**没有自定义 method 名**——`method` 字段直接是 pi SDK API（`prompt` / `setModel` / `abort` / 等）。
+**master→worker method** 直接是 pi SDK API（`prompt` / `setModel` / `abort` / 等）。
+
+**worker→master method** 是自定义的 `ReverseMethod`（当前仅 `'sendFileToUser'`，可扩展）。
 
 ## Master 端：AgentSessionProxy
 

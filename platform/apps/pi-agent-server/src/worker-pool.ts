@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import type {
   CallRequest,
   CallResponse,
+  ReverseCallRequest,
   WorkerEvent,
   WorkerEventKind,
 } from '@pi-agent-platform/ipc-protocol';
@@ -97,12 +98,16 @@ export interface WorkerEntry {
 
 type PendingListener = { listener: (event: WorkerEvent) => void; attached: boolean };
 
+export type ReverseCallHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
+
 export class WorkerPool extends EventEmitter {
   private workers = new Map<string, WorkerEntry>();
   /** Max concurrent workers. Spawn will LRU-evict a placeholder worker when full. */
   private maxWorkers: number;
   /** Listeners that subscribed before the worker existed; flushed on spawn ready. */
   private pendingListeners = new Map<string, PendingListener[]>();
+  /** Handlers for reverse-call messages from workers (worker → master RPC). */
+  private reverseHandlers = new Map<string, ReverseCallHandler>();
   private nextCallId = 1;
 
   constructor(maxWorkers: number = config.maxWorkers) {
@@ -227,6 +232,13 @@ export class WorkerPool extends EventEmitter {
         } else {
           pending.reject(new Error(res.error.message));
         }
+        return;
+      }
+
+      if (m.kind === 'reverse-call') {
+        const req = msg as ReverseCallRequest;
+        void this.handleReverseCall(sessionId, entry, req);
+        return;
       }
     });
 
@@ -522,6 +534,46 @@ export class WorkerPool extends EventEmitter {
   ): void {
     const entry = this.workers.get(sessionId);
     if (entry) entry.systemPrompt = systemPrompt;
+  }
+
+  // ── Reverse IPC: Worker → Master ────────────────────────────────────────
+
+  /** Register a handler for a reverse-call method from workers. */
+  registerReverseCallHandler(method: string, handler: ReverseCallHandler): void {
+    this.reverseHandlers.set(method, handler);
+  }
+
+  /** Handle a reverse-call request from a worker. Dispatches to registered handler and replies. */
+  private async handleReverseCall(
+    sessionId: string,
+    entry: WorkerEntry,
+    req: ReverseCallRequest,
+  ): Promise<void> {
+    const handler = this.reverseHandlers.get(req.method);
+    if (!handler) {
+      entry.child.send({
+        kind: 'reverse-response',
+        id: req.id,
+        ok: false,
+        error: { message: `Unknown reverse method: ${req.method}` },
+      });
+      return;
+    }
+    try {
+      const result = await handler(sessionId, req.args);
+      entry.child.send({ kind: 'reverse-response', id: req.id, ok: true, result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      process.stderr.write(`[server] reverse-call error method=${req.method} sessionId=${sessionId}: ${msg}\n`);
+      if (stack) process.stderr.write(`${stack}\n`);
+      entry.child.send({
+        kind: 'reverse-response',
+        id: req.id,
+        ok: false,
+        error: { message: msg, stack },
+      });
+    }
   }
 
   /** Find the oldest placeholder worker (`hasRow=false`) and kill it. Returns the killed sessionId, or null if none available. */

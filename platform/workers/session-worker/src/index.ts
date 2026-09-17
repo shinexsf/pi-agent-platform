@@ -16,6 +16,8 @@ import path from 'node:path';
 import type {
   CallRequest,
   CallResponse,
+  ReverseCallRequest,
+  ReverseCallResponse,
   WorkerEvent,
   WorkerMethod,
 } from '@pi-agent-platform/ipc-protocol';
@@ -29,10 +31,31 @@ import type { RuntimeConfig } from '@pi-agent-platform/shared-types';
 // `processImage` in @earendil-works/pi-coding-agent/dist/utils/image-process.ts.
 import { resizeImage, formatDimensionNote } from '@earendil-works/pi-coding-agent';
 import { createSession, PiSessionAdapter } from './session.js';
+import type { CallMasterFn } from './tools.js';
 
 // State
 let currentSession: PiSessionAdapter | null = null;
 let currentHandle: string | null = null;
+
+// ── Reverse IPC: Worker → Master ──────────────────────────────────────────
+const reversePending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+let reverseCallId = 0;
+
+const callMaster: CallMasterFn = (method: string, args: unknown[]): Promise<unknown> => {
+  const id = ++reverseCallId;
+  return new Promise((resolve, reject) => {
+    reversePending.set(id, { resolve, reject });
+    const req: ReverseCallRequest = { kind: 'reverse-call', id, method: method as any, args };
+    process.send!(req);
+    // 30s timeout
+    setTimeout(() => {
+      if (reversePending.has(id)) {
+        reversePending.delete(id);
+        reject(new Error(`reverse call timeout: ${method}`));
+      }
+    }, 30_000);
+  });
+};
 // ---------- emit helper ----------
 function emit(event: Omit<WorkerEvent, 'kind'>): void {
   const wire: WorkerEvent = { kind: 'event', ...event };
@@ -71,7 +94,7 @@ async function dispatch(req: CallRequest): Promise<void> {
       case 'createSession': {
         const [config, sessionId, existingSessionPath] = args as [RuntimeConfig, string, string | undefined];
         console.log(`[worker] received createSession sessionId=${sessionId}`)
-        const { session, handle } = await createSession(config, sessionId, emit, existingSessionPath);
+        const { session, handle } = await createSession(config, sessionId, emit, callMaster, existingSessionPath);
         currentSession = session;
         currentHandle = handle.id;
         console.log(`[worker] session ready sessionId=${sessionId} handle=${handle.id} piSessionPath=${handle.piSessionPath} model=${handle.model ? `${handle.model.provider}/${handle.model.modelId}` : '(default)'}`)
@@ -245,10 +268,23 @@ process.on('message', (msg: unknown) => {
   if (
     msg &&
     typeof msg === 'object' &&
-    'kind' in msg &&
-    (msg as { kind: unknown }).kind === 'call'
+    'kind' in msg
   ) {
-    void dispatch(msg as CallRequest);
+    const m = msg as { kind: unknown };
+    if (m.kind === 'call') {
+      void dispatch(msg as CallRequest);
+    } else if (m.kind === 'reverse-response') {
+      const res = msg as ReverseCallResponse;
+      const pending = reversePending.get(res.id);
+      if (pending) {
+        reversePending.delete(res.id);
+        if (res.ok) {
+          pending.resolve(res.result);
+        } else {
+          pending.reject(new Error(res.error?.message ?? 'reverse call failed'));
+        }
+      }
+    }
   }
 });
 

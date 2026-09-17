@@ -421,20 +421,44 @@ export class QqAdapter implements ChannelAdapter {
 
   async sendImage(target: OutboundTarget, localPath: string, caption?: string): Promise<string> {
     if (!this.client) throw new Error('adapter not started');
-    await this.client.c2cApi.postMessage(target.chatId, {
-      content: caption ? `[图片] ${caption} (本地路径: ${localPath})` : `[图片] ${localPath}`,
-      msg_type: 0,
+    const fs = await import('node:fs/promises');
+    const data = await fs.readFile(localPath);
+    const base64Data = data.toString('base64');
+    // Upload image (file_type=1) to QQ servers
+    const uploadResult = await this.client.c2cApi.postFile(target.chatId, {
+      file_type: 1,
+      file_data: base64Data,
+      srv_send_msg: false,
     });
-    return `qq-img-${Date.now()}`;
+    // Send message with media reference
+    const result = await this.client.c2cApi.postMessage(target.chatId, {
+      content: caption ?? '',
+      msg_type: 7,
+      media: { file_info: uploadResult.data.file_info },
+    });
+    return result.data.id;
   }
 
   async sendFile(target: OutboundTarget, localPath: string, caption?: string): Promise<string> {
     if (!this.client) throw new Error('adapter not started');
-    await this.client.c2cApi.postMessage(target.chatId, {
-      content: caption ? `[文件] ${caption} (本地路径: ${localPath})` : `[文件] ${localPath}`,
-      msg_type: 0,
+    const fs = await import('node:fs/promises');
+    const data = await fs.readFile(localPath);
+    const base64Data = data.toString('base64');
+    const fileName = localPath.split(/[\\/]/).pop() ?? 'file';
+    // Upload file (file_type=4) to QQ servers
+    const uploadResult = await this.client.c2cApi.postFile(target.chatId, {
+      file_type: 4,
+      file_data: base64Data,
+      file_name: fileName,
+      srv_send_msg: false,
     });
-    return `qq-file-${Date.now()}`;
+    // Send message with media reference
+    const result = await this.client.c2cApi.postMessage(target.chatId, {
+      content: caption ?? '',
+      msg_type: 7,
+      media: { file_info: uploadResult.data.file_info },
+    });
+    return result.data.id;
   }
 
   getSystemPromptContext(_channelId: ChannelId, _chatId: ExternalChatId): string {

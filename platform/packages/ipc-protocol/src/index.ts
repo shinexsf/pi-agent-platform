@@ -4,7 +4,8 @@
  * Wire format (JSON over child_process IPC channel):
  *
  * Master → Worker: CallRequest
- * Worker → Master: CallResponse | WorkerEvent
+ * Worker → Master: CallResponse | WorkerEvent | ReverseCallRequest
+ * Master → Worker: ReverseCallResponse
  *
  * Method names correspond directly to pi SDK AgentSession methods
  * (see packages/sdk-integration/AgentSessionProxy).
@@ -67,7 +68,30 @@ export interface WorkerEvent {
   data?: unknown;
 }
 
-export type WorkerMessage = CallResponse | WorkerEvent;
+export type WorkerMessage = CallResponse | WorkerEvent | ReverseCallResponse;
+
+// ── Reverse IPC: Worker → Master ──────────────────────────────────────────
+
+/** Methods callable on the master from worker (reverse direction) */
+export type ReverseMethod =
+  | 'sendFileToUser';
+
+/** Worker → Master: reverse RPC call request */
+export interface ReverseCallRequest {
+  kind: 'reverse-call';
+  id: number;
+  method: ReverseMethod;
+  args: unknown[];
+}
+
+/** Master → Worker: reverse RPC call response */
+export interface ReverseCallResponse {
+  kind: 'reverse-response';
+  id: number;
+  ok: boolean;
+  result?: unknown;
+  error?: { message: string; stack?: string };
+}
 
 /** createSession returns this — piSessionPath is stored in master DB */
 export interface CreateSessionResult {

@@ -154,14 +154,23 @@ QQ 渠道(9 条,与微信同模板,渠道包自挂 /api/im/qq/*):
 
 > **斜杠命令变更**(2026-09-16):`POST /:id/command` 现在调 `runBuiltinCommand()`(统一入口),命令名对齐 IM 端(`think` 替代 `thinking`,保留 alias)。新增 `name`、`hotkeys` 命令。
 
-## sendFileToUser 工具(MVP 跳过,推下个 change)
+## sendFileToWorker 工具（已实施）
 
-MVP **不实现** `sendFileToUser` 工具。完整设计文档保留在 v2 git history,实施时按 `specs/send-file-to-user/spec.md`(v1)和设计文档实现。
+`sendFileToUser` 工具已实施，通过 Worker→Master 反向 IPC + pi SDK `customTools` 注入。
 
-**MVP 期间**:
-- agent 通过工具发文件/图片不支持(MVP 期间用户手动复制文件)
-- `ChannelAdapter.sendImage` / `sendFile` 已定义,MVP 期间不通过工具暴露
-- worker 包**不动**(无需 `WorkerMethod` 扩展 / dispatcher case / `customTools` 注入)
+**架构**：
+- Worker 端：`createSendFileToUserTool(sessionId, callMaster)` 通过闭包捕获 sessionId
+- 反向调用：worker `callMaster('sendFileToUser', args)` → master `handleReverseCall()` → handler 分发
+- Master handler：`channel-host-impl.ts` 注册，根据 sessionId 查 `SessionMeta` → adapter → `sendImage()`/`sendFile()`
+- IDE/Web session：返回 `{ ok: true }`（no-op）
+
+**默认工具注入**：`session.ts` 的 `createSession()` 调用 `createDefaultTools(sessionId, callMaster)` 返回 `ToolDefinition[]`，传给 `createAgentSession({ customTools })`。新增默认工具只需在 `tools.ts` 的 `createDefaultTools()` 数组中追加。
+
+**文件名处理**：agent 传 `fileName`（友好名称不含后缀），master 从实际文件取后缀拼接。
+
+**渠道实现**：
+- QQ：`c2cApi.postFile()` 上传 + `postMessage({ msg_type: 7, media: { file_info } })` 发送
+- WeChat：`this.bot.send(chatId, { image/file: data, fileName })`（已有真实实现）
 
 ## reply-sender(消息回复机制)
 
@@ -272,7 +281,7 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
 | 路由 + 三态 + /new | [`specs/im-gateway-routing-policy/`](../../openspec/changes/im-gateway/specs/im-gateway-routing-policy/spec.md) |
 | 微信渠道实现 | [`specs/wechat-channel/`](../../openspec/changes/im-gateway/specs/wechat-channel/spec.md) |
 | QQ 渠道实现 | [`specs/qq-channel/`](../../openspec/changes/im-gateway/specs/qq-channel/spec.md) |
-| (sendFileToUser 工具) | **MVP 跳过,下个 change**(完整设计保留在 git history) |
+| sendFileToWorker 工具 | **已实施**（反向 IPC + customTools 注入 + QQ/WeChat 真实发送） |
 | 渠道指令注入 | [`specs/channel-system-prompt-injection/`](../../openspec/changes/im-gateway/specs/channel-system-prompt-injection/spec.md) |
 | 斜杠命令 | [`specs/chat-slash-commands/`](../../openspec/changes/im-gateway/specs/chat-slash-commands/spec.md) |
 | Web 管理 UI | [`specs/im-gateway-admin-ui/`](../../openspec/changes/im-gateway/specs/im-gateway-admin-ui/spec.md) |

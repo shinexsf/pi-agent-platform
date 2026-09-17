@@ -154,12 +154,28 @@ class WorkerPool {
 }
 ```
 
+## 反向调用（Worker → Master RPC）
+
+Worker 可通过 `callMaster(method, args)` 回调 master。WorkerPool 在 `wireUpHandlers` 中监听 `reverse-call` 消息，分发到 `registerReverseCallHandler()` 注册的 handler。
+
+```typescript
+// 注册 handler（IM gateway 初始化时）
+workerPool.registerReverseCallHandler('sendFileToUser', async (sessionId, args) => {
+  const meta = getSessionMeta(sessionId);
+  if (!meta) return { ok: true }; // IDE/Web session — no-op
+  const adapter = getAdapter(meta.channelType, meta.channelId);
+  // ... adapter.sendFile() / adapter.sendImage()
+});
+```
+
+Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（30s 超时）。
+
 ## 关键边界
 
 | 谁负责 | |
 |---|---|
-| **master** | spawn / IPC / 路由 / DB 持久化 / 超时扫描 |
-| **worker** | pi SDK 调用 / 事件订阅 / 历史管理 |
+| **master** | spawn / IPC / 路由 / DB 持久化 / 超时扫描 / 反向调用分发 |
+| **worker** | pi SDK 调用 / 事件订阅 / 历史管理 / 默认工具（sendFileToUser 等） |
 | **不存在的边界** | "worker 状态"持久化到 DB |
 
 ## 崩溃处理

@@ -33,6 +33,7 @@ import type {
 } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
+import { createDefaultTools, type CallMasterFn } from './tools.js';
 
 export type EventEmitter = (event: Omit<WorkerEvent, 'kind'>) => void;
 
@@ -339,6 +340,7 @@ export async function createSession(
   config: RuntimeConfig,
   sessionId: string,
   emit: EventEmitter,
+  callMaster: CallMasterFn,
   existingSessionPath?: string,
 ): Promise<{ session: PiSessionAdapter; handle: SessionHandle }> {
   const agentDir = process.env.PI_AGENT_DIR ?? defaultAgentDir();
@@ -406,6 +408,9 @@ export async function createSession(
       })()
     : undefined;
 
+  // Build default tools (sendFileToUser, etc.) — injected into every session.
+  const customTools = createDefaultTools(sessionId, callMaster);
+
   const result = await createAgentSession({
     cwd: config.workspacePath,
     agentDir,
@@ -416,6 +421,7 @@ export async function createSession(
     // builtinTools filtering will be done via session.setActiveToolsByName() after creation.
     sessionManager, // undefined → create new; defined → continue existing
     resourceLoader,
+    customTools,
   });
 
   // Detect thinking capability: pi SDK checks model.reasoning flag.
