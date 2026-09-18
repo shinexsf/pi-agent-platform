@@ -108,6 +108,8 @@ interface SessionContextDTO {
 | `/api/config/models/test` | POST | 测试模型连接 |
 | `/api/config/settings` | GET | 获取全局设置 |
 | `/api/config/settings` | PUT | 更新全局设置 |
+| `/api/config/server` | GET | 获取服务器默认配置（~/.pi/server/config.json）|
+| `/api/config/server` | PUT | 更新服务器默认配置 |
 | `/api/config/skills` | GET | 列出 skills |
 | `/api/config/skills/:name` | GET/PUT/DELETE | 读取/更新/删除 skill |
 | `/api/config/prompts` | GET | 列出 prompts |
