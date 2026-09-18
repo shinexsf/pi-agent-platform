@@ -54,6 +54,15 @@ interface SettingsConfig {
   [key: string]: unknown;
 }
 
+/** pi-agent-server specific config (stored in ~/.pi/server/config.json) */
+interface ServerDefaultsConfig {
+  defaultExtensions?: string[];
+  defaultSkills?: string[];
+  defaultPrompts?: string[];
+  defaultBuiltinTools?: string[];
+  [key: string]: unknown;
+}
+
 interface SkillInfo {
   name: string;
   filePath: string;
@@ -79,6 +88,12 @@ function defaultAgentDir(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
   const sep = home.includes('\\') ? '\\' : '/';
   return `${home}${sep}.pi${sep}agent`;
+}
+
+function serverConfigPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
+  const sep = home.includes('\\') ? '\\' : '/';
+  return `${home}${sep}.pi${sep}server${sep}config.json`;
 }
 
 function stripFrontmatter(raw: string): string {
@@ -272,6 +287,28 @@ export function createConfigRouter(config: ServerConfig) {
     const merged = { ...existing, ...body };
 
     await writeJson(settingsPath, merged);
+    return c.json({ ok: true });
+  });
+
+  // ========== Server Defaults (pi-agent-server specific) ==========
+
+  // GET /api/config/server
+  router.get('/server', async (c) => {
+    const configPath = serverConfigPath();
+    const serverConfig = await readJson<ServerDefaultsConfig>(configPath);
+    return c.json(serverConfig ?? {});
+  });
+
+  // PUT /api/config/server
+  router.put('/server', async (c) => {
+    const body = (await c.req.json()) as ServerDefaultsConfig;
+    const configPath = serverConfigPath();
+
+    // Merge with existing config
+    const existing = await readJson<ServerDefaultsConfig>(configPath) ?? {};
+    const merged = { ...existing, ...body };
+
+    await writeJson(configPath, merged);
     return c.json({ ok: true });
   });
 

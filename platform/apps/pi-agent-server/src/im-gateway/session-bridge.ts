@@ -21,6 +21,7 @@ import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types
 import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
+import { readSettings, type GlobalSettings } from '../services/settings-reader.js';
 
 interface AgentLike {
   id: string;
@@ -120,11 +121,44 @@ export async function spawnAndCreate(
 }
 
 function buildRuntimeConfig(agent: AgentLike): RuntimeConfig {
+  // Merge agent config with global defaults from settings.json
+  const mergedConfig = mergeWithGlobalDefaults(agent.config);
   return {
     workspacePath: agent.workspacePath,
     model: agent.model,
     thinkingLevel: agent.thinkingLevel,
-    config: agent.config,
+    config: mergedConfig,
+  };
+}
+
+/**
+ * Merge agent config with global defaults from settings.json.
+ * When agent config field is null/undefined, use the global default.
+ * When agent config field is set (including empty array), use it as-is.
+ */
+function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undefined {
+  const globalSettings = readSettings();
+  
+  // No global defaults configured — return agent config as-is
+  if (!globalSettings) return agentConfig;
+  
+  // No agent config — create one with just global defaults
+  if (!agentConfig) {
+    return {
+      builtinTools: globalSettings.defaultBuiltinTools,
+      extensions: globalSettings.defaultExtensions,
+      skills: globalSettings.defaultSkills,
+      prompts: globalSettings.defaultPrompts,
+    };
+  }
+  
+  // Merge: agent config fields take precedence, fall back to global defaults
+  return {
+    ...agentConfig,
+    builtinTools: agentConfig.builtinTools ?? globalSettings.defaultBuiltinTools,
+    extensions: agentConfig.extensions ?? globalSettings.defaultExtensions,
+    skills: agentConfig.skills ?? globalSettings.defaultSkills,
+    prompts: agentConfig.prompts ?? globalSettings.defaultPrompts,
   };
 }
 

@@ -7,6 +7,7 @@
  * - defaultModel 下拉选择（联动 provider）
  * - defaultThinkingLevel 选择（根据模型动态显示可用等级）
  * - enabledModels 列表管理
+ * - defaultExtensions / defaultSkills / defaultPrompts / defaultBuiltinTools 列表管理
  */
 import { ref, computed, onMounted, watch } from 'vue';
 
@@ -35,13 +36,36 @@ interface Settings {
   defaultModel?: string;
   defaultThinkingLevel?: string;
   enabledModels?: string[];
+  defaultExtensions?: string[];
+  defaultSkills?: string[];
+  defaultPrompts?: string[];
+  defaultBuiltinTools?: string[];
+  [key: string]: unknown;
+}
+
+interface ResourceInfo {
+  name: string;
   [key: string]: unknown;
 }
 
 const settings = ref<Settings>({});
 const allModels = ref<ModelInfo[]>([]);
+const allExtensions = ref<ResourceInfo[]>([]);
+const allSkills = ref<ResourceInfo[]>([]);
+const allPrompts = ref<ResourceInfo[]>([]);
 const loading = ref(true);
 const saving = ref(false);
+
+// Builtin tools list
+const BUILTIN_TOOLS = [
+  { value: 'read', label: 'read (读文件)' },
+  { value: 'write', label: 'write (写文件)' },
+  { value: 'edit', label: 'edit (编辑文件)' },
+  { value: 'bash', label: 'bash (执行命令)' },
+  { value: 'grep', label: 'grep (搜索内容)' },
+  { value: 'find', label: 'find (查找文件)' },
+  { value: 'ls', label: 'ls (列出目录)' },
+];
 
 // 按 provider 分组的模型列表
 const modelsByProvider = computed(() => {
@@ -122,12 +146,28 @@ watch(() => settings.value.defaultProvider, () => {
 async function loadData() {
   loading.value = true;
   try {
-    const [settingsRes, modelsRes] = await Promise.all([
+    const [settingsRes, serverRes, modelsRes, extensionsRes, skillsRes, promptsRes] = await Promise.all([
       fetch('/api/config/settings'),
+      fetch('/api/config/server'),
       fetch('/api/models'),
+      fetch('/api/config/extensions/detail'),
+      fetch('/api/config/skills'),
+      fetch('/api/config/prompts'),
     ]);
-    settings.value = await settingsRes.json();
+    const sdkSettings = await settingsRes.json();
+    const serverConfig = await serverRes.json();
+    // Merge: SDK settings for model config, server config for resource defaults
+    settings.value = {
+      ...sdkSettings,
+      defaultExtensions: serverConfig.defaultExtensions,
+      defaultSkills: serverConfig.defaultSkills,
+      defaultPrompts: serverConfig.defaultPrompts,
+      defaultBuiltinTools: serverConfig.defaultBuiltinTools,
+    };
     allModels.value = await modelsRes.json();
+    allExtensions.value = await extensionsRes.json();
+    allSkills.value = await skillsRes.json();
+    allPrompts.value = await promptsRes.json();
     // Validate defaultModel after both settings and models are loaded
     if (settings.value.defaultProvider && settings.value.defaultModel) {
       const exists = currentProviderModels.value.some(
@@ -147,10 +187,27 @@ async function loadData() {
 async function saveSettings() {
   saving.value = true;
   try {
+    // Save SDK settings (model config)
     await fetch('/api/config/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings.value),
+      body: JSON.stringify({
+        defaultProvider: settings.value.defaultProvider,
+        defaultModel: settings.value.defaultModel,
+        defaultThinkingLevel: settings.value.defaultThinkingLevel,
+        enabledModels: settings.value.enabledModels,
+      }),
+    });
+    // Save server config (resource defaults)
+    await fetch('/api/config/server', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        defaultExtensions: settings.value.defaultExtensions,
+        defaultSkills: settings.value.defaultSkills,
+        defaultPrompts: settings.value.defaultPrompts,
+        defaultBuiltinTools: settings.value.defaultBuiltinTools,
+      }),
     });
     alert('保存成功！新配置将在创建新 session 时生效。');
   } catch (err) {
@@ -182,6 +239,41 @@ function selectAllModels() {
 function deselectAllModels() {
   settings.value.enabledModels = [];
 }
+
+// ── Resource list helpers (extensions/skills/prompts/builtinTools) ──
+
+function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', name: string) {
+  if (!settings.value[key]) {
+    settings.value[key] = [];
+  }
+  const arr = settings.value[key] as string[];
+  const index = arr.indexOf(name);
+  if (index === -1) {
+    arr.push(name);
+  } else {
+    arr.splice(index, 1);
+  }
+}
+
+function selectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', names: string[]) {
+  settings.value[key] = [...names];
+}
+
+function deselectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools') {
+  settings.value[key] = [];
+}
+
+function isResourceEnabled(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', name: string): boolean {
+  const arr = settings.value[key];
+  if (!arr) return true; // null/undefined = all enabled (default)
+  return arr.includes(name);
+}
+
+// Computed names for select all buttons
+const extensionNames = computed(() => allExtensions.value.map(e => e.name));
+const skillNames = computed(() => allSkills.value.map(s => s.name));
+const promptNames = computed(() => allPrompts.value.map(p => p.name));
+const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 </script>
 
 <template>
@@ -245,6 +337,103 @@ function deselectAllModels() {
           <div v-if="allAvailableModels.length === 0" class="empty-hint">
             暂无可用模型，请先在"模型 API"中配置 Provider
           </div>
+        </div>
+      </div>
+
+      <!-- Default Enabled Extensions -->
+      <div class="form-group">
+        <div class="models-header">
+          <label>默认启用的插件</label>
+          <div class="models-actions">
+            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultExtensions', extensionNames)">全选</button>
+            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultExtensions')">全不选</button>
+          </div>
+        </div>
+        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
+        <div class="models-checkbox-list">
+          <label v-for="ext in allExtensions" :key="ext.name" class="checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isResourceEnabled('defaultExtensions', ext.name)"
+              @change="toggleResource('defaultExtensions', ext.name)"
+            />
+            <span class="model-label">{{ ext.name }}</span>
+          </label>
+          <div v-if="allExtensions.length === 0" class="empty-hint">
+            暂无已安装的插件
+          </div>
+        </div>
+      </div>
+
+      <!-- Default Enabled Skills -->
+      <div class="form-group">
+        <div class="models-header">
+          <label>默认启用的 Skill</label>
+          <div class="models-actions">
+            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultSkills', skillNames)">全选</button>
+            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultSkills')">全不选</button>
+          </div>
+        </div>
+        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
+        <div class="models-checkbox-list">
+          <label v-for="skill in allSkills" :key="skill.name" class="checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isResourceEnabled('defaultSkills', skill.name)"
+              @change="toggleResource('defaultSkills', skill.name)"
+            />
+            <span class="model-label">{{ skill.name }}</span>
+          </label>
+          <div v-if="allSkills.length === 0" class="empty-hint">
+            暂无可用的 Skill
+          </div>
+        </div>
+      </div>
+
+      <!-- Default Enabled Prompts -->
+      <div class="form-group">
+        <div class="models-header">
+          <label>默认启用的 Prompt</label>
+          <div class="models-actions">
+            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultPrompts', promptNames)">全选</button>
+            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultPrompts')">全不选</button>
+          </div>
+        </div>
+        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
+        <div class="models-checkbox-list">
+          <label v-for="prompt in allPrompts" :key="prompt.name" class="checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isResourceEnabled('defaultPrompts', prompt.name)"
+              @change="toggleResource('defaultPrompts', prompt.name)"
+            />
+            <span class="model-label">{{ prompt.name }}</span>
+          </label>
+          <div v-if="allPrompts.length === 0" class="empty-hint">
+            暂无可用的 Prompt
+          </div>
+        </div>
+      </div>
+
+      <!-- Default Enabled Builtin Tools -->
+      <div class="form-group">
+        <div class="models-header">
+          <label>默认启用的内置工具</label>
+          <div class="models-actions">
+            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultBuiltinTools', builtinToolNames)">全选</button>
+            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultBuiltinTools')">全不选</button>
+          </div>
+        </div>
+        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
+        <div class="models-checkbox-list">
+          <label v-for="tool in BUILTIN_TOOLS" :key="tool.value" class="checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isResourceEnabled('defaultBuiltinTools', tool.value)"
+              @change="toggleResource('defaultBuiltinTools', tool.value)"
+            />
+            <span class="model-label">{{ tool.label }}</span>
+          </label>
         </div>
       </div>
 
@@ -322,6 +511,12 @@ function deselectAllModels() {
 .models-actions {
   display: flex;
   gap: 8px;
+}
+
+.resource-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
 }
 
 .models-checkbox-list {

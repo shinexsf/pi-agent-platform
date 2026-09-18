@@ -191,7 +191,7 @@ function selectTab(id: string) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 24px;
 }
 </style>
