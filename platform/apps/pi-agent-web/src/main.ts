@@ -63,6 +63,8 @@ const baseRoutes = [
   {
     path: '/chat/:id',
     component: () => import('./views/ChatView.vue'),
+    // chat 页在 App.vue 里走 isChatPage 分支，不套 AppShell（无 app-main），
+    // 自管整页布局，所以这里不需要 fullWidth。
     meta: {}, // no navLabel (sub-page)
   },
 ];

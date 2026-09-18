@@ -6,6 +6,7 @@ import { useAttachments } from '../composables/useAttachments'
 import MessageList from '../components/chat/MessageList.vue'
 import InputBox from '../components/chat/InputBox.vue'
 import SteerSubBar from '../components/chat/SteerSubBar.vue'
+import SessionInfoModal from '../components/chat/SessionInfoModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +34,9 @@ const attachments = useAttachments(
     },
   },
 )
+
+// Session info modal
+const showSessionInfo = ref(false)
 
 // 显示的标题
 const displayTitle = computed(() => {
@@ -146,42 +150,51 @@ onUnmounted(() => {
 
 <template>
   <div class="chat-page">
-    <div class="chat-container">
-      <!-- 顶部状态栏 -->
-      <header class="chat-header">
-        <div class="header-left">
-          <!-- 会话名称 -->
-          <div v-if="!isEditingTitle" class="title-display" @dblclick="startEditTitle">
-            <span class="title-text">{{ displayTitle }}</span>
-            <span class="title-hint">双击编辑</span>
-          </div>
-          <input
-            v-else
-            ref="titleInputRef"
-            v-model="editingTitle"
-            class="title-input"
-            type="text"
-            maxlength="200"
-            placeholder="输入会话名称..."
-            @blur="saveTitle"
-            @keydown.enter="saveTitle"
-            @keydown.escape="cancelEditTitle"
-          />
-          <!-- Agent名称 -->
-          <span v-if="agentName" class="agent-name">{{ agentName }}</span>
+    <!-- 顶部状态栏 —— 整页宽，独立于会话内容 -->
+    <header class="chat-header">
+      <div class="header-left">
+        <!-- 会话名称 -->
+        <div v-if="!isEditingTitle" class="title-display" @dblclick="startEditTitle">
+          <span class="title-text">{{ displayTitle }}</span>
+          <span class="title-hint">双击编辑</span>
         </div>
-        <div class="header-right">
-          <!-- 连接状态 -->
-          <span :class="['status-dot', sse.connected.value ? 'connected' : 'disconnected']"></span>
-          <!-- 关闭按钮 -->
-          <button class="close-btn" title="关闭会话" @click="closeSession">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      </header>
+        <input
+          v-else
+          ref="titleInputRef"
+          v-model="editingTitle"
+          class="title-input"
+          type="text"
+          maxlength="200"
+          placeholder="输入会话名称..."
+          @blur="saveTitle"
+          @keydown.enter="saveTitle"
+          @keydown.escape="cancelEditTitle"
+        />
+        <!-- Agent名称 -->
+        <span v-if="agentName" class="agent-name">{{ agentName }}</span>
+      </div>
+      <div class="header-right">
+        <!-- 连接状态 -->
+        <span :class="['status-dot', sse.connected.value ? 'connected' : 'disconnected']"></span>
+        <!-- Session Info -->
+        <button class="info-btn" title="Session Info" @click="showSessionInfo = true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+        </button>
+        <!-- 关闭按钮 -->
+        <button class="close-btn" title="关闭会话" @click="closeSession">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </header>
 
+    <!-- 会话内容区 —— 无边框，与背景融合 -->
+    <div class="chat-body">
       <MessageList
         :messages="sse.messages.value"
         :sending="sse.sending.value"
@@ -205,40 +218,59 @@ onUnmounted(() => {
         @set-thinking-level="(l: 'off' | 'low' | 'medium' | 'high') => sse.setThinkingLevel(l)"
       />
     </div>
+
+    <!-- Session Info Modal -->
+    <SessionInfoModal
+      v-if="showSessionInfo"
+      :session-id="sessionId"
+      @close="showSessionInfo = false"
+    />
   </div>
 </template>
 
 <style scoped>
+/* 整体页面：占满视口，纵向 flex。
+ * 注意：chat 页不走 AppShell（App.vue 里 isChatPage 分支直接渲染 router-view），
+ * 所以没有 .app-main 提供确定高度 —— 这里必须用 100dvh 而不是 height:100%。
+ * 字号基准比全局小一档 —— 消息内容（markdown-body 无显式 font-size）
+ * 从这里继承，因此整体比全局小一档（16px → 15px）。 */
 .chat-page {
   display: flex;
-  justify-content: center;
-  min-height: 100dvh;
-  background: var(--surface-subtle, #f5f5f5);
-  padding: 24px 16px;
-}
-
-.chat-container {
-  display: flex;
   flex-direction: column;
-  width: 100%;
-  max-width: 768px;
-  height: calc(100dvh - 48px);
-  background: var(--surface, #ffffff);
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  height: 100dvh;
+  min-height: 0;
   overflow: hidden;
+  font-size: 15px;
+  /* 用 --bg（页面背景）而不是 --surface：会话区不再是白卡片，
+   * 而是与整页背景同一色 → 无边框、无阴影的“融为一体”效果。 */
+  background: var(--bg, #f4f6f9);
+  color: var(--text, #1a1a1a);
 }
 
-/* 顶部状态栏 */
+/* 顶部标题栏 —— 整页宽，属于页面级 chrome，不属于会话内容 */
 .chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  flex-shrink: 0;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border, #e5e5e5);
   background: var(--surface, #ffffff);
-  flex-shrink: 0;
+}
+
+/* 会话内容区 —— 无边框/无卡片，直接坐在页面背景上；
+ * 内容居中限宽，输入框贴底。 */
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 768px;
+  margin: 0 auto;
+  overflow: hidden;
 }
 
 .header-left {
@@ -329,6 +361,26 @@ onUnmounted(() => {
   background: #ef4444;
 }
 
+/* Session Info 按钮 */
+.info-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.info-btn:hover {
+  background: var(--surface-hover, #f5f5f5);
+  color: var(--text, #1a1a1a);
+}
+
 /* 关闭按钮 */
 .close-btn {
   display: flex;
@@ -350,15 +402,12 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
-  .chat-page {
-    padding: 0;
+  .chat-header {
+    padding: 0 12px;
   }
-  
-  .chat-container {
+
+  .chat-body {
     max-width: 100%;
-    height: 100dvh;
-    border-radius: 0;
-    border: none;
   }
 
   .title-text {

@@ -249,6 +249,12 @@ async function dispatch(req: CallRequest): Promise<void> {
         respond(req.id, true, sp);
         return;
       }
+      case 'getSessionResources': {
+        if (!currentSession) throw new Error('no active session');
+        const resources = currentSession.getSessionResources();
+        respond(req.id, true, resources);
+        return;
+      }
       default:
         throw new Error(`unknown method: ${method satisfies string}`);
     }

@@ -613,7 +613,9 @@ onUnmounted(() => {
 <style scoped>
 .input-wrapper {
   position: relative;
-  background: transparent;
+  /* 会话区背景现在是 --bg（浅灰），输入框用 --surface 白底才浮得出来、
+   * 像可输入的控件；之前是白卡片上的透明框。 */
+  background: var(--surface);
   /* 用 var(--border) 代替硬编码 #26282C（暗色灰 900）——后者在亮色白底
    * 上像"贴了一条黑边"。hover 状态由 --border 自身的暗色 → 亮色变化
    * 体现（IDE 注入的 light --border 是 #e1e4e8 → #d0d7de）。 */
@@ -625,8 +627,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  margin: 4px 8px 4px;
-  transition: border-color 0.12s;
+  /* 底部贴边：只留 4px，输入框尽量靠近视口底部 */
+  margin: 8px 8px 4px;
+  transition: border-color 0.12s, background-color 0.12s;
 }
 .input-wrapper:hover {
   border-color: var(--text-secondary);

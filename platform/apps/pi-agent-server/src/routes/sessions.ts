@@ -16,7 +16,7 @@ import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
-import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types';
+import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo, SessionInfoDTO } from '@pi-agent-platform/api-types';
 import { listAvailableModels } from '../model-registry.js';
 import { spawnPlaceholder, spawnAndCreate } from '../im-gateway/session-bridge.js';
 import { resolvePrompt } from '../prompt-resolver.js';
@@ -120,6 +120,74 @@ export function createSessionsRouter(
       currentThinkingLevel: computeCurrentThinkingLevel(session, null),
       contextUsage: null,
     });
+  });
+
+  // GET /api/sessions/:id/session-info — full session info including system prompt + resources.
+  // Unlike /:id/context (lightweight, used frequently), this returns the complete system prompt
+  // text and categorized resource lists (prompts / skills / extensions). Intended for the
+  // session info panel in the IDE and web UI.
+  router.get('/:id/session-info', async (c) => {
+    const id = c.req.param('id');
+    const session = sessionRepo.get(id) ?? null;
+
+    console.log(`[session-info] id=${id} session=${!!session} workerRunning=${workerPool.has(id)}`);
+
+    // Case: existing session row but worker dead — rebuild synchronously
+    if (session && !workerPool.has(id)) {
+      const agent = agentRepo.get(session.agentId);
+      if (!agent) {
+        console.error(`[session-info] agent not found for session ${id}, agentId=${session.agentId}`);
+        return c.json({ error: 'Agent not found' }, 404);
+      }
+      try {
+        console.log(`[session-info] respawning worker for session ${id}`);
+        await spawnAndCreate(id, agent, sessionRepo, workerPool, session.piSessionPath);
+        console.log(`[session-info] worker respawned for session ${id}, pid=${workerPool.get(id)?.workerPid}`);
+      } catch (err) {
+        console.error(`[session-info] failed to respawn worker for session ${id}:`, err);
+      }
+    }
+
+    if (workerPool.has(id)) {
+      const [contextUsage, resources] = await Promise.all([
+        workerPool.call<{ tokens: number | null; contextWindow: number; percent: number | null } | null>(id, 'getContextUsage', []),
+        workerPool.call<SessionInfoDTO['resources']>(id, 'getSessionResources', []),
+      ]);
+      const entry = workerPool.get(id);
+      const agent = session ? agentRepo.get(session.agentId) : null;
+
+      const info: SessionInfoDTO = {
+        sessionId: id,
+        hasRow: !!session,
+        session,
+        systemPrompt: entry?.systemPrompt ?? null,
+        resources: resources ?? { prompts: [], skills: [], extensions: [], tools: [] },
+        workerPid: entry?.workerPid ?? -1,
+        cwd: agent?.workspacePath ?? '',
+        uptimeMs: entry ? Date.now() - entry.spawnTime : 0,
+        currentModel: computeCurrentModel(session, entry?.model),
+        currentThinkingLevel: computeCurrentThinkingLevel(session, entry?.thinkingLevel),
+        contextUsage: contextUsage ?? null,
+      };
+      return c.json(info);
+    }
+
+    // Worker not running, no row — return partial info
+    console.warn(`[session-info] no worker and no session row for ${id}, returning fallback`);
+    const info: SessionInfoDTO = {
+      sessionId: id,
+      hasRow: !!session,
+      session,
+      systemPrompt: null,
+      resources: { prompts: [], skills: [], extensions: [], tools: [] },
+      workerPid: -1,
+      cwd: '',
+      uptimeMs: 0,
+      currentModel: null,
+      currentThinkingLevel: null,
+      contextUsage: null,
+    };
+    return c.json(info);
   });
 
   // GET /api/sessions/:id/messages (history — master reads file directly)

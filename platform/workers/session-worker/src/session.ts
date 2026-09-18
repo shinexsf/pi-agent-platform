@@ -615,7 +615,9 @@ interface AgentSessionLike {
   };
   resourceLoader: {
     getSkills(): { skills: ReadonlyArray<{ name: string; description: string; filePath: string; baseDir: string }> };
+    getExtensions(): { extensions: Array<{ path: string; hidden?: boolean; commands: Map<string, unknown>; tools: Map<string, unknown> }> };
   };
+  getAllTools(): Array<{ name: string; description: string; sourceInfo: { path: string; source: string } }>;
   sendUserMessage(content: string): Promise<void>;
   sessionManager: { getSessionFile(): string | undefined };
 }
@@ -836,6 +838,76 @@ export class PiSessionAdapter {
 
   getSessionFilePath(): string {
     return this.real.sessionManager.getSessionFile() ?? '';
+  }
+
+  /**
+   * Returns categorized resources (prompts, skills, extensions, tools) available in this session.
+   * Unlike listCommands() which returns a flat mixed list of SlashCommandDTOs,
+   * this returns resources grouped by type with full metadata.
+   */
+  getSessionResources(): {
+    prompts: Array<{ name: string; description: string; filePath: string }>;
+    skills: Array<{ name: string; description: string; filePath: string; baseDir: string }>;
+    extensions: Array<{ name: string; path: string; commandCount: number; toolCount: number }>;
+    tools: Array<{ name: string; description: string; source: string; sourceType: 'builtin' | 'extension' }>;
+  } {
+    const prompts = (this.real.promptTemplates as ReadonlyArray<{
+      name: string;
+      description: string;
+      filePath: string;
+    }>).map((p) => ({
+      name: p.name,
+      description: p.description,
+      filePath: p.filePath,
+    }));
+
+    const skills = this.real.resourceLoader
+      .getSkills().skills
+      .map((s: { name: string; description: string; filePath: string; baseDir: string }) => ({
+        name: s.name,
+        description: s.description,
+        filePath: s.filePath,
+        baseDir: s.baseDir,
+      }));
+
+    // Extensions: from resourceLoader, each extension has path + command/tool counts
+    const extensionsResult = this.real.resourceLoader.getExtensions();
+    const extensions = (extensionsResult.extensions as Array<{
+      path: string;
+      hidden?: boolean;
+      sourceInfo?: { source: string };
+      commands: Map<string, unknown>;
+      tools: Map<string, unknown>;
+    }>)
+      .filter((e) => !e.hidden)
+      .map((e) => ({
+        // Use sourceInfo.source (package name like "npm:pi-mcp-adapter") as display name.
+        // Fallback to parent directory name if sourceInfo.source is empty.
+        name: e.sourceInfo?.source
+          || e.path.split(/[/\\]/).slice(-2, -1).pop()
+          || e.path.split(/[/\\]/).pop()?.replace(/\.(ts|js)$/, '')
+          || e.path,
+        path: e.path,
+        commandCount: e.commands.size,
+        toolCount: e.tools.size,
+      }));
+
+    // Tools: from session.getAllTools(), classify source as builtin or extension
+    const allTools = this.real.getAllTools();
+    const extensionSources = new Set(extensions.map((e) => e.name));
+    const tools = allTools.map((t: { name: string; description: string; sourceInfo: { path: string; source: string } }) => {
+      // A tool is from an extension if its sourceInfo.source matches an extension name
+      const sourceName = t.sourceInfo?.source ?? '';
+      const isExtension = extensionSources.has(sourceName);
+      return {
+        name: t.name,
+        description: t.description,
+        source: sourceName,
+        sourceType: (isExtension ? 'extension' : 'builtin') as 'builtin' | 'extension',
+      };
+    });
+
+    return { prompts, skills, extensions, tools };
   }
 
   /**

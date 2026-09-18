@@ -116,6 +116,40 @@ export interface SessionContextDTO {
   } | null;
 }
 
+/** Full session info returned by GET /api/sessions/:id/session-info. */
+export interface SessionInfoDTO {
+  sessionId: string;
+  /** Whether the session has been persisted to the DB. */
+  hasRow: boolean;
+  /** Session row from DB, or null if placeholder. */
+  session: SessionDTO | null;
+  /** Full system prompt text sent to the LLM. */
+  systemPrompt: { text: string; length: number; source: 'override' | 'default' } | null;
+  /** Categorized resources available in this session. */
+  resources: {
+    prompts: Array<{ name: string; description: string; filePath: string }>;
+    skills: Array<{ name: string; description: string; filePath: string; baseDir: string }>;
+    extensions: Array<{ name: string; path: string; commandCount: number; toolCount: number }>;
+    tools: Array<{ name: string; description: string; source: string; sourceType: 'builtin' | 'extension' }>;
+  };
+  /** Worker PID (-1 if not running). */
+  workerPid: number;
+  /** Agent workspace path. */
+  cwd: string;
+  /** Worker uptime in ms (0 if not running). */
+  uptimeMs: number;
+  /** Current model. */
+  currentModel: { provider: string; modelId: string } | null;
+  /** Current thinking level. */
+  currentThinkingLevel: 'off' | 'low' | 'medium' | 'high' | null;
+  /** Context window usage. */
+  contextUsage: {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  } | null;
+}
+
 export interface PromptRequest {
   message: string;
   images?: Array<{

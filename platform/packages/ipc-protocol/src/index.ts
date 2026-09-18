@@ -24,7 +24,8 @@ export type WorkerMethod =
   | 'listAvailableModels'
   | 'compact'
   | 'getContextUsage'
-  | 'getSystemPrompt';
+  | 'getSystemPrompt'
+  | 'getSessionResources';
 
 export interface CallRequest {
   kind: 'call';

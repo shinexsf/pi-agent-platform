@@ -6,6 +6,7 @@ import { useAttachments } from './composables/useAttachments'
 import MessageList from './components/MessageList.vue'
 import InputBox from './components/InputBox.vue'
 import SteerSubBar from './components/SteerSubBar.vue'
+import FloatingToolbar from './components/FloatingToolbar.vue'
 
 // 从 URL query 读取（JCEF loadURL 注入）
 const sessionId = new URLSearchParams(location.search).get('sessionId') ?? ''
@@ -71,6 +72,7 @@ onUnmounted(() => {
     - 输入框贴底（极简风格）
    -->
   <div class="chat-page">
+    <FloatingToolbar :session-id="sessionId" />
     <MessageList
       :messages="sse.messages.value"
       :sending="sse.sending.value"
