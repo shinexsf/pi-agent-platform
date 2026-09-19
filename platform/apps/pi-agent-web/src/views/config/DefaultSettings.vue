@@ -10,6 +10,7 @@
  * - defaultExtensions / defaultSkills / defaultPrompts / defaultBuiltinTools 列表管理
  */
 import { ref, computed, onMounted, watch } from 'vue';
+import { toast } from '../../composables/useFeedback';
 
 // All possible thinking levels from pi SDK
 const ALL_THINKING_LEVELS = [
@@ -209,9 +210,9 @@ async function saveSettings() {
         defaultBuiltinTools: settings.value.defaultBuiltinTools,
       }),
     });
-    alert('保存成功！新配置将在创建新 session 时生效。');
+    toast('保存成功！新配置将在创建新 session 时生效。', 'success');
   } catch (err) {
-    alert('保存失败: ' + (err as Error).message);
+    toast('保存失败: ' + (err as Error).message, 'error');
   } finally {
     saving.value = false;
   }
@@ -484,6 +485,7 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 }
 
 .form-select {
+  width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -610,5 +612,45 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 紧凑断点：选择器/复选框列表适配单栏，触摸目标 >= 44px */
+@media (max-width: 767px) {
+  .default-settings {
+    max-width: none;
+  }
+
+  .form-select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .models-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .models-actions {
+    width: 100%;
+  }
+
+  .models-actions .btn {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .models-checkbox-list {
+    max-height: none;
+  }
+
+  .checkbox-item {
+    min-height: 44px;
+  }
+
+  .checkbox-item input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
 }
 </style>

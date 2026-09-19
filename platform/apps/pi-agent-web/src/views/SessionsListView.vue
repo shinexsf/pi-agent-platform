@@ -3,9 +3,12 @@ import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import type { SessionDTO, AgentDTO } from '@pi-agent-platform/shared-types';
 import AppIcon from '../components/ui/AppIcon.vue';
+import { toast } from '../composables/useFeedback';
+import { useIsCompact } from '../composables/useMediaQuery';
 
 const router = useRouter();
 const route = useRoute();
+const isCompact = useIsCompact();
 
 const sessions = ref<SessionDTO[]>([]);
 const agents = ref<Map<string, AgentDTO>>(new Map());
@@ -80,10 +83,6 @@ watch(searchQuery, (val) => {
   }, 300);
 });
 
-function showToast(message: string, variant: 'info' | 'success' | 'error' = 'info') {
-  window.dispatchEvent(new CustomEvent('im-gateway:toast', { detail: { message, variant } }));
-}
-
 async function load() {
   loading.value = true;
   loadError.value = null;
@@ -115,7 +114,7 @@ async function load() {
   } catch {
     loadError.value = 'Check the server connection and try again.';
     if (sessions.value.length > 0) {
-      showToast(`Sessions couldn't be refreshed. ${loadError.value}`, 'error');
+      toast(`Sessions couldn't be refreshed. ${loadError.value}`, 'error');
     }
   } finally {
     loading.value = false;
@@ -175,26 +174,26 @@ onMounted(() => load());
 
 <template>
   <section class="page-shell" aria-labelledby="sessions-title">
-    <header class="page-heading">
-      <div class="page-actions">
-        <span class="page-count">{{ total }} {{ total === 1 ? 'session' : 'sessions' }}</span>
-        <button
-          class="btn btn-secondary btn-icon"
-          type="button"
-          :class="{ 'is-loading': loading }"
-          :disabled="loading"
-          aria-label="Refresh sessions"
-          @click="load()"
-        >
-          <AppIcon name="refresh" :size="16" />
-        </button>
-      </div>
-    </header>
-
     <div class="surface-panel" :aria-busy="loading">
+      <!-- 工具栏与列表同容器（spec app-layout「工具栏与列表绑定」） -->
       <div class="panel-toolbar">
         <div class="panel-toolbar-group search-filters">
-          <div class="agent-dropdown-wrapper" v-click-outside="() => showAgentDropdown = false">
+          <!-- 紧凑断点：原生 select（iOS/Android 系统选择器） -->
+          <select
+            v-if="isCompact"
+            v-model="selectedAgentId"
+            class="control agent-filter-select"
+            aria-label="Filter by agent"
+            @change="onAgentFilterChange"
+          >
+            <option value="">All agents</option>
+            <option v-for="agent in allAgents" :key="agent.id" :value="agent.id">
+              {{ agent.name }}
+            </option>
+          </select>
+
+          <!-- 桌面：带搜索的自定义下拉 -->
+          <div v-else class="agent-dropdown-wrapper" v-click-outside="() => showAgentDropdown = false">
             <div class="agent-input-wrapper">
               <input
                 ref="agentInputRef"
@@ -219,7 +218,7 @@ onMounted(() => load());
                 :key="agent.id" 
                 class="agent-option"
                 :class="{ active: selectedAgentId === agent.id }"
-                @mousedown.prevent="selectAgent(agent)"
+                @pointerdown.prevent="selectAgent(agent)"
               >
                 {{ agent.name }}
               </div>
@@ -228,23 +227,37 @@ onMounted(() => load());
               </div>
             </div>
           </div>
+
           <input
             v-model="searchQuery"
             type="text"
             class="control search-input"
             placeholder="Search by title..."
           />
-
         </div>
-        <label class="panel-toolbar-group page-count">
-          Rows per page
-          <select v-model.number="pageSize" class="control select-compact" aria-label="Sessions per page">
-            <option :value="10">10</option>
-            <option :value="20">20</option>
-            <option :value="50">50</option>
-            <option :value="100">100</option>
-          </select>
-        </label>
+
+        <div class="panel-toolbar-group toolbar-meta">
+          <label class="page-count toolbar-rows">
+            Rows per page
+            <select v-model.number="pageSize" class="control select-compact" aria-label="Sessions per page">
+              <option :value="10">10</option>
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+            </select>
+          </label>
+          <span class="page-count">{{ total }} {{ total === 1 ? 'session' : 'sessions' }}</span>
+          <button
+            class="btn btn-secondary btn-icon"
+            type="button"
+            :class="{ 'is-loading': loading }"
+            :disabled="loading"
+            aria-label="Refresh sessions"
+            @click="load()"
+          >
+            <AppIcon name="refresh" :size="16" />
+          </button>
+        </div>
       </div>
 
       <div v-if="loading" class="skeleton-list" aria-label="Loading sessions" aria-live="polite">
@@ -397,7 +410,7 @@ onMounted(() => load());
   transition: color 150ms ease, transform 150ms ease;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 767px) {
   .session-row-button {
     align-items: flex-start;
     flex-direction: column;
@@ -412,15 +425,18 @@ onMounted(() => load());
   }
 }
 
+.toolbar-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+}
+
 .search-filters {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-}
-
-.agent-filter {
-  min-width: 150px;
 }
 
 .search-input {
@@ -512,5 +528,32 @@ onMounted(() => load());
 .agent-option-clear {
   margin-right: 8px;
   color: var(--text-secondary);
+}
+
+/* 紧凑断点：筛选栏纵向堆叠，输入框占满宽度（spec app-layout「筛选栏堆叠」）。
+   放在样式块末尾，确保覆盖上方的 `min-width` 声明。 */
+@media (max-width: 767px) {
+  .search-filters {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-filters .control,
+  .search-filters .agent-dropdown-wrapper,
+  .agent-filter-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* 每页条数在手机上无关紧要，隐藏以腾出首屏 */
+  .toolbar-rows {
+    display: none;
+  }
+
+  .toolbar-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 </style>

@@ -10,6 +10,8 @@
  * - 卸载插件
  */
 import { ref, onMounted } from 'vue';
+import { confirmDelete, toast } from '../../composables/useFeedback';
+import { useIsCompact } from '../../composables/useMediaQuery';
 
 interface ExtensionInfo {
   name: string;
@@ -18,6 +20,7 @@ interface ExtensionInfo {
   enabled: boolean;
 }
 
+const isCompact = useIsCompact();
 const extensions = ref<ExtensionInfo[]>([]);
 const loading = ref(true);
 const installing = ref(false);
@@ -43,7 +46,7 @@ async function loadExtensions() {
 
 async function installByUrl() {
   if (!installUrl.value) {
-    alert('请输入插件 URL');
+    toast('请输入插件 URL', 'error');
     return;
   }
 
@@ -57,14 +60,14 @@ async function installByUrl() {
 
     const data = await res.json();
     if (data.ok) {
-      alert('安装成功');
+      toast('安装成功', 'success');
       installUrl.value = '';
       await loadExtensions();
     } else {
-      alert('安装失败: ' + data.message);
+      toast('安装失败: ' + data.message, 'error');
     }
   } catch (err) {
-    alert('安装失败: ' + (err as Error).message);
+    toast('安装失败: ' + (err as Error).message, 'error');
   } finally {
     installing.value = false;
   }
@@ -85,14 +88,14 @@ async function uploadSingleFile() {
 
     const data = await res.json();
     if (data.ok) {
-      alert('上传成功');
+      toast('上传成功', 'success');
       uploadFile.value = null;
       await loadExtensions();
     } else {
-      alert('上传失败: ' + data.message);
+      toast('上传失败: ' + data.message, 'error');
     }
   } catch (err) {
-    alert('上传失败: ' + (err as Error).message);
+    toast('上传失败: ' + (err as Error).message, 'error');
   } finally {
     installing.value = false;
   }
@@ -113,21 +116,22 @@ async function uploadZipPackage() {
 
     const data = await res.json();
     if (data.ok) {
-      alert('安装成功');
+      toast('安装成功', 'success');
       uploadZipFile.value = null;
       await loadExtensions();
     } else {
-      alert('安装失败: ' + data.message);
+      toast('安装失败: ' + data.message, 'error');
     }
   } catch (err) {
-    alert('安装失败: ' + (err as Error).message);
+    toast('安装失败: ' + (err as Error).message, 'error');
   } finally {
     installing.value = false;
   }
 }
 
 async function uninstallExtension(name: string, source: string) {
-  if (!confirm(`确定要卸载插件 "${name}" 吗？`)) return;
+  const confirmed = await confirmDelete('插件', name);
+  if (!confirmed) return;
 
   installing.value = true;
   try {
@@ -137,12 +141,13 @@ async function uninstallExtension(name: string, source: string) {
 
     const data = await res.json();
     if (data.ok) {
+      toast(`插件「${name}」已卸载`, 'success');
       await loadExtensions();
     } else {
-      alert('卸载失败: ' + (data.message || data.error));
+      toast('卸载失败: ' + (data.message || data.error), 'error');
     }
   } catch (err) {
-    alert('卸载失败: ' + (err as Error).message);
+    toast('卸载失败: ' + (err as Error).message, 'error');
   } finally {
     installing.value = false;
   }
@@ -209,7 +214,8 @@ function getSourceLabel(source: string): string {
           </div>
         </div>
 
-        <div class="upload-group">
+        <!-- 紧凑断点下隐藏 zip 包上传（桌面导向操作，spec「插件上传降级」） -->
+        <div v-if="!isCompact" class="upload-group">
           <label class="upload-label">Zip 包</label>
           <div class="upload-input-row">
             <input type="file" accept=".zip" @change="handleZipFileChange" class="form-input" :disabled="installing" />
@@ -427,5 +433,40 @@ function getSourceLabel(source: string): string {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 紧凑断点：安装/上传区纵向堆叠，输入框占满宽度（spec「上传与安装区堆叠」） */
+@media (max-width: 767px) {
+  .extensions-config {
+    max-width: none;
+  }
+
+  .install-section {
+    padding: 14px;
+  }
+
+  .install-row,
+  .upload-row,
+  .upload-input-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .install-row .form-input,
+  .upload-input-row .form-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .extension-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .extension-item .btn {
+    width: 100%;
+  }
 }
 </style>

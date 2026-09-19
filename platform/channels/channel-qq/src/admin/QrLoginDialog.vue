@@ -344,12 +344,12 @@ onBeforeUnmount(() => stopStream?.());
 <style scoped>
 .qr-overlay {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: color-mix(in srgb, #0b1220 52%, transparent);
   display: flex; align-items: center; justify-content: center;
   z-index: 9000;
 }
 .qr-dialog {
-  background: white;
+  background: var(--surface);
   border-radius: 8px;
   width: 720px; max-width: 92vw; max-height: 90vh;
   display: flex; flex-direction: column;
@@ -358,25 +358,25 @@ onBeforeUnmount(() => stopStream?.());
 }
 .dialog-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 24px; border-bottom: 1px solid #e5e7eb;
+  padding: 16px 24px; border-bottom: 1px solid var(--border);
 }
 .dialog-header h3 { margin: 0; font-size: 16px; }
-.btn-close { background: none; border: none; cursor: pointer; font-size: 24px; color: #6b7280; line-height: 1; }
+.btn-close { background: none; border: none; cursor: pointer; font-size: 24px; color: var(--text-secondary); line-height: 1; }
 
 .setup-form { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
 .setup-form label { display: flex; flex-direction: column; gap: 4px; }
-.setup-form label span { font-size: 13px; color: #4b5563; font-weight: 500; }
-.setup-form label em { color: #ef4444; font-style: normal; }
+.setup-form label span { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.setup-form label em { color: var(--danger); font-style: normal; }
 .setup-form input {
-  padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px;
+  padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 4px;
   font-size: 14px;
 }
-.setup-form input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
-.setup-form .hint { color: #6b7280; font-size: 13px; margin: 0 0 8px; }
-.setup-form .error { background: #fee; color: #c00; padding: 8px 12px; border-radius: 4px; font-size: 13px; }
+.setup-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent); }
+.setup-form .hint { color: var(--text-secondary); font-size: 13px; margin: 0 0 8px; }
+.setup-form .error { background: var(--danger-soft); color: var(--danger); padding: 8px 12px; border-radius: 4px; font-size: 13px; }
 
 .scan-panel { padding: 16px 24px 24px; }
-.scan-panel .hint { color: #f59e0b; font-size: 13px; margin: 0 0 12px; }
+.scan-panel .hint { color: var(--warning); font-size: 13px; margin: 0 0 12px; }
 
 .scan-grid {
   display: grid;
@@ -385,8 +385,8 @@ onBeforeUnmount(() => stopStream?.());
   min-height: 280px;
 }
 .qr-side, .log-side {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px;
 }
@@ -399,54 +399,77 @@ onBeforeUnmount(() => stopStream?.());
 }
 .qr-image {
   max-width: 200px; width: 100%; height: auto;
-  border: 1px solid #e5e7eb; border-radius: 4px;
-  background: white;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface);
 }
-.state.connected { color: #10b981; font-weight: 600; }
-.state.error { color: #ef4444; }
-.state.expired { color: #f59e0b; }
+.state.connected { color: var(--success); font-weight: 600; }
+.state.error { color: var(--danger); }
+.state.expired { color: var(--warning); }
 .spinner {
   width: 32px; height: 32px;
-  border: 3px solid #e5e7eb; border-top-color: #3b82f6;
+  border: 3px solid var(--border); border-top-color: var(--accent);
   border-radius: 50%; animation: spin 1s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.log-side h5 { margin: 0 0 8px; font-size: 13px; color: #6b7280; font-weight: 500; }
-.log-empty { color: #9ca3af; font-size: 13px; padding: 24px; text-align: center; }
+.log-side h5 { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.log-empty { color: var(--text-tertiary); font-size: 13px; padding: 24px; text-align: center; }
 .log-list {
   list-style: none; padding: 0; margin: 0;
   max-height: 240px; overflow-y: auto;
   font-family: ui-monospace, monospace; font-size: 12px;
 }
 .log-list li {
-  padding: 4px 8px; border-bottom: 1px solid #f3f4f6;
+  padding: 4px 8px; border-bottom: 1px solid var(--surface-subtle);
   display: flex; gap: 8px; align-items: baseline;
 }
 .log-list li:last-child { border-bottom: none; }
-.time { color: #9ca3af; flex-shrink: 0; }
+.time { color: var(--text-tertiary); flex-shrink: 0; }
 .kind { font-weight: 600; flex-shrink: 0; min-width: 100px; }
-.msg { color: #4b5563; flex: 1; word-break: break-word; }
-.kind-qr-url { color: #3b82f6; }
-.kind-qr-scanned { color: #8b5cf6; }
-.kind-connected { color: #10b981; }
-.kind-error, .kind-start-failed { color: #ef4444; }
-.kind-token-refreshed { color: #6366f1; }
+.msg { color: var(--text-secondary); flex: 1; word-break: break-word; }
+.kind-qr-url { color: var(--accent); }
+.kind-qr-scanned { color: var(--accent); }
+.kind-connected { color: var(--success); }
+.kind-error, .kind-start-failed { color: var(--danger); }
+.kind-token-refreshed { color: var(--accent); }
 
 .actions {
   display: flex; gap: 8px; justify-content: flex-end;
-  margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--surface-subtle);
 }
 .actions button {
-  padding: 8px 16px; border: 1px solid #d1d5db;
-  background: white; border-radius: 4px; cursor: pointer;
+  padding: 8px 16px; border: 1px solid var(--border-strong);
+  background: var(--surface); border-radius: 4px; cursor: pointer;
 }
-.actions button:hover { background: #f9fafb; }
+.actions button:hover { background: var(--surface-hover); }
 .actions button.primary {
-  background: #3b82f6; color: white; border-color: #3b82f6;
+  background: var(--accent); color: #fff; border-color: var(--accent);
 }
-.actions button.primary:hover { background: #2563eb; }
+.actions button.primary:hover { background: var(--accent-hover); }
 
 .error-panel { padding: 24px; text-align: center; }
-.error-panel p { color: #ef4444; }
+.error-panel p { color: var(--danger); }
+
+/* 紧凑断点：全屏展示（spec app-layout「渠道扫码移动端增强」）
+   二维码是手机上唯一比桌面更顺的场景，因此不给它留弹框边框。 */
+@media (max-width: 767px) {
+  .qr-overlay { align-items: stretch; justify-content: stretch; }
+  .qr-dialog {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+  }
+  .dialog-header { padding: 12px 16px; }
+  .btn-close { min-width: 44px; min-height: 44px; }
+  .setup-form { padding: 16px; }
+  .setup-form input { min-height: 44px; font-size: 16px; }
+  .setup-form select { min-height: 44px; font-size: 16px; }
+  .scan-panel { padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); }
+  .scan-grid { grid-template-columns: 1fr; min-height: 0; }
+  .qr-side { display: flex; flex-direction: column; align-items: center; }
+  .qr-image { max-width: min(76vw, 320px); }
+  .state { min-height: 180px; }
+}
 </style>

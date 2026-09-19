@@ -1,89 +1,104 @@
 <script setup lang="ts">
 /**
- * ChannelsView — IM 渠道管理主页面（master-detail 布局）
+ * ChannelsView — IM 渠道管理容器。
  *
- * 左侧：渠道卡片列表（从 channelAdminRegistry 读取）
- * 右侧：选中渠道的页面组件
+ * 渠道选择的位置（design.md D1/D2）：
+ *   - 抽屉（`AppDrawer` 的二级菜单）—— 所有断点，桌面展开时即「左侧栏」
+ *   - 顶部分段控件 —— 仅紧凑断点（<768px）
+ *
+ * 渠道由路由参数驱动（`/im/:channelType?`），可深链、刷新不丢。
+ * 渠道清单走共享的 `useChannelList()`（与抽屉同一份数据、单次请求）。
  */
-import { ref, computed, onMounted, shallowRef, markRaw, defineAsyncComponent } from 'vue';
-import { channelAdminRegistry, loadChannelManifest } from '../../modules/im-gateway';
+import { computed, markRaw, shallowRef, watch, defineAsyncComponent, type Component } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useChannelList } from '../../modules/im-gateway/useChannelList';
 import type { ChannelAdminPage } from '../../modules/im-gateway';
 import AppIcon from '../../components/ui/AppIcon.vue';
+import { useIsCompact } from '../../composables/useMediaQuery';
 
-const channels = ref<ChannelAdminPage[]>([]);
-const selectedChannelType = ref<string>('');
-const loading = ref(true);
-const contentComponent = shallowRef<ReturnType<typeof markRaw> | null>(null);
-const sidebarCollapsed = ref(false);
+const route = useRoute();
+const router = useRouter();
+const isCompact = useIsCompact();
+const { channels, ready } = useChannelList();
 
-onMounted(async () => {
-  try {
-    channels.value = await loadChannelManifest();
-    // 如果 manifest 返回空，使用 registry 作为 fallback
-    if (channels.value.length === 0) {
-      channels.value = channelAdminRegistry;
-    }
-    // 默认选中第一个
-    if (channels.value.length > 0 && channels.value[0]) {
-      selectChannel(channels.value[0]);
-    }
-  } catch (err) {
-    console.error('Failed to load channels:', err);
-    channels.value = channelAdminRegistry;
-    if (channels.value.length > 0 && channels.value[0]) {
-      selectChannel(channels.value[0]);
-    }
-  } finally {
-    loading.value = false;
-  }
+const selectedChannelType = computed(() => {
+  const raw = route.params.channelType;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === 'string' ? value : '';
 });
 
-function selectChannel(channel: ChannelAdminPage) {
-  selectedChannelType.value = channel.channelType;
-  // 设置全局 channelType，供 apiFetch 使用
-  (window as any).__currentChannelType = channel.channelType;
-  // 使用 defineAsyncComponent 包装异步组件
-  contentComponent.value = markRaw(defineAsyncComponent(channel.component));
+/** 路由未指定渠道时，回退到列表首项（manifest 决定了清单顺序）。 */
+const effectiveChannelType = computed(
+  () => selectedChannelType.value || channels.value[0]?.channelType || '',
+);
+
+const componentByType = new Map<string, Component>();
+const contentComponent = shallowRef<Component | null>(null);
+
+function resolveComponent(channelType: string): Component | null {
+  if (!channelType) return null;
+  const cached = componentByType.get(channelType);
+  if (cached) return cached;
+  const page = channels.value.find((channel) => channel.channelType === channelType);
+  if (!page) return null;
+  const async = markRaw(defineAsyncComponent(page.component as ChannelAdminPage['component'])) as Component;
+  componentByType.set(channelType, async);
+  return async;
 }
 
-function getChannelIcon(channelType: string): string {
-  // 映射渠道类型到图标
-  const iconMap: Record<string, string> = {
-    wechat: 'wechat',
-    qq: 'qq',
-  };
-  return iconMap[channelType] || 'im';
+watch(
+  effectiveChannelType,
+  (channelType) => {
+    // 供 apiFetch 解析渠道前缀（沿用 window.__channelAdminHost 契约）
+    (window as unknown as { __currentChannelType?: string }).__currentChannelType = channelType || undefined;
+    contentComponent.value = resolveComponent(channelType);
+  },
+  { immediate: true },
+);
+
+// 渠道清单异步就绪后重新解析组件（路由已带 channelType 时，effectiveChannelType 不变，
+// 但 channels 从空变为就绪，需要重试一次性解析）
+watch(ready, (isReady) => {
+  if (!isReady) return;
+  contentComponent.value = resolveComponent(effectiveChannelType.value);
+});
+
+function selectChannel(channel: ChannelAdminPage): void {
+  if (channel.channelType === effectiveChannelType.value) return;
+  void router.push(`/im/${channel.channelType}`);
+}
+
+function iconName(channelType: string): string {
+  if (channelType === 'wechat') return 'wechat';
+  if (channelType === 'qq') return 'qq';
+  return 'im';
 }
 </script>
 
 <template>
   <div class="channels-view">
-    <aside class="channels-sidebar" :class="{ collapsed: sidebarCollapsed }">
-      <div class="sidebar-header">
-        <h2 v-if="!sidebarCollapsed" class="channels-sidebar-title">IM</h2>
-        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '折叠'">
-          <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="16" />
-        </button>
-      </div>
-      <div v-if="loading" class="loading">加载中...</div>
-      <div v-else-if="channels.length === 0" class="empty-state">暂无渠道</div>
-      <nav v-else class="channels-list">
-        <button
-          v-for="channel in channels"
-          :key="channel.channelType"
-          :class="['channel-card', { active: selectedChannelType === channel.channelType }]"
-          @click="selectChannel(channel)"
-        >
-          <AppIcon :name="getChannelIcon(channel.channelType)" :size="24" />
-          <span v-if="!sidebarCollapsed" class="channel-name">{{ channel.displayName }}</span>
-        </button>
-      </nav>
-    </aside>
+    <div v-if="isCompact" class="channels-segmented" role="tablist" aria-label="IM 渠道">
+      <button
+        v-for="channel in channels"
+        :key="channel.channelType"
+        type="button"
+        role="tab"
+        class="channel-chip"
+        :class="{ 'is-active': effectiveChannelType === channel.channelType }"
+        :aria-selected="effectiveChannelType === channel.channelType"
+        @click="selectChannel(channel)"
+      >
+        <AppIcon :name="iconName(channel.channelType)" :size="16" />
+        <span>{{ channel.displayName }}</span>
+      </button>
+    </div>
+
+    <div v-if="!ready" class="channels-state">加载中...</div>
+    <div v-else-if="channels.length === 0" class="channels-state">暂无渠道</div>
+
     <main class="channels-content">
       <component :is="contentComponent" v-if="contentComponent" />
-      <div v-else class="empty-content">
-        选择一个渠道查看配置
-      </div>
+      <div v-else class="channels-state channels-state--center">选择一个渠道查看配置</div>
     </main>
   </div>
 </template>
@@ -91,131 +106,84 @@ function getChannelIcon(channelType: string): string {
 <style scoped>
 .channels-view {
   display: flex;
-  height: calc(100vh - 60px);
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   background: var(--bg);
 }
 
-.channels-sidebar {
-  width: 200px;
-  border-right: 1px solid var(--border);
-  padding: 16px;
-  flex-shrink: 0;
+/* 紧凑断点：顶部分段控件 */
+.channels-segmented {
   display: flex;
-  flex-direction: column;
-  transition: width 200ms ease;
-}
-
-.channels-sidebar.collapsed {
-  width: 60px;
-  padding: 16px 8px;
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.channels-sidebar.collapsed .sidebar-header {
-  justify-content: center;
-  margin-bottom: 12px;
-}
-
-.collapse-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.collapse-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.channels-sidebar.collapsed .channels-list {
-  align-items: center;
-}
-
-.channels-sidebar-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.channels-list {
-  display: flex;
-  flex-direction: column;
+  flex: none;
   gap: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  scrollbar-width: none;
 }
 
-.channel-card {
-  display: flex;
+.channels-segmented::-webkit-scrollbar {
+  display: none;
+}
+
+.channel-chip {
+  display: inline-flex;
+  min-height: 44px;
+  flex: none;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: none;
-  background: transparent;
+  gap: 7px;
+  padding: 9px 15px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-subtle);
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
-  text-align: left;
-  transition: all 150ms ease;
-  width: 100%;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
 
-.channels-sidebar.collapsed .channel-card {
-  padding: 12px;
-  justify-content: center;
-}
-
-.channel-card:hover {
-  background: var(--surface-hover);
+.channel-chip:hover {
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
-.channel-card.active {
+.channel-chip.is-active {
+  border-color: transparent;
   background: var(--accent-soft);
   color: var(--accent-ink);
 }
 
-.channel-name {
-  flex: 1;
-  font-weight: 500;
-}
-
 .channels-content {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 24px;
 }
 
-.empty-content {
+.channels-state {
+  padding: 20px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.channels-state--center {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
 }
 
-.loading, .empty-state {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  text-align: center;
-  padding: 20px;
+@media (max-width: 767px) {
+  .channels-content {
+    padding: 16px;
+  }
 }
 </style>

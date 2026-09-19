@@ -1,78 +1,51 @@
 <script setup lang="ts">
 /**
- * ConfigView — 配置管理主页面（master-detail 布局）
+ * ConfigView — 配置模块外壳。
  *
- * 左侧：功能列表
- * 右侧：对应功能的内容区
+ * 只做两件事：
+ *   1. 紧凑断点渲染顶部分段控件（避免为切换 section 而打开遮罩抽屉）
+ *   2. 用 `<router-view>` 渲染子路由（各 section / 编辑器路由页）
+ *
+ * section 导航本体在抽屉（`AppDrawer` 的二级菜单）——桌面展开抽屉时即「左侧栏」，
+ * 视图内不再保留自己的侧栏（design.md D10）。
  */
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import ModelsConfig from './ModelsConfig.vue';
-import SkillsConfig from './SkillsConfig.vue';
-import PromptsConfig from './PromptsConfig.vue';
-import ExtensionsConfig from './ExtensionsConfig.vue';
-import DefaultSettings from './DefaultSettings.vue';
-import AppIcon from '../../components/ui/AppIcon.vue';
+import { CONFIG_SECTIONS, configSectionFromPath } from './sections';
+import { useIsCompact } from '../../composables/useMediaQuery';
 
 const route = useRoute();
 const router = useRouter();
+const isCompact = useIsCompact();
 
-interface ConfigMenuItem {
-  id: string;
-  label: string;
-  icon: string;
-}
+const activeSection = computed(() => configSectionFromPath(route.path));
 
-const menuItems: ConfigMenuItem[] = [
-  { id: 'models', label: '模型 API', icon: '🔧' },
-  { id: 'settings', label: '默认设置', icon: '⚙️' },
-  { id: 'skills', label: 'Skills', icon: '📚' },
-  { id: 'prompts', label: 'Prompts', icon: '💬' },
-  { id: 'extensions', label: '插件管理', icon: '🧩' },
-];
-
-const activeTab = ref('models');
-const sidebarCollapsed = ref(false);
-
-const activeComponent = computed(() => {
-  switch (activeTab.value) {
-    case 'models': return ModelsConfig;
-    case 'settings': return DefaultSettings;
-    case 'skills': return SkillsConfig;
-    case 'prompts': return PromptsConfig;
-    case 'extensions': return ExtensionsConfig;
-    default: return ModelsConfig;
-  }
-});
-
-function selectTab(id: string) {
-  activeTab.value = id;
+function selectSection(id: string): void {
+  if (id === activeSection.value) return;
+  void router.push(`/config/${id}`);
 }
 </script>
 
 <template>
   <div class="config-view">
-    <aside class="config-sidebar" :class="{ collapsed: sidebarCollapsed }">
-      <div class="sidebar-header">
-        <h2 v-if="!sidebarCollapsed" class="config-sidebar-title">配置管理</h2>
-        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '折叠'">
-          <AppIcon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" :size="16" />
-        </button>
-      </div>
-      <nav class="config-menu">
-        <button
-          v-for="item in menuItems"
-          :key="item.id"
-          :class="['config-menu-item', { active: activeTab === item.id }]"
-          @click="selectTab(item.id)"
-        >
-          <span class="config-menu-icon" :title="item.label">{{ item.icon }}</span>
-          <span v-if="!sidebarCollapsed" class="config-menu-label">{{ item.label }}</span>
-        </button>
-      </nav>
-    </aside>
+    <div v-if="isCompact" class="config-segmented" role="tablist" aria-label="配置分区">
+      <button
+        v-for="section in CONFIG_SECTIONS"
+        :key="section.id"
+        type="button"
+        role="tab"
+        class="config-chip"
+        :class="{ 'is-active': activeSection === section.id }"
+        :aria-selected="activeSection === section.id"
+        @click="selectSection(section.id)"
+      >
+        <span class="config-chip-icon" aria-hidden="true">{{ section.icon }}</span>
+        <span>{{ section.label }}</span>
+      </button>
+    </div>
+
     <main class="config-content">
-      <component :is="activeComponent" />
+      <router-view />
     </main>
   </div>
 </template>
@@ -80,118 +53,74 @@ function selectTab(id: string) {
 <style scoped>
 .config-view {
   display: flex;
-  height: calc(100vh - 60px);
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   background: var(--bg);
 }
 
-.config-sidebar {
-  width: 200px;
-  border-right: 1px solid var(--border);
-  padding: 16px;
-  flex-shrink: 0;
-  transition: width 200ms ease;
-}
-
-.config-sidebar.collapsed {
-  width: 60px;
-  padding: 16px 8px;
-}
-
-.sidebar-header {
+/* 紧凑断点：顶部分段控件（横向可滚动，项数超出时仍可访问全部） */
+.config-segmented {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.config-sidebar.collapsed .sidebar-header {
-  justify-content: center;
-  margin-bottom: 12px;
-}
-
-.collapse-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-}
-
-.collapse-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.config-sidebar.collapsed .config-menu {
-  align-items: center;
-}
-
-.config-sidebar-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.config-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.config-menu-item {
-  display: flex;
-  align-items: center;
+  flex: none;
   gap: 8px;
-  padding: 10px 12px;
-  border: none;
-  background: transparent;
+  padding: 12px 16px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  scrollbar-width: none;
+}
+
+.config-segmented::-webkit-scrollbar {
+  display: none;
+}
+
+.config-chip {
+  display: inline-flex;
+  min-height: 44px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 15px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-subtle);
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
-  text-align: left;
-  transition: all 150ms ease;
-  width: 100%;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
 
-.config-sidebar.collapsed .config-menu-item {
-  padding: 12px;
-  justify-content: center;
-}
-
-.config-menu-item:hover {
-  background: var(--surface-hover);
+.config-chip:hover {
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
-.config-menu-item.active {
+.config-chip.is-active {
+  border-color: transparent;
   background: var(--accent-soft);
   color: var(--accent-ink);
 }
 
-.config-menu-icon {
-  font-size: 1rem;
-}
-
-.config-menu-label {
-  flex: 1;
+.config-chip-icon {
+  font-size: 0.95rem;
 }
 
 .config-content {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   padding: 24px;
+}
+
+@media (max-width: 767px) {
+  .config-content {
+    padding: 16px;
+  }
 }
 </style>

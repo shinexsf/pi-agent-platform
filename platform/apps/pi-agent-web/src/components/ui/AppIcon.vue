@@ -83,6 +83,12 @@ withDefaults(
       <path d="M20 7v5h-5M4 17v-5h5" />
       <path d="M6.1 8a7 7 0 0 1 11.7-1L20 12M4 12l2.2 5a7 7 0 0 0 11.7-1" />
     </template>
+    <template v-else-if="name === 'menu'">
+      <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+    </template>
+    <template v-else-if="name === 'chevron-down'">
+      <path d="m6 9 6 6 6-6" />
+    </template>
     <template v-else-if="name === 'chevron-left'">
       <path d="m15 18-6-6 6-6" />
     </template>

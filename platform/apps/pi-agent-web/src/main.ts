@@ -1,12 +1,8 @@
 /**
  * Web app entry — Vue + Vue Router + Pinia.
  *
- * Routes:
- *   /agents         Agents list    (meta.navLabel="Agents")
- *   /sessions       Sessions list  (meta.navLabel="Sessions")
- *   /sessions/:id   Session detail
- *   /architecture   Interactive project architecture
- *   /im/*           Channel admin pages (auto-discovered via import.meta.glob)
+ * 导航由 `components/layout/nav-tree.ts` 从路由 `meta.navLabel` 推导；
+ * 面包屑由 `meta.crumbTitle` / `meta.crumbTitleFromParam` 补充最后一段。
  *
  * Channel admin pages consume `window.__channelAdminHost` (set below) which
  * wraps `fetch('/api/im/<channelType>/...')` calls.
@@ -30,14 +26,33 @@ import {
 } from './modules/im-gateway';
 import ChannelsView from './views/im/ChannelsView.vue';
 import ConfigView from './views/config/ConfigView.vue';
+import ModelsConfig from './views/config/ModelsConfig.vue';
+import DefaultSettings from './views/config/DefaultSettings.vue';
+import SkillsConfig from './views/config/SkillsConfig.vue';
+import PromptsConfig from './views/config/PromptsConfig.vue';
+import ExtensionsConfig from './views/config/ExtensionsConfig.vue';
+import ProviderEditorView from './views/config/ProviderEditorView.vue';
+import ResourceEditorView from './views/config/ResourceEditorView.vue';
+import AgentEditorView from './views/agents/AgentEditorView.vue';
 
-// Step 1: base routes (data-driven navLabel for TopNav)
+// Step 1: base routes（一级导航由 `components/layout/nav-tree.ts` 从 meta 读取）
 const baseRoutes = [
   { path: '/', redirect: '/agents' },
   {
     path: '/agents',
     component: AgentsListView,
     meta: { navLabel: 'Agents', navOrder: 10, navIcon: 'agents' },
+  },
+  // Agent 编辑器：内容型弹框 → 路由页（spec route-based-modals）
+  {
+    path: '/agents/new',
+    component: AgentEditorView,
+    meta: { crumbTitle: 'New Agent' },
+  },
+  {
+    path: '/agents/:id/edit',
+    component: AgentEditorView,
+    meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Agent' },
   },
   {
     path: '/sessions',
@@ -47,17 +62,68 @@ const baseRoutes = [
   {
     path: '/architecture',
     component: () => import('./views/ArchitectureView.vue'),
-    meta: { navLabel: '架构图', navOrder: 90, navIcon: 'architecture', fullWidth: true },
+    // mobileHidden：架构图是撑满视口的 iframe，紧凑断点下不出现在抽屉里
+    meta: {
+      navLabel: '架构图',
+      navOrder: 90,
+      navIcon: 'architecture',
+      fullWidth: true,
+      mobileHidden: true,
+    },
   },
   {
-    path: '/im',
+    path: '/im/:channelType?',
     component: ChannelsView,
-    meta: { navLabel: 'IM', navOrder: 30, navIcon: 'im' },
+    meta: { navLabel: 'IM', navOrder: 30, navIcon: 'im', fullWidth: true },
   },
   {
     path: '/config',
     component: ConfigView,
-    meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings' },
+    meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings', fullWidth: true },
+    // 嵌套路由：ConfigView 作为模块壳（紧凑断点的分段控件），子路由填充内容。
+    // `new` 子路由声明在 `:name?` 之前；vue-router 也按静态段得分优先匹配。
+    children: [
+      { path: '', redirect: { name: 'config-models' } },
+      { path: 'models', name: 'config-models', component: ModelsConfig },
+      {
+        path: 'models/new',
+        name: 'config-model-new',
+        component: ProviderEditorView,
+        meta: { crumbTitle: '新建 Provider' },
+      },
+      {
+        path: 'models/:name/edit',
+        name: 'config-model-edit',
+        component: ProviderEditorView,
+        meta: { crumbTitleFromParam: 'name', crumbTitle: '编辑 Provider' },
+      },
+      { path: 'settings', name: 'config-settings', component: DefaultSettings },
+      {
+        path: 'skills/new',
+        name: 'config-skill-new',
+        component: ResourceEditorView,
+        meta: { resource: 'skills', crumbTitle: '新建 Skill' },
+      },
+      {
+        path: 'skills/:name?',
+        name: 'config-skills',
+        component: SkillsConfig,
+        meta: { crumbTitleFromParam: 'name' },
+      },
+      {
+        path: 'prompts/new',
+        name: 'config-prompt-new',
+        component: ResourceEditorView,
+        meta: { resource: 'prompts', crumbTitle: '新建 Prompt' },
+      },
+      {
+        path: 'prompts/:name?',
+        name: 'config-prompts',
+        component: PromptsConfig,
+        meta: { crumbTitleFromParam: 'name' },
+      },
+      { path: 'extensions', name: 'config-extensions', component: ExtensionsConfig },
+    ],
   },
 
   {
