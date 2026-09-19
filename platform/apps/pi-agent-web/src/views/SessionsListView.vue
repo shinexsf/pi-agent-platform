@@ -379,8 +379,8 @@ onMounted(() => load());
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 20px;
+  gap: 12px;
+  padding: 10px 12px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -402,7 +402,7 @@ onMounted(() => load());
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .session-chevron {
@@ -414,8 +414,8 @@ onMounted(() => load());
   .session-row-button {
     align-items: flex-start;
     flex-direction: column;
-    gap: 13px;
-    padding: 17px 15px;
+    gap: 8px;
+    padding: 10px 12px;
   }
 
   .session-runtime {

@@ -177,13 +177,14 @@ watch(
   margin-left: auto;
 }
 
-/* 紧凑断点：触摸目标放大到 44px */
+/* 紧凑断点：按钮缩小但保持可点 */
 @media (max-width: 767px) {
   .header-icon-btn,
   .theme-toggle {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    border-radius: 8px;
   }
 }
 </style>

@@ -324,7 +324,7 @@ function sessionLabel(sessionId?: string | null): string {
   background: var(--accent-soft);
   border: 2px solid var(--accent);
   border-radius: 8px;
-  padding: 20px;
+  padding: 10px;
   margin-bottom: 16px;
   text-align: center;
 }
@@ -332,8 +332,8 @@ function sessionLabel(sessionId?: string | null): string {
   background: var(--accent);
   color: #fff;
   border: none;
-  padding: 14px 28px;
-  font-size: 16px;
+  padding: 8px 16px;
+  font-size: 14px;
   font-weight: 600;
   border-radius: 6px;
   cursor: pointer;
@@ -355,22 +355,22 @@ function sessionLabel(sessionId?: string | null): string {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 16px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .card-header { display: flex; align-items: center; gap: 8px; }
-.card-name { font-weight: 600; font-size: 1rem; color: var(--text); }
-.card-body { display: flex; flex-direction: column; gap: 8px; }
+.card-name { font-weight: 600; font-size: 0.85rem; color: var(--text); }
+.card-body { display: flex; flex-direction: column; gap: 4px; }
 .card-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.card-label { color: var(--text-secondary); font-size: 0.85rem; min-width: 70px; flex: none; }
-.card-value { font-size: 0.85rem; color: var(--text); word-break: break-all; }
+.card-label { color: var(--text-secondary); font-size: 0.75rem; min-width: 55px; flex: none; }
+.card-value { font-size: 0.75rem; color: var(--text); word-break: break-all; }
 .card-actions {
   display: flex;
-  gap: 8px;
-  padding-top: 8px;
+  gap: 6px;
+  padding-top: 5px;
   border-top: 1px solid var(--border);
 }
 
@@ -411,7 +411,7 @@ button.primary:hover { background: var(--accent-hover); }
   background: var(--surface-raised);
   color: var(--text);
   border-radius: 8px;
-  padding: 24px;
+  padding: 18px;
   max-width: 480px;
   width: 100%;
   max-height: 88vh;
@@ -439,17 +439,17 @@ button.primary:hover { background: var(--accent-hover); }
 /* 紧凑断点：卡片单列、操作按钮折行、长文本不撑破（spec channel-admin-theming） */
 @media (max-width: 767px) {
   .qq-channels-page { padding: 12px; }
-  .qr-login-cta { padding: 16px; }
+  .qr-login-cta { padding: 10px; }
   .btn-qr-login { width: 100%; }
   .channel-cards { gap: 12px; }
   .card-row { align-items: flex-start; flex-direction: column; gap: 4px; }
   .card-label { min-width: 0; }
   .card-actions { flex-wrap: wrap; }
-  .card-actions button { min-height: 44px; flex: 1; margin-right: 0; }
-  button { min-height: 44px; }
-  button.link { min-height: 40px; }
+  .card-actions button { min-height: 28px; flex: 1; margin-right: 0; font-size: 12px; padding: 4px 8px; }
+  button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
+  button.link { min-height: 24px; padding: 2px 6px; font-size: 11px; }
   .modal { padding: 18px; }
-  .modal select { min-height: 44px; font-size: 16px; }
+  .modal select { min-height: 34px; font-size: 16px; }
   .modal-actions button { flex: 1; }
 }
 </style>

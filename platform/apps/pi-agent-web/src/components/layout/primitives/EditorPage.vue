@@ -91,20 +91,20 @@ function goBack(): void {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 12px;
-  padding-bottom: 14px;
+  gap: 8px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
 .editor-page__back {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 34px;
   flex: none;
   align-items: center;
-  gap: 7px;
-  padding: 8px 12px;
+  gap: 5px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 7px;
   background: var(--surface-subtle);
   color: var(--text-secondary);
   font-size: 0.82rem;
@@ -124,7 +124,7 @@ function goBack(): void {
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 1.05rem;
+  font-size: 0.92rem;
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -141,15 +141,15 @@ function goBack(): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 2px;
+  padding: 12px 2px;
 }
 
 .editor-page__footer {
   display: flex;
   flex: none;
   justify-content: flex-end;
-  gap: 10px;
-  padding-top: 14px;
+  gap: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 

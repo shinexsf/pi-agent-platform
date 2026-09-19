@@ -268,8 +268,8 @@ function getSourceLabel(source: string): string {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 24px;
+  padding: 14px;
+  margin-bottom: 16px;
 }
 
 .install-section h3 {
@@ -331,7 +331,7 @@ function getSourceLabel(source: string): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
 

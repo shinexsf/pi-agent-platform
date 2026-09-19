@@ -450,7 +450,7 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 
 <style scoped>
 .default-settings {
-  max-width: 600px;
+  max-width: 560px;
 }
 
 .page-title {
@@ -469,7 +469,7 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .form-group {
@@ -621,8 +621,8 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
   }
 
   .form-select {
-    min-height: 44px;
-    font-size: 16px;
+    min-height: 36px;
+    font-size: 14px;
   }
 
   .models-header {
@@ -645,12 +645,12 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
   }
 
   .checkbox-item {
-    min-height: 44px;
+    min-height: 34px;
   }
 
   .checkbox-item input[type="checkbox"] {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
 }
 </style>

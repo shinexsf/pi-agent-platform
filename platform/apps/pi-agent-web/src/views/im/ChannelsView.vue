@@ -131,16 +131,16 @@ function iconName(channelType: string): string {
 
 .channel-chip {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 32px;
   flex: none;
   align-items: center;
   gap: 7px;
-  padding: 9px 15px;
+  padding: 6px 11px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-subtle);
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 650;
   white-space: nowrap;
   cursor: pointer;
@@ -164,7 +164,7 @@ function iconName(channelType: string): string {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: 24px;
+  padding: 12px;
 }
 
 .channels-state {
@@ -183,7 +183,7 @@ function iconName(channelType: string): string {
 
 @media (max-width: 767px) {
   .channels-content {
-    padding: 16px;
+    padding: 10px;
   }
 }
 </style>

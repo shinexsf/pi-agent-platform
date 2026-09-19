@@ -436,15 +436,15 @@ html[data-route-direction="lateral"]::view-transition-new(app-stage) {
 
 .resource-avatar {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 11px;
+  border-radius: 8px;
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 780;
   letter-spacing: -0.02em;
   text-transform: uppercase;
@@ -942,45 +942,127 @@ textarea.control {
 }
 
 @media (max-width: 767px) {
-  .app-main {
-    padding: 28px 16px 44px;
+  /* 顶栏 46px（GitHub 约 46px） */
+  :root {
+    --app-header-h: 46px;
   }
 
-  /* 触摸目标：可交互控件不小 44px（spec app-layout「移动端触摸目标」） */
+  .app-main {
+    padding: 10px 12px 24px;
+  }
+
+  /* 控件：紧凑但保留 iOS 防缩放的 16px */
   .btn {
-    min-height: 44px;
+    min-height: 34px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    gap: 5px;
   }
 
   .btn-sm {
-    min-height: 38px;
+    min-height: 26px;
+    padding: 3px 7px;
+    font-size: 0.72rem;
   }
 
   .btn-icon {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 8px;
   }
 
-  /* 输入控件 44px + 16px 字号（16px 可阻止 iOS 聚焦时自动缩放页面） */
+  /* 输入 16px 防 iOS zoom，但 padding 紧凑 */
   .control {
-    min-height: 44px;
-    font-size: 16px;
+    min-height: 36px;
+    padding: 5px 8px;
+  }
+
+  textarea.control {
+    min-height: 64px;
   }
 
   .field-label {
-    font-size: 0.82rem;
+    font-size: 0.76rem;
+    margin-bottom: 2px;
   }
 
-  /* 固定 min-width 会在窄屏撑出横向滚动 */
   .search-input {
     min-width: 0;
     max-width: none;
   }
 
+  .surface-panel {
+    border-radius: 6px;
+  }
+
+  .panel-toolbar {
+    min-height: auto;
+    padding: 6px 10px;
+    gap: 6px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .resource-row-inner {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .resource-identity {
+    gap: 8px;
+  }
+
+  .resource-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    font-size: 0.65rem;
+  }
+
+  .resource-title {
+    font-size: 0.85rem;
+  }
+
+  .resource-meta {
+    margin-top: 3px;
+    gap: 3px 8px;
+    font-size: 0.68rem;
+  }
+
+  .resource-tools {
+    margin-top: 3px;
+    font-size: 0.65rem;
+  }
+
+  .resource-actions {
+    flex-direction: row;
+    padding-left: 38px;
+    gap: 5px;
+    margin-top: 2px;
+  }
+
+  .resource-actions .btn-icon {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .resource-actions .btn-primary:not(.btn-icon) {
+    flex: 1;
+  }
+
+  .status-badge {
+    min-height: 20px;
+    padding: 2px 7px;
+    font-size: 0.65rem;
+  }
+
   .page-heading {
     align-items: flex-start;
     flex-direction: column;
-    gap: 14px;
-    margin-bottom: 22px;
+    gap: 10px;
+    margin-bottom: 14px;
   }
 
   .page-actions {
@@ -989,28 +1071,7 @@ textarea.control {
   }
 
   .page-title {
-    font-size: 1.8rem;
-  }
-
-  .panel-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 12px 14px;
-  }
-
-  .resource-row-inner {
-    align-items: stretch;
-    flex-direction: column;
-    padding: 17px 15px;
-  }
-
-  .resource-actions {
-    flex-direction: row;
-    padding-left: 52px;
-  }
-
-  .resource-actions .btn-primary:not(.btn-icon) {
-    flex: 1;
+    font-size: 1.1rem;
   }
 
   .meta-item.truncate {
@@ -1026,7 +1087,7 @@ textarea.control {
   }
 
   .inline-editor {
-    padding: 17px 15px;
+    padding: 12px 10px;
   }
 
   .editor-heading {
@@ -1034,7 +1095,7 @@ textarea.control {
   }
 
   .pagination {
-    gap: 12px;
+    gap: 10px;
   }
 }
 

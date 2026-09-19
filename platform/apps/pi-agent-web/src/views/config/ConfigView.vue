@@ -78,16 +78,16 @@ function selectSection(id: string): void {
 
 .config-chip {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 32px;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 9px 15px;
+  gap: 5px;
+  padding: 6px 11px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-subtle);
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 650;
   white-space: nowrap;
   cursor: pointer;
@@ -115,12 +115,12 @@ function selectSection(id: string): void {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: 24px;
+  padding: 16px 12px;
 }
 
 @media (max-width: 767px) {
   .config-content {
-    padding: 16px;
+    padding: 10px 10px;
   }
 }
 </style>

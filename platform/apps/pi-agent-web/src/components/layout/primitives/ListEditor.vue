@@ -269,14 +269,14 @@ void loadList();
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .list-editor__title {
   min-width: 0;
   margin: 0;
   color: var(--text);
-  font-size: 1.15rem;
+  font-size: 0.95rem;
   font-weight: 700;
 }
 
@@ -305,8 +305,8 @@ void loadList();
 .list-editor__item-btn {
   min-width: 0;
   flex: 1;
-  min-height: 48px;
-  padding: 12px 14px;
+  min-height: 36px;
+  padding: 8px 12px;
   overflow: hidden;
   border: 0;
   background: transparent;
@@ -329,8 +329,8 @@ void loadList();
 
 .list-editor__delete {
   display: inline-flex;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   flex: none;
   align-items: center;
   justify-content: center;
@@ -350,7 +350,7 @@ void loadList();
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -374,7 +374,7 @@ void loadList();
 .list-editor__hint {
   flex: none;
   margin: 0;
-  padding: 10px 16px;
+  padding: 6px 12px;
   background: var(--warning-soft);
   color: var(--warning);
   font-size: 0.78rem;
@@ -384,7 +384,7 @@ void loadList();
   flex: 1;
   min-height: 0;
   width: 100%;
-  padding: 16px;
+  padding: 10px;
   border: 0;
   background: var(--bg);
   color: var(--text);
@@ -406,7 +406,7 @@ void loadList();
 }
 
 .list-editor__state {
-  padding: 32px 20px;
+  padding: 20px 16px;
   color: var(--text-secondary);
   font-size: 0.85rem;
   text-align: center;

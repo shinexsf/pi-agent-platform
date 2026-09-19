@@ -79,11 +79,11 @@ const isCompact = useIsCompact();
 
 .split-pane__back {
   display: flex;
-  min-height: 44px;
+  min-height: 36px;
   flex: none;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 6px;
+  padding: 7px 12px;
   border: 0;
   border-bottom: 1px solid var(--border);
   background: transparent;

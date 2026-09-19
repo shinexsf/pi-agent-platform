@@ -201,13 +201,13 @@ onBeforeUnmount(() => {
 
 .drawer-item {
   display: flex;
-  min-height: 44px;
+  min-height: 36px;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 9px;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
   color: var(--text-secondary);
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   font-weight: 650;
   text-decoration: none;
   transition: background-color 150ms ease, color 150ms ease;
@@ -225,10 +225,10 @@ onBeforeUnmount(() => {
 
 /* 二级项：缩进 + 轻字重，不做图标，避免与一级项视觉混淆 */
 .drawer-item--leaf {
-  min-height: 40px;
-  margin-left: 26px;
-  padding: 8px 12px;
-  font-size: 0.8rem;
+  min-height: 32px;
+  margin-left: 22px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
   font-weight: 550;
 }
 
@@ -241,13 +241,13 @@ onBeforeUnmount(() => {
 
 .drawer-more {
   display: flex;
-  min-height: 36px;
+  min-height: 28px;
   align-items: center;
-  gap: 6px;
-  margin-left: 26px;
-  padding: 6px 12px;
+  gap: 5px;
+  margin-left: 22px;
+  padding: 4px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 0.76rem;

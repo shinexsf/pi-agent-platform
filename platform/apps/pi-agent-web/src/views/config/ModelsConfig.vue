@@ -394,8 +394,8 @@ function toggleApiKeyVisibility(key: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .search-box {
@@ -656,7 +656,7 @@ function toggleApiKeyVisibility(key: string) {
   .provider-header {
     align-items: flex-start;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
   }
 
   .provider-actions {
