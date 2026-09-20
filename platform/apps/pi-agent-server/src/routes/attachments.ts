@@ -15,6 +15,7 @@ import {
   AttachmentStore,
   MAX_ATTACHMENT_BYTES,
   sha256Hex,
+  fileTag,
 } from '../services/attachment-store.js';
 
 interface AttachmentsRouterDeps {
@@ -108,15 +109,10 @@ export function createAttachmentsRouter(deps: AttachmentsRouterDeps) {
       return c.json({ error: 'Empty file', code: 'invalid_body' }, 400);
     }
 
-    // Magic-byte sniff — overrides client claim, the truth is what the bytes actually are.
-    // HTTP upload endpoint restricts to images (IDE only pastes images).
-    // IM adapter goes through host.uploadAttachment() → upsert() directly.
+    // Magic-byte sniff for images; fallback to client-claimed mimeType or octet-stream.
     const sniffedMime = detectImageMime(bytes);
-    if (!sniffedMime) {
-      return c.json({ error: 'Unsupported media type (not a recognized image format)', code: 'unsupported_mime' }, 415);
-    }
-
-    const mimeType = sniffedMime;
+    const mimeType = sniffedMime
+      ?? (typeof body.mimeType === 'string' && body.mimeType ? body.mimeType : 'application/octet-stream');
     const originalFilename =
       typeof body.filename === 'string' && body.filename.trim().length > 0
         ? body.filename.trim().slice(0, 255)
@@ -136,6 +132,7 @@ export function createAttachmentsRouter(deps: AttachmentsRouterDeps) {
         originalFilename: result.row.originalFilename,
         sha256: result.row.sha,
         createdAt: result.row.createdAt,
+        fileTag: fileTag(result.row, result.row.originalFilename),
       });
     } catch (err) {
       const code = (err as Error & { code?: string }).code;
@@ -167,6 +164,34 @@ export function createAttachmentsRouter(deps: AttachmentsRouterDeps) {
         createdAt: r.createdAt,
       })),
     );
+  });
+
+  // GET /api/sessions/:id/attachments/:attId — serve attachment file bytes
+  router.get('/:id/attachments/:attId', async (c) => {
+    const sessionId = c.req.param('id');
+    const attId = c.req.param('attId');
+    if (!sessionIsLive(sessionId)) {
+      return c.json({ error: 'Session not found', code: 'session_not_found' }, 404);
+    }
+    const row = attachmentStore.lookupById(sessionId, attId);
+    if (!row) {
+      return c.json({ error: 'Attachment not found', code: 'not_found' }, 404);
+    }
+    // Read file from disk and return as binary
+    const fs = await import('node:fs/promises');
+    const filePath = attachmentStore.resolvePath(sessionId, row.filename);
+    try {
+      const bytes = await fs.readFile(filePath);
+      return new Response(bytes, {
+        headers: {
+          'Content-Type': row.mimeType,
+          'Content-Length': String(bytes.byteLength),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        },
+      });
+    } catch {
+      return c.json({ error: 'File not found on disk', code: 'file_missing' }, 404);
+    }
   });
 
   return router;

@@ -541,9 +541,6 @@ export async function createSession(
   const unsubscribe = realSession.subscribe((event: unknown) => {
     const e = event as { type?: string; message?: { role?: string } };
 
-    // Skip user messages — client already has them via optimistic append.
-    if (e.message?.role === 'user') return;
-
     // queue_update: forward steering + followUp arrays directly (no delta needed).
     if (e.type === 'queue_update') {
       emit({

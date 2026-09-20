@@ -71,6 +71,9 @@ export function useSSE(options: UseSSEOptions) {
   const steeringQueue = ref<string[]>([])
   const streamingBehavior = ref<'steer'>('steer')
 
+  // ── File attachments for user messages (non-image files) ──
+  const fileAttachmentsByMsg = ref<Map<string, Array<{ attId: string; name: string; type: string }>>>(new Map())
+
   /**
    * Subscribe to a specific context field. The handler is invoked immediately
    * if contextCache already has a value, and on every loadContext() refresh.
@@ -208,6 +211,54 @@ export function useSSE(options: UseSSEOptions) {
     messages.value.push(msg)
   }
 
+  function parseFileTag(tag: string): { attId?: string; type?: string; name?: string } {
+    const attId = tag.match(/attId="(att_[a-f0-9]{12})"/)?.[1]
+    const type = tag.match(/type="([^"]*)"/)?.[1]
+    const name = tag.match(/name="([^"]*)"/)?.[1]
+    return { attId, type, name }
+  }
+  const FILE_TAG_RE = /<file\s[^>]*>/g
+
+  async function fetchUserMessageAttachments(msg: MessageDTO) {
+    const content = msg.content ?? ''
+    const allMatches = Array.from(content.matchAll(FILE_TAG_RE))
+    if (allMatches.length === 0) return
+    const images: Array<{ mimeType: string; data: string }> = []
+    const files: Array<{ attId: string; name: string; type: string }> = []
+    for (const m of allMatches) {
+      const attrs = parseFileTag(m[0])
+      if (!attrs.attId || !attrs.type) continue
+      const { attId, type: mimeType, name } = attrs
+      if (mimeType.startsWith('image/')) {
+        try {
+          const res = await fetch(`/api/sessions/${options.sessionId}/attachments/${attId}`)
+          if (!res.ok) continue
+          const blob = await res.blob()
+          const b64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onload = () => {
+              const r = reader.result as string
+              const comma = r.indexOf(',')
+              resolve(comma >= 0 ? r.slice(comma + 1) : r)
+            }
+            reader.onerror = () => resolve('')
+            reader.readAsDataURL(blob)
+          })
+          if (b64) images.push({ mimeType, data: b64 })
+        } catch { /* skip */ }
+      } else {
+        files.push({ attId, name: name || 'file', type: mimeType })
+      }
+    }
+    if (images.length > 0) {
+      msg.images = [...(msg.images ?? []), ...images]
+    }
+    if (files.length > 0) {
+      fileAttachmentsByMsg.value.set(msg.id, files)
+      fileAttachmentsByMsg.value = new Map(fileAttachmentsByMsg.value)
+    }
+  }
+
   // ── SSE subscription ──
 
   function subscribe() {
@@ -233,9 +284,14 @@ export function useSSE(options: UseSSEOptions) {
       try {
         const delta: MessageDeltaDTO = JSON.parse((e as MessageEvent).data)
         applyDelta(delta)
-        // Mark ended AFTER applyDelta so the final stopReason/thinking/etc.
-        // are committed before the UI collapses the preview.
         markMessageEnded(delta.messageId)
+        // Fetch attachments for user messages with <file attId> tags
+        if (delta.role === 'user' && delta.content) {
+          const msg = messages.value.find(m => m.id === delta.messageId)
+          if (msg && !msg.images?.length && !fileAttachmentsByMsg.value.has(delta.messageId)) {
+            fetchUserMessageAttachments(msg)
+          }
+        }
       } catch (err) {
         console.error('[SSE] failed to parse message_end:', err)
       }
@@ -299,6 +355,11 @@ export function useSSE(options: UseSSEOptions) {
       // Webui displays toolResult as its own card and consumes the raw
       // stream, so server keeps the original entries.
       messages.value = mergeToolResultsIntoCalls(data.messages)
+      for (const msg of messages.value) {
+        if (msg.role === 'user' && msg.content?.includes('<file ') && !msg.images?.length && !fileAttachmentsByMsg.value.has(msg.id)) {
+          fetchUserMessageAttachments(msg)
+        }
+      }
     } catch (err) {
       console.warn('[SSE] loadHistory failed:', err)
     }
@@ -397,24 +458,19 @@ export function useSSE(options: UseSSEOptions) {
     // Steer mode: allow sending even when agent is working
     // Only block if already sending AND not a new steer message
     // (This enables the "queue while working" behavior)
-    const isSteerMessage = sending.value // If agent is working, this is a steer message
-    
-    // Don't set sending=true for steer messages - let agent_end handle it
+    // Ensure SSE is connected — EventSource may have been closed after long idle
+    if (eventSource && eventSource.readyState !== EventSource.OPEN) {
+      eventSource.close()
+      eventSource = null
+    }
+    if (!eventSource) subscribe()
+
+    const isSteerMessage = sending.value
     if (!isSteerMessage) {
       sending.value = true
     }
 
-    const tempUserId = `temp-user-${Date.now()}`
-    const userMsg: MessageDTO = {
-      id: tempUserId,
-      role: 'user',
-      content: message,
-      timestamp: Date.now(),
-      // Same shape as history-route responses (MessageDTO.images?),
-      // so <MessageItem> uses one render branch for both live and history.
-      images: attachedImages && attachedImages.length > 0 ? attachedImages : undefined,
-    }
-    messages.value.push(userMsg)
+    // No optimistic append — server pushes the user message back via SSE.
 
     try {
       const body: Record<string, unknown> = { agentId, message, streamingBehavior: 'steer' }
@@ -427,11 +483,9 @@ export function useSSE(options: UseSSEOptions) {
         const errMsg = `Send failed (${res.status})`
         insertError({
           source: 'send',
-          relatedUserMessageId: tempUserId,
           relatedUserMessageText: message,
           message: errMsg,
         })
-        messages.value = messages.value.filter((m) => m.id !== tempUserId)
         // Only reset sending if this wasn't a steer message (agent still working)
         if (!isSteerMessage) {
           sending.value = false
@@ -443,11 +497,9 @@ export function useSSE(options: UseSSEOptions) {
     } catch (err) {
       insertError({
         source: 'send',
-        relatedUserMessageId: tempUserId,
         relatedUserMessageText: message,
         message: String(err),
       })
-      messages.value = messages.value.filter((m) => m.id !== tempUserId)
       // Only reset sending if this wasn't a steer message (agent still working)
       if (!isSteerMessage) {
         sending.value = false
@@ -572,6 +624,7 @@ export function useSSE(options: UseSSEOptions) {
     steeringQueue,
     streamingBehavior,
     contextCache,
+    fileAttachmentsByMsg,
     // methods
     subscribe,
     unsubscribe,

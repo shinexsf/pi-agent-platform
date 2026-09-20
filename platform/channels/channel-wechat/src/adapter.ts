@@ -621,7 +621,7 @@ export class WechatAdapter implements ChannelAdapter {
                 bytes,
                 mimeType,
               });
-              text += ` [pi-attachment:${result.id}]`;
+              text += ` <file attId="${result.id}" type="${result.mimeType}"></file>`;
             } catch (err) {
               this.opts.host.logEvent({
                 channelId: this._configId,
@@ -647,7 +647,7 @@ export class WechatAdapter implements ChannelAdapter {
                 mimeType,
                 filename: f.fileName,
               });
-              text += ` [pi-attachment:${result.id}]`;
+              text += ` <file attId="${result.id}" type="${result.mimeType}" name="${f.fileName ?? ''}"></file>`;
             } catch (err) {
               this.opts.host.logEvent({
                 channelId: this._configId,

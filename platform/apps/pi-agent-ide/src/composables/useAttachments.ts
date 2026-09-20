@@ -25,13 +25,15 @@ export interface AttachmentToast {
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 export interface UploadedAttachment {
-  /** "att_xxxxxxxxxxxxx" — the server-issued id used in `[pi-attachment:...]` markers. */
+  /** "att_xxxxxxxxxxxxx" — the server-issued id. */
   id: string
   mimeType: string
   /** Base64-encoded raw image bytes. Same value we'll send to useSSE.send as `attachedImages[i].data`. */
   dataB64: string
   sizeBytes: number
   originalFilename: string
+  /** `<file>` tag to insert into message text. */
+  fileTag: string
 }
 
 export interface ToastHandle extends AttachmentToast {}
@@ -117,6 +119,7 @@ export function useAttachments(
         mimeType: string
         sizeBytes: number
         originalFilename: string
+        fileTag: string
       }
       const entry: UploadedAttachment = {
         id: json.id,
@@ -124,6 +127,7 @@ export function useAttachments(
         dataB64,
         sizeBytes: json.sizeBytes,
         originalFilename: json.originalFilename || file.name || 'pasted',
+        fileTag: json.fileTag,
       }
       cache.set(entry.id, entry)
       return entry

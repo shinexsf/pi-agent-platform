@@ -216,7 +216,9 @@ function send() {
   // with the message text (see design.md "F3 实现选型"). After emit, both the
   // pill row AND the upstream useAttachments.cache are cleared.
   const attached = props.attachmentsUploader.listForSend()
-  const attachedImages = attached.map((a) => ({ mimeType: a.mimeType, data: a.dataB64 }))
+  const attachedImages = attached
+    .filter((a) => a.mimeType.startsWith('image/'))
+    .map((a) => ({ mimeType: a.mimeType, data: a.dataB64 }))
   emit('send', text, attachedImages)
 
   // Clear pill render state + textarea content + upstream cache. Wrapping the
@@ -237,7 +239,9 @@ function sendSteer() {
 
   // Same as send() but for steer messages while agent is working
   const attached = props.attachmentsUploader.listForSend()
-  const attachedImages = attached.map((a) => ({ mimeType: a.mimeType, data: a.dataB64 }))
+  const attachedImages = attached
+    .filter((a) => a.mimeType.startsWith('image/'))
+    .map((a) => ({ mimeType: a.mimeType, data: a.dataB64 }))
   emit('send', text, attachedImages)
 
   // Clear state
@@ -313,8 +317,8 @@ function onKeyDown(e: KeyboardEvent) {
       const end = ta.selectionEnd ?? 0
       if (cursor === end) {
         const before = ta.value.slice(0, cursor)
-        // Match marker followed by optional trailing whitespace.
-        const m = before.match(/\[pi-attachment:(att_[a-z2-7]{13})\]\s*$/)
+        // Match <file attId="..."> tag followed by optional trailing whitespace.
+        const m = before.match(/<file\s[^>]*attId="(att_[a-f0-9]{12})"[^>]*>[^<]*<\/file>\s*$/)
         if (m && m[1] && m[0]) {
           e.preventDefault()
           e.stopPropagation()
@@ -357,11 +361,8 @@ function removePill(id: string) {
   attachments.value.delete(id)
   attachments.value = new Map(attachments.value)
   props.attachmentsUploader.forget(id)
-  // Strip the marker from textarea text. The pattern matches the marker
-  // plus its surrounding whitespace so surrounding text doesn't gap.
-  const marker = `[pi-attachment:${id}]`
-  // Escape regex meta chars (only `[`, `]`, `$`, `^` matter here)
-  const escaped = marker.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+  // Strip the <file> tag from textarea text. Match the tag plus surrounding whitespace.
+  const escaped = '<file\\s[^>]*attId="' + id + '"[^>]*>[^<]*<\\/file>'
   input.value = input.value
     .replace(new RegExp(`\\s*${escaped}\\s*`, 'g'), ' ')
     .trimStart()
@@ -407,13 +408,8 @@ const input = ref('')
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const wrapperEl = ref<HTMLElement | null>(null)
 
-function isImageFile(file: File): boolean {
-  return !!file && file.type.startsWith('image/')
-}
-
 async function ingestFiles(files: FileList | File[]) {
   for (const f of Array.from(files)) {
-    if (!isImageFile(f)) continue
     const entry = await props.attachmentsUploader.uploadImage(f)
     if (!entry) continue
     attachments.value.set(entry.id, entry)
@@ -423,7 +419,7 @@ async function ingestFiles(files: FileList | File[]) {
     // both sides so the marker never glues to user prose. If the user is at
     // the start of input (caret=0) we omit the leading whitespace.
     const ta = textareaEl.value
-    const marker = `[pi-attachment:${entry.id}]`
+    const marker = entry.fileTag
     if (ta) {
       const start = ta.selectionStart ?? input.value.length
       const end = ta.selectionEnd ?? start
@@ -451,7 +447,7 @@ function onPaste(e: ClipboardEvent) {
     const it = items[i]
     if (it && it.kind === 'file') {
       const f = it.getAsFile()
-      if (f && isImageFile(f)) files.push(f)
+      if (f) files.push(f)
     }
   }
   if (files.length > 0) {
@@ -465,7 +461,7 @@ function onPaste(e: ClipboardEvent) {
 
 function onDrop(e: DragEvent) {
   if (!e.dataTransfer) return
-  const files = Array.from(e.dataTransfer.files).filter(isImageFile)
+  const files = Array.from(e.dataTransfer.files)
   if (files.length > 0) {
     e.preventDefault()
     void ingestFiles(files)
@@ -565,7 +561,6 @@ onUnmounted(() => {
         <input
           ref="fileInputEl"
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
           multiple
           hidden
           @change="onPickerChange"

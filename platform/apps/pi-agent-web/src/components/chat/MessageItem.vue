@@ -4,7 +4,7 @@ import type { MessageDTO } from '@pi-agent-platform/shared-types'
 import MarkdownView from './MarkdownView.vue'
 import ImageGrid from './ImageGrid.vue'
 
-const props = defineProps<{ message: MessageDTO; agentId?: string }>()
+const props = defineProps<{ message: MessageDTO; agentId?: string; fileAttachments?: Array<{ attId: string; name: string; type: string }> }>()
 const emit = defineEmits<{
   retry: [userMessageText: string, agentId: string]
   dismissError: [messageId: string]
@@ -37,13 +37,10 @@ const userBubbleExpandedNow = computed(() =>
 )
 
 const userDisplayContent = computed(() => {
-  // Strip metadata from the user bubble:
-  //   - `[pi-attachment:att_xxx]` markers — ide-internal, server resolved already
-  //   - `<file name=...>hints</file>` markup from worker augmentation
-  // User just sees their typed words; the actual image renders via ImageGrid.
+  // Strip all <file> tags from user bubble — images render via ImageGrid,
+  // non-image files have no visual representation yet (future: file card).
   const stripped = (props.message.content ?? '')
-    .replace(/\s*\[pi-attachment:att_[a-z2-7]{13}\]\s*/g, ' ')
-    .replace(/\s*<file name="[^"]*">[^<]*<\/file>\s*/g, '\n')
+    .replace(/\s*<file\s[^>]*>[^<]*<\/file>\s*/g, ' ')
     .trim()
   if (!userOverflow.value) return stripped
   if (userBubbleExpandedNow.value) return stripped
@@ -179,6 +176,25 @@ async function copyMessage() {
   }
 }
 
+/** Download a file attachment by attId. */
+async function downloadFile(attId: string, fileName: string) {
+  // sessionId is the first path segment (URL: /:id or /web/:id)
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const sessionId = segments[segments.length - 1] // last segment is always sessionId
+  if (!sessionId) return
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/attachments/${attId}`)
+    if (!res.ok) return
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch { /* ignore */ }
+}
+
 /** Stringify arg value uniformly. Strings pass through (preserve newlines for collapse preview);
  *  objects/arrays/numbers/booleans become single-line JSON (no newlines → renders inline). */
 function formatArgValue(value: unknown): string {
@@ -265,6 +281,20 @@ function toolIcon(name: string): string {
         :images="message.images"
         variant="user"
       />
+      <!-- Non-image file attachments -->
+      <div v-if="fileAttachments && fileAttachments.length > 0" class="file-attachments">
+        <button
+          v-for="f in fileAttachments"
+          :key="f.attId"
+          type="button"
+          class="file-card"
+          @click="downloadFile(f.attId, f.name)"
+        >
+          <span class="file-icon">📄</span>
+          <span class="file-name">{{ f.name }}</span>
+          <span class="file-hint">点击下载</span>
+        </button>
+      </div>
       <button
         v-if="userOverflow"
         class="message-user-toggle"
@@ -457,6 +487,43 @@ function toolIcon(name: string): string {
 .message-user-toggle:hover {
   opacity: 1;
   text-decoration: underline;
+}
+
+/* File attachment cards */
+.file-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  color: white;
+  font-size: 13px;
+}
+.file-card:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.file-icon {
+  font-size: 16px;
+}
+.file-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-hint {
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 .message-assistant {

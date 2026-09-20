@@ -68,32 +68,7 @@ export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-/** Convert sha256 hex to a fixed-width 13-char lowercase base32 (RFC 4648) string.
- *  Used as the suffix of `att_` IDs — full 13 chars are required for the
- *  server-side marker regex `/\[pi-attachment:(att_[a-z2-7]{13})\]/g` to match.
- *  Bug history (R11): a previous version only streamed 8 bytes (64 bits) and
- *  emitted 12 chars, breaking marker extraction. Encoding now pulls 9 bytes
- *  (72 bits, first 18 hex chars) and always emits 13 chars. */
-export function attIdFromSha(sha: string): string {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz234567'; // RFC 4648 lowercase
-  // First 18 hex chars = 9 bytes = 72 bits. 13 chars × 5 bits = 65 bits used;
-  // 7 bits remain buffered (don't affect the produced output).
-  const hex = sha.slice(0, 18);
-  let bits = 0, value = 0, out = '';
-  for (let i = 0; i + 1 < hex.length && out.length < 13; i += 2) {
-    const v = parseInt(hex.slice(i, i + 2), 16);
-    if (Number.isNaN(v)) continue;
-    value = (value << 8) | v;
-    bits += 8;
-    while (bits >= 5 && out.length < 13) {
-      bits -= 5;
-      out += alphabet[(value >>> bits) & 0x1f];
-    }
-  }
-  // Defensive: if input was malformed, pad with alphabet[0] = 'a'.
-  while (out.length < 13) out += alphabet[0];
-  return out;
-}
+
 
 export interface AttachmentRow {
   /** Client-facing ID, e.g. "att_5f4dcc3b5aa7". */
@@ -103,6 +78,8 @@ export interface AttachmentRow {
   sessionId: string;
   mimeType: string;
   originalFilename: string;
+  /** Actual filename on disk (uuid.ext). */
+  filename: string;
   sizeBytes: number;
   createdAt: number;
 }
@@ -121,6 +98,16 @@ export interface AttachmentLookupForPromptResult {
   sizeBytes: number;
   /** Absolute path on disk. Provided for the worker IPC contract. */
   path: string;
+}
+
+/** Generate a `<file>` tag string from an attachment upload result.
+ *  Used by adapters (IM) and upload routes (web/IDE) to insert into message text.
+ *  Format: <file attId="att_xxx" type="..."></file>
+ *  The tag is parsed by the worker to resolve attachments for the agent.
+ *  Only id and mimeType are required — name/sha can be looked up by worker. */
+export function fileTag(row: { id: string; mimeType: string }, name?: string): string {
+  const nameAttr = name ? ` name="${name}"` : '';
+  return `<file attId="${row.id}" type="${row.mimeType}"${nameAttr}></file>`;
 }
 
 export class AttachmentStore {
@@ -194,7 +181,7 @@ export class AttachmentStore {
       .run();
 
     return {
-      row: { id, sha, sessionId, mimeType, originalFilename, sizeBytes, createdAt },
+      row: { id, sha, sessionId, mimeType, originalFilename, filename: diskFilename, sizeBytes, createdAt },
       alreadyExisted: false,
     };
   }
@@ -294,6 +281,21 @@ export class AttachmentStore {
     return { rowsDeleted: result.changes };
   }
 
+  /** Look up a single attachment by ID within a session. Returns null if not found. */
+  lookupById(sessionId: string, attId: string): AttachmentRow | null {
+    const row = this.db
+      .select()
+      .from(attachments)
+      .where(and(eq(attachments.sessionId, sessionId), eq(attachments.id, attId)))
+      .get();
+    return row ? rowToDTO(row) : null;
+  }
+
+  /** Resolve the absolute disk path for an attachment's file. */
+  resolvePath(sessionId: string, filename: string): string {
+    return path.join(this.attachmentsDir, sessionId, filename);
+  }
+
 }
 
 function rowToDTO(row: typeof attachmentsTable.$inferSelect): AttachmentRow {
@@ -303,6 +305,7 @@ function rowToDTO(row: typeof attachmentsTable.$inferSelect): AttachmentRow {
     sessionId: row.sessionId,
     mimeType: row.mimeType,
     originalFilename: row.originalFilename,
+    filename: row.filename,
     sizeBytes: row.sizeBytes,
     createdAt: row.createdAt,
   };

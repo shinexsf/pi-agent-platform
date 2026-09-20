@@ -521,7 +521,9 @@ export class QqAdapter implements ChannelAdapter {
               mimeType,
               filename: att.filename ?? att.url.split('/').pop(),
             });
-            text += ` [pi-attachment:${result.id}]`;
+            // Use <file> tag as universal attachment representation
+            const fileName = att.filename ?? att.url.split('/').pop() ?? '';
+            text += ` <file attId="${result.id}" type="${result.mimeType}" name="${fileName}"></file>`;
           } catch (err) {
             this.opts.host.logEvent({
               channelId: this._configId,

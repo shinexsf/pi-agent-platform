@@ -3,7 +3,6 @@
  *
  * Tracks which chat each IM session is bound to so:
  *  - reply-sender can find the adapter by sessionId
- *  - im-idle-scanner knows when to kill
  *  - server restart can rebuild from `channels_<type>.current_session_id`
  *
  * No database schema changes — sessions table untouched.
@@ -74,11 +73,6 @@ export function removeSessionsForChannel(channelId: ChannelId): SessionId[] {
     }
   }
   return removed;
-}
-
-/** Iterate all metas (for the im-idle-scanner). */
-export function* iterateSessionMeta(): IterableIterator<[SessionId, SessionMeta]> {
-  yield* bySessionId.entries();
 }
 
 /** Clear all (server shutdown / tests). */

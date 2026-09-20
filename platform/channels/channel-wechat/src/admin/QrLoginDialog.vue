@@ -254,7 +254,7 @@ onBeforeUnmount(() => stopStream?.());
         <!-- Phase 1: Setup form -->
         <div v-if="phase === 'setup'" class="setup-form">
           <p v-if="channelType === 'wechat'" class="hint">
-            填写机器人名称并选择默认 Agent，然后使用 iOS 微信扫描二维码。
+            填写机器人名称并选择默认 Agent，然后使用微信扫描二维码。
           </p>
           <p v-else class="hint">填写机器人信息后创建并启动 QQ 机器人。</p>
 
@@ -286,7 +286,7 @@ onBeforeUnmount(() => stopStream?.());
         <!-- Phase 2: Scan panel -->
         <div v-else-if="phase === 'scan' || phase === 'connected'" class="scan-panel">
           <p v-if="channelType === 'wechat'" class="hint">
-            目前仅支持使用 iOS 微信扫码登录。
+            使用微信扫描二维码完成授权。
           </p>
 
           <div class="scan-grid">
@@ -300,7 +300,7 @@ onBeforeUnmount(() => stopStream?.());
               <div v-else-if="state === 'qr-shown' || state === 'scanned'" class="state">
                 <img v-if="qrUrl" :src="qrUrl" alt="微信登录二维码" class="qr-image" />
                 <p v-if="state === 'scanned'" class="status scanned">已扫码，请在手机上确认。</p>
-                <small v-else-if="channelType === 'wechat'">请使用 iOS 微信扫描二维码。</small>
+                <small v-else-if="channelType === 'wechat'">请使用微信扫描二维码。</small>
                 <small v-else>正在连接 QQ 服务…</small>
               </div>
 

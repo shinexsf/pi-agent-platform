@@ -8,6 +8,7 @@ const props = defineProps<{
   messages: MessageDTO[]
   sending?: boolean
   agentId?: string
+  fileAttachmentsByMsg?: Map<string, Array<{ attId: string; name: string; type: string }>>
 }>()
 
 const emit = defineEmits<{
@@ -118,6 +119,7 @@ watch(
         :key="msg.id"
         :message="msg"
         :agent-id="agentId"
+        :file-attachments="fileAttachmentsByMsg?.get(msg.id)"
         @retry="(text: string, agentId: string) => emit('retry', text, agentId)"
         @dismiss-error="(id: string) => emit('dismissError', id)"
       />

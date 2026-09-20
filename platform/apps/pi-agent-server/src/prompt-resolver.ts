@@ -21,7 +21,7 @@ import type { SessionId } from '@pi-agent-platform/channel-types';
 export interface ResolvePromptOpts {
   /** Explicit streamingBehavior from caller (HTTP: body.streamingBehavior). */
   streamingBehavior?: 'steer' | 'followUp';
-  /** IM-side: allow interrupting current generation (default true). */
+  /** IM-side: default streamingBehavior to 'steer' when caller doesn't specify one. */
   allowSteer?: boolean;
   /** Fallback agentId when session row doesn't exist yet (placeholder). */
   agentId?: string;
@@ -53,8 +53,8 @@ export interface ResolvedPrompt {
   intercepted?: { kind: 'text'; content: string };
 }
 
-/** Regex for `[pi-attachment:att_<id>]` markers in message text. */
-const ATTACHMENT_MARKER_RE = /\[pi-attachment:(att_[a-z0-9]{10,16})\]/g;
+/** Regex for `<file attId="att_<id>">` tags in message text. */
+const ATTACHMENT_MARKER_RE = /<file\s[^>]*attId="(att_[a-f0-9]{12})"[^>]*>/g;
 
 /**
  * Resolve a prompt message: parse slash commands, resolve attachment placeholders,
@@ -138,10 +138,10 @@ export async function resolvePrompt(
   // ── 4. StreamingBehavior determination ────────────────────────────────────
   let streamingBehavior = opts.streamingBehavior;
   if (!streamingBehavior && opts.allowSteer) {
-    // IM-side default: if there's an active generation, steer; otherwise followUp.
-    // For now, default to undefined (followUp) — steer detection requires
-    // checking worker state, which is done at the routing level.
-    streamingBehavior = undefined;
+    // IM-side: always default to 'steer'.
+    // When agent is idle, pi SDK ignores streamingBehavior (normal prompt).
+    // When agent is busy, steer interrupts current generation.
+    streamingBehavior = 'steer';
   }
 
   return {

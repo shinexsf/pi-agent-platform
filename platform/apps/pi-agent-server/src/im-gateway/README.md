@@ -19,7 +19,6 @@ src/im-gateway/
 ├── routing.ts                  # three-state lifecycle + slash commands + QQ group fast-fail
 ├── slash-commands.ts           # 6 builtin commands (/help /new /session /model /think /compact)
 ├── reply-sender.ts             # worker message_update → message_end → adapter.sendText
-├── im-idle-scanner.ts          # 30-min idle kill scanner (in-memory, no DB writes)
 └── routes/
     └── im-gateway.ts           # main /api/im/{manifest,health,channels,debug/state,debug/logs}
 ```

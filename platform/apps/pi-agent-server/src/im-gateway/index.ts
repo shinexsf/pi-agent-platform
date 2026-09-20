@@ -6,7 +6,6 @@
  *   2. Loads all channels from manifest.json (dynamic import)
  *   3. For each loaded channel type, wires inbound messages into routing.ts
  *   4. Mounts /api/im/* routes (manifest, health, channels, debug) + per-type routers
- *   5. Starts the idle scanner (30min timeout, scans every 60s)
  *
  * Returns the im-gateway handle so server/index.ts can gracefully shutdown.
  */
@@ -19,7 +18,6 @@ import { logger } from './logger.js';
 import { createChannelHostImpl } from './channel-host-impl.js';
 import { loadChannels } from './channel-loader.js';
 import { createImGatewayRouter } from './routes/im-gateway.js';
-import { startImIdleScanner, type IdleScannerHandle } from './im-idle-scanner.js';
 import { registerChannel, listChannels, clearAll as clearRegistry } from './channel-registry.js';
 import {
   setSessionMeta,
@@ -142,9 +140,6 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
   // serve() to avoid Hono's "matcher already built" error.
   const imRouter = createImGatewayRouter({ host, helpers, sessionRepo: deps.sessionRepo, qqGroupNotified });
 
-  // 5. Start idle scanner
-  const scanner: IdleScannerHandle = startImIdleScanner(deps.workerPool);
-
   logger.info({ sessionMapSize: sessionMapSize() }, 'im-gateway ready');
 
   return {
@@ -156,9 +151,7 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
     loadedTypes: loaded.map((l) => l.type),
     async shutdown() {
       logger.info('im-gateway shutting down');
-      scanner.stop();
       clearRegistry();
-      // session-channel-map is cleared via clearAll on next start
     },
   };
 }
