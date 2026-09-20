@@ -140,7 +140,7 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
 
   // 4. Build /api/im/* router — caller (server/index.ts) mounts it BEFORE
   // serve() to avoid Hono's "matcher already built" error.
-  const imRouter = createImGatewayRouter({ host, helpers, qqGroupNotified });
+  const imRouter = createImGatewayRouter({ host, helpers, sessionRepo: deps.sessionRepo, qqGroupNotified });
 
   // 5. Start idle scanner
   const scanner: IdleScannerHandle = startImIdleScanner(deps.workerPool);

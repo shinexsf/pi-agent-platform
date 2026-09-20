@@ -5,7 +5,7 @@ import type { ChannelAdminPage } from '@pi-agent-platform/channel-types';
 
 const QqChannelAdminPage: ChannelAdminPage = {
   channelType: 'qq',
-  displayName: 'QQ Channel',
+  displayName: 'QQ',
   component: () => import('./QqChannelsPage.vue'),
 };
 

@@ -106,9 +106,10 @@ function iconName(channelType: string): string {
 <style scoped>
 .channels-view {
   display: flex;
-  height: 100%;
-  min-height: 0;
   flex-direction: column;
+  max-width: 1240px;
+  margin: 0 auto;
+  width: 100%;
   background: var(--bg);
 }
 
@@ -163,7 +164,6 @@ function iconName(channelType: string): string {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
   padding: 12px;
 }
 

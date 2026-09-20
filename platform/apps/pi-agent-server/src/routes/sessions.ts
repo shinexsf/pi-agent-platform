@@ -549,6 +549,24 @@ export function createSessionsRouter(
     return c.json({ ok: true, title });
   });
 
+  // PATCH /api/sessions/:id — update session fields (title, model, thinkingLevel, config)
+  router.patch('/:id', async (c) => {
+    const id = c.req.param('id');
+    const body = (await c.req.json()) as { title?: string; model?: string; thinkingLevel?: string; config?: Record<string, unknown> };
+    const session = sessionRepo.get(id);
+    if (!session) return c.json({ error: 'Session not found' }, 404);
+    const patch: Record<string, unknown> = {};
+    if (body.title !== undefined) {
+      const raw = body.title;
+      patch.title = (raw === null || raw.trim() === '') ? undefined : raw.trim().slice(0, 200);
+    }
+    if (body.model !== undefined) patch.model = body.model;
+    if (body.thinkingLevel !== undefined) patch.thinkingLevel = body.thinkingLevel || undefined;
+    if (body.config !== undefined) patch.config = body.config;
+    sessionRepo.update(id, patch as any);
+    return c.json({ ok: true, session: sessionRepo.get(id) });
+  });
+
   // POST /api/sessions/:id/model — set current session's model (C4, D11)
   router.post('/:id/model', async (c) => {
     const id = c.req.param('id');

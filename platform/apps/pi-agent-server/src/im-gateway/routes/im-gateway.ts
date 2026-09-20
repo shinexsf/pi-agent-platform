@@ -17,12 +17,14 @@ import { config } from '../../config.js';
 import type { ChannelConfig, ChannelHost } from '@pi-agent-platform/channel-types';
 import { createChannelHostImpl } from '../channel-host-impl.js';
 import { listChannels } from '../channel-registry.js';
+import type { SessionRepo } from '../../repos/session.repo.js';
 import { snapshot as sessionSnapshot, size as sessionSize } from '../session-channel-map.js';
 import { snapshot as replySnapshot } from '../reply-sender.js';
 
 interface Deps {
   host: ChannelHost;
   helpers: ReturnType<typeof createChannelHostImpl>['helpers'];
+  sessionRepo: SessionRepo;
   /** QQ group fast-fail notified set (passed in by main wiring). */
   qqGroupNotified: Set<string>;
 }
@@ -58,11 +60,14 @@ export function createImGatewayRouter(deps: Deps): Hono {
 
   // GET /api/im/channels — all channel configs (admin UI list view)
   router.get('/channels', (c) => {
-    const all: Array<ChannelConfig & { status: string }> = [];
+    const all: Array<ChannelConfig & { status: string; currentSessionTitle?: string }> = [];
     for (const type of deps.helpers.listLoadedTypes()) {
       for (const cfg of deps.helpers.listChannelConfigsByType(type)) {
         const registered = listChannels().find((rc) => rc.channelId === cfg.id);
-        all.push({ ...cfg, status: registered?.status.status ?? 'disabled' });
+        const currentSessionTitle = cfg.currentSessionId
+          ? deps.sessionRepo.get(cfg.currentSessionId)?.title
+          : undefined;
+        all.push({ ...cfg, status: registered?.status.status ?? 'disabled', currentSessionTitle });
       }
     }
     return c.json({ channels: all });

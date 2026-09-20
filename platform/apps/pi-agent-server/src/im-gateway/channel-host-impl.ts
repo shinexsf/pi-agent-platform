@@ -139,7 +139,12 @@ export function createChannelHostImpl(deps: Deps) {
 
     listChannelConfigs(): ChannelConfig[] {
       const all: ChannelConfig[] = [];
-      for (const s of stateByType.values()) all.push(...s.configs.values());
+      for (const s of stateByType.values()) {
+        for (const cfg of s.configs.values()) {
+          const title = cfg.currentSessionId ? deps.sessionRepo.get(cfg.currentSessionId)?.title : undefined;
+          all.push({ ...cfg, currentSessionTitle: title } as ChannelConfig & { currentSessionTitle?: string });
+        }
+      }
       return all;
     },
 
@@ -433,7 +438,10 @@ export function createChannelHostImpl(deps: Deps) {
     },
     /** Get all channel configs for type. */
     listChannelConfigsByType(type: ChannelType): ChannelConfig[] {
-      return Array.from(stateFor(type).configs.values());
+      return Array.from(stateFor(type).configs.values()).map((cfg) => {
+        const title = cfg.currentSessionId ? deps.sessionRepo.get(cfg.currentSessionId)?.title : undefined;
+        return { ...cfg, currentSessionTitle: title } as ChannelConfig & { currentSessionTitle?: string };
+      });
     },
     /** Remove session meta for a channel (called on channel stop). */
     removeSessionsForChannel(channelId: ChannelId): SessionId[] {

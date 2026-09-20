@@ -66,7 +66,7 @@ describe('IM gateway routes', () => {
     host.registerRoutes('/api/im/qq', new Hono());
     // Set up routers via helper so /api/im/<type>/* mounts work
     app = new Hono();
-    const imRouter = createImGatewayRouter({ host, helpers, qqGroupNotified: qqNotified });
+    const imRouter = createImGatewayRouter({ host, helpers, sessionRepo: { get: () => undefined } as never, qqGroupNotified: qqNotified });
     app.route('/api/im', imRouter);
   });
 

@@ -10,6 +10,7 @@ export interface WechatChannel {
   enabled: boolean;
   defaultAgentId?: string;
   currentSessionId?: string;
+  currentSessionTitle?: string;
   storageDir?: string;
   autoReconnect?: boolean;
   createdAt?: number;

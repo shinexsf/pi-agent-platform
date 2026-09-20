@@ -3,7 +3,8 @@ import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import type { SessionDTO, AgentDTO } from '@pi-agent-platform/shared-types';
 import AppIcon from '../components/ui/AppIcon.vue';
-import { toast } from '../composables/useFeedback';
+import DropdownMenu from '../components/ui/DropdownMenu.vue';
+import { confirmDelete, toast } from '../composables/useFeedback';
 import { useIsCompact } from '../composables/useMediaQuery';
 
 const router = useRouter();
@@ -122,10 +123,33 @@ async function load() {
 }
 
 async function openSession(session: SessionDTO) {
-  // 打开新的独立会话页面（生产环境base是/web/）
   const base = import.meta.env.BASE_URL || '/';
   const url = `${base}chat/${session.id}${session.agentId ? `?agentId=${session.agentId}` : ''}`;
   window.open(url, '_blank');
+}
+
+async function deleteSession(session: SessionDTO) {
+  const confirmed = await confirmDelete('Session', session.title || session.id.slice(0, 8));
+  if (!confirmed) return;
+  try {
+    const res = await fetch(`/api/sessions/${session.id}/delete`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    toast('会话已删除', 'success');
+    await load();
+  } catch (err) {
+    toast(`删除失败：${(err as Error).message}`, 'error');
+  }
+}
+
+async function stopSession(session: SessionDTO) {
+  try {
+    const res = await fetch(`/api/sessions/${session.id}/close`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    toast('会话已停止', 'success');
+    await load();
+  } catch (err) {
+    toast(`停止失败：${(err as Error).message}`, 'error');
+  }
 }
 
 function onAgentFilterChange() {
@@ -289,44 +313,53 @@ onMounted(() => load());
         </div>
       </div>
 
-      <ul v-else class="resource-list">
-        <li v-for="session in sessions" :key="session.id" class="resource-row">
-          <button
-            class="session-row-button"
-            type="button"
-            :style="{ viewTransitionName: sessionTransitionName(session.id) }"
-            @click="openSession(session)"
-          >
-            <span class="resource-identity">
-              <span class="resource-avatar"><AppIcon name="sessions" :size="18" /></span>
-              <span class="resource-content">
-                <span class="resource-title">{{ session.title || `Session ${session.id.slice(0, 8)}` }}</span>
-                <span class="resource-meta">
-                  <span class="meta-item">
-                    <AppIcon name="agents" :size="14" />
-                    <span>{{ agentName(session.agentId) }} · {{ session.model }}</span>
-                  </span>
-                  <span class="meta-item">
-                    <AppIcon name="clock" :size="14" />
-                    <span>Active {{ timeAgo(session.lastActiveAt) }}</span>
-                  </span>
-                </span>
+      <!-- session 列表 -->
+      <ul v-else class="resource-list session-list">
+        <li v-for="session in sessions" :key="session.id" class="resource-row session-row">
+          <div class="session-row-main" @click="router.push(`/sessions/${session.id}`)">
+            <span class="resource-avatar session-avatar"><AppIcon name="sessions" :size="16" /></span>
+            <div class="session-info">
+              <span class="session-title">{{ session.title || `Session ${session.id.slice(0, 8)}` }}</span>
+              <span class="session-meta truncate">
+                {{ agentName(session.agentId) }} · {{ session.model }}
+                <span class="session-dot">·</span>
+                {{ timeAgo(session.lastActiveAt) }}
               </span>
-            </span>
-            <span class="session-runtime">
-              <span
-                v-if="session.worker"
-                class="status-badge is-live"
-                :title="`Worker uptime ${workerUptime(session.worker.uptimeMs)} · PID ${session.worker.pid} · ${session.worker.pendingCalls} pending calls`"
+            </div>
+            <div class="session-row-right">
+              <span class="session-worker-info" v-if="session.worker" :title="`PID ${session.worker.pid} · uptime ${workerUptime(session.worker.uptimeMs)}`">
+                <span class="status-dot is-live" />
+                PID {{ session.worker.pid }}
+              </span>
+              <button
+                class="btn-icon-sm"
+                :class="session.worker ? 'is-active' : 'is-live'"
+                type="button"
+                :title="session.worker ? '继续会话' : '打开会话'"
+                @click.stop="openSession(session)"
               >
-                Worker active · PID {{ session.worker.pid }} · {{ workerUptime(session.worker.uptimeMs) }}
-              </span>
-              <span v-else class="status-badge" title="No worker is active. Sending a new message will start one.">
-                Worker stopped
-              </span>
-              <AppIcon name="chevron-right" :size="17" class="session-chevron" />
-            </span>
-          </button>
+                <AppIcon :name="session.worker ? 'sessions' : 'play'" :size="14" />
+              </button>
+              <DropdownMenu>
+                <button class="dropdown-item" @click.stop="router.push(`/sessions/${session.id}/edit`)">
+                  <AppIcon name="edit" :size="14" />
+                  <span>编辑</span>
+                </button>
+                <button
+                  v-if="session.worker"
+                  class="dropdown-item is-danger"
+                  @click.stop="stopSession(session)"
+                >
+                  <AppIcon name="stop" :size="14" />
+                  <span>停止会话</span>
+                </button>
+                <button class="dropdown-item is-danger" @click.stop="deleteSession(session)">
+                  <AppIcon name="trash" :size="14" />
+                  <span>删除</span>
+                </button>
+              </DropdownMenu>
+            </div>
+          </div>
         </li>
       </ul>
 
@@ -373,57 +406,29 @@ onMounted(() => load());
   background: color-mix(in srgb, currentColor 11%, transparent);
 }
 
-.session-row-button {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 160ms ease;
-}
-
-.session-row-button:hover {
-  background: var(--surface-subtle);
-}
-
-.session-row-button:hover .session-chevron {
-  color: var(--accent);
-  transform: translateX(2px);
-}
-
-.session-runtime {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.session-chevron {
-  color: var(--text-tertiary);
-  transition: color 150ms ease, transform 150ms ease;
-}
-
-@media (max-width: 767px) {
-  .session-row-button {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 12px;
-  }
-
-  .session-runtime {
-    width: 100%;
-    justify-content: space-between;
-    padding-left: 52px;
-  }
-}
+/* --- session row --- */
+.session-row { padding: 0; }
+.session-row-main { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px 12px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background 120ms; }
+.session-row-main:hover { background: var(--surface-subtle); }
+.session-avatar { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; background: var(--surface-subtle); color: var(--text-secondary); }
+.session-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.session-title { font-size: 0.88rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.session-meta { font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.session-dot { margin: 0 2px; }
+.session-row-right { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.session-worker-info { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem; color: var(--text-secondary); white-space: nowrap; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); flex: 0 0 7px; }
+.status-dot.is-live { background: var(--success); }
+.btn-icon-sm { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; }
+.btn-icon-sm:hover { background: var(--surface-hover); color: var(--text); }
+.btn-icon-sm.is-live { color: var(--success); }
+.btn-icon-sm.is-live:hover { background: var(--success-soft); }
+.btn-icon-sm.is-active { color: var(--accent); }
+.btn-icon-sm.is-active:hover { background: var(--accent-soft); }
+.dropdown-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; border: 0; background: transparent; color: var(--text); font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
+.dropdown-item:hover { background: var(--surface-hover); }
+.dropdown-item.is-danger { color: var(--danger); }
+.dropdown-item.is-danger:hover { background: var(--danger-soft); }
 
 .toolbar-meta {
   display: flex;
@@ -554,6 +559,11 @@ onMounted(() => load());
   .toolbar-meta {
     width: 100%;
     justify-content: space-between;
+  }
+
+  /* session card: allow wrapping */
+  .session-row-main {
+    align-items: flex-start;
   }
 }
 </style>

@@ -14,6 +14,8 @@
 import { ref, onMounted, computed } from 'vue';
 import { createWechatApi, type WechatChannel } from './api';
 import QrLoginDialog from './QrLoginDialog.vue';
+import AppIcon from '../../../../apps/pi-agent-web/src/components/ui/AppIcon.vue';
+import DropdownMenu from '../../../../apps/pi-agent-web/src/components/ui/DropdownMenu.vue';
 
 interface AgentRow {
   id: string;
@@ -197,10 +199,9 @@ async function saveSessionEditor(): Promise<void> {
   }
 }
 
-function sessionLabel(sessionId?: string | null): string {
-  if (!sessionId) return '—';
-  const session = sessions.value.find(s => s.id === sessionId);
-  return session?.title ?? `${sessionId.slice(0, 8)}…`;
+function sessionLabel(ch: WechatChannel): string {
+  if (!ch.currentSessionId) return '—';
+  return ch.currentSessionTitle ?? ch.currentSessionId;
 }
 
 onMounted(async () => {
@@ -240,29 +241,44 @@ onMounted(async () => {
           <div class="card-header">
             <span class="status-dot" :class="getStatus(ch.id) === 'connected' ? 'status-connected' : 'status-stopped'" :title="getStatus(ch.id)"></span>
             <span class="card-name">{{ ch.displayName }}</span>
+            <div class="card-header-actions">
+              <button
+                class="btn-icon-sm"
+                :class="getStatus(ch.id) === 'connected' ? 'is-danger' : 'is-live'"
+                :title="getStatus(ch.id) === 'connected' ? '停止' : '启动'"
+                @click="getStatus(ch.id) === 'connected' ? handleStop(ch.id) : handleStart(ch.id)"
+              >
+                <AppIcon :name="getStatus(ch.id) === 'connected' ? 'stop' : 'play'" :size="14" />
+              </button>
+              <DropdownMenu>
+                <button class="dropdown-item" @click.stop="openAgentEditor(ch)">
+                  <AppIcon name="edit" :size="14" />
+                  <span>更改 Agent</span>
+                </button>
+                <button class="dropdown-item" @click.stop="openSessionEditor(ch)">
+                  <AppIcon name="sessions" :size="14" />
+                  <span>更改会话</span>
+                </button>
+                <button class="dropdown-item is-danger" @click.stop="handleDelete(ch.id, ch.displayName)">
+                  <AppIcon name="trash" :size="14" />
+                  <span>删除</span>
+                </button>
+              </DropdownMenu>
+            </div>
           </div>
           <div class="card-body">
             <div class="card-row">
               <span class="card-label">Agent</span>
-              <button class="link" @click="openAgentEditor(ch)" :title="ch.defaultAgentId">
-                {{ agentLabel(ch.defaultAgentId) }} <span class="edit-label">更改</span>
-              </button>
+              <span class="card-value truncate" :title="ch.defaultAgentId">{{ agentLabel(ch.defaultAgentId) }}</span>
             </div>
             <div class="card-row">
               <span class="card-label">当前会话</span>
-              <button class="link" @click="openSessionEditor(ch)" :title="ch.currentSessionId">
-                {{ sessionLabel(ch.currentSessionId) }} <span class="edit-label">更改</span>
-              </button>
+              <span class="card-value truncate" :title="ch.currentSessionId ?? ''">{{ sessionLabel(ch) }}</span>
             </div>
             <div class="card-row">
               <span class="card-label">存储目录</span>
-              <code class="card-value">{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</code>
+              <span class="card-value truncate" :title="ch.storageDir ?? ch.extra?.storageDir ?? '—'">{{ ch.storageDir ?? ch.extra?.storageDir ?? '—' }}</span>
             </div>
-          </div>
-          <div class="card-actions">
-            <button v-if="getStatus(ch.id) !== 'connected'" @click="handleStart(ch.id)">启动</button>
-            <button v-else @click="handleStop(ch.id)">停止</button>
-            <button class="danger" @click="handleDelete(ch.id, ch.displayName)">删除</button>
           </div>
         </div>
       </div>
@@ -321,7 +337,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.wechat-channels-page { padding: 16px; }
+.wechat-channels-page {
+  width: 100%;
+  padding: 16px; }
 .page-header { margin-bottom: 16px; }
 .page-header h2 { margin: 0; color: var(--text); }
 .hint { color: var(--warning); font-size: 14px; margin: 4px 0 0; }
@@ -375,17 +393,28 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.card-header { display: flex; align-items: center; gap: 8px; }
-.card-name { font-weight: 600; font-size: 0.85rem; color: var(--text); }
+.card-header { display: flex; align-items: center; gap: 6px; }
+.card-name { font-weight: 600; font-size: 0.85rem; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-header-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.btn-icon-sm { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0 !important; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; }
+.btn-icon-sm:hover { background: var(--surface-hover); color: var(--text); }
+.btn-icon-sm.is-live { color: var(--success); }
+.btn-icon-sm.is-live:hover { background: var(--success-soft); }
+.btn-icon-sm.is-danger { color: var(--danger); }
+.btn-icon-sm.is-danger:hover { background: var(--danger-soft); }
 .card-body { display: flex; flex-direction: column; gap: 4px; }
-.card-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.card-label { color: var(--text-secondary); font-size: 0.75rem; min-width: 55px; flex: none; }
-.card-value { font-size: 0.75rem; color: var(--text); word-break: break-all; }
-.card-actions {
-  display: flex;
-  gap: 6px;
-  padding-top: 5px;
-  border-top: 1px solid var(--border);
+.card-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.card-label { color: var(--text-secondary); font-size: 0.7rem; min-width: 46px; flex: none; }
+.card-value { font-size: 0.7rem; color: var(--text); flex: 1; min-width: 0; }
+.card-value.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dropdown-item:hover { background: var(--surface-hover); }
+.dropdown-item.is-danger { color: var(--danger); }
+.dropdown-item.is-danger:hover { background: var(--danger-soft); }
+
+@media (max-width: 767px) {
+  .card-row { gap: 4px; }
+  .card-label { min-width: auto; }
+  .card-value { min-width: 0; }
 }
 
 button {
@@ -399,16 +428,8 @@ button {
 }
 button:hover { background: var(--surface-hover); }
 button.danger { color: var(--danger); border-color: var(--danger); }
-button.link {
-  background: transparent;
-  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
-  color: var(--accent-ink);
-  padding: 4px 10px;
-}
-button.link:hover { background: var(--accent-soft); border-style: solid; }
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 button.primary:hover { background: var(--accent-hover); }
-.edit-label { font-size: 11px; margin-left: 4px; opacity: 0.7; }
 .empty { color: var(--text-tertiary); padding: 24px; text-align: center; }
 
 .modal-backdrop {
@@ -452,16 +473,16 @@ button.primary:hover { background: var(--accent-hover); }
 
 /* 紧凑断点：卡片单列、操作按钮折行、长文本不撑破（spec channel-admin-theming） */
 @media (max-width: 767px) {
-  .wechat-channels-page { padding: 12px; }
+  .wechat-channels-page {
+  padding: 12px; }
   .qr-login-cta { padding: 10px; }
   .btn-qr-login { width: 100%; }
   .channel-cards { gap: 12px; }
-  .card-row { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .card-row { gap: 4px; }
   .card-label { min-width: 0; }
   .card-actions { flex-wrap: wrap; }
   .card-actions button { min-height: 28px; flex: 1; margin-right: 0; font-size: 12px; padding: 4px 8px; }
   button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
-  button.link { min-height: 24px; padding: 2px 6px; font-size: 11px; }
   .modal { padding: 18px; }
   .modal select { min-height: 34px; font-size: 16px; }
   .modal-actions button { flex: 1; }

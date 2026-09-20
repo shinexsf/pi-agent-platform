@@ -6,12 +6,12 @@
  *   - ≥ 1024px：常驻侧栏（flex 子项，挤压内容，无遮罩）
  *   - <  1024px：覆盖层（fixed + 遮罩，Esc / 点遮罩 / 选中菜单后关闭）
  *
- * 二级菜单（D3）：平铺，超过 MAX_VISIBLE_SECONDARY 项时前 N 项 + 「更多」。
+ * 二级菜单（D3）：平铺，全部展开。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AppIcon from '../ui/AppIcon.vue';
-import { MAX_VISIBLE_SECONDARY, useNavTree, type NavNode, isWithin } from './nav-tree';
+import { useNavTree, type NavNode, isWithin } from './nav-tree';
 import { useIsCompact, useIsDesktop } from '../../composables/useMediaQuery';
 
 const props = defineProps<{ open: boolean }>();
@@ -24,32 +24,16 @@ const { nodes } = useNavTree();
 const isDesktop = useIsDesktop();
 const isCompact = useIsCompact();
 
-/** 折叠状态：记录「已展开全部二级项」的一级菜单 path。 */
-const expanded = ref<Record<string, boolean>>({});
 
 const visibleNodes = computed<NavNode[]>(() =>
   isCompact.value ? nodes.value.filter((node) => !node.mobileHidden) : nodes.value,
 );
 
 function childrenOf(node: NavNode): NavNode['children'] {
-  if (expanded.value[node.path] || node.children.length <= MAX_VISIBLE_SECONDARY) {
-    return node.children;
-  }
-  return node.children.slice(0, MAX_VISIBLE_SECONDARY);
+  return node.children;
 }
 
-function hiddenCount(node: NavNode): number {
-  if (expanded.value[node.path]) return 0;
-  return Math.max(0, node.children.length - MAX_VISIBLE_SECONDARY);
-}
 
-function hasOverflow(node: NavNode): boolean {
-  return node.children.length > MAX_VISIBLE_SECONDARY;
-}
-
-function toggleMore(path: string): void {
-  expanded.value = { ...expanded.value, [path]: !expanded.value[path] };
-}
 
 function isNodeActive(node: NavNode): boolean {
   return isWithin(route.path, node.path);
@@ -60,6 +44,8 @@ function isLeafActive(leafPath: string): boolean {
 }
 
 function close(): void {
+  // 桌面端抽屉常驻，不关闭
+  if (isDesktop.value) return;
   emit('update:open', false);
 }
 
@@ -134,20 +120,6 @@ onBeforeUnmount(() => {
             >
               <span class="drawer-item-label">{{ leaf.label }}</span>
             </router-link>
-
-            <button
-              v-if="hasOverflow(node)"
-              type="button"
-              class="drawer-more"
-              :aria-expanded="expanded[node.path] === true"
-              @click="toggleMore(node.path)"
-            >
-              <AppIcon
-                :name="expanded[node.path] ? 'chevron-down' : 'chevron-right'"
-                :size="14"
-              />
-              <span>{{ expanded[node.path] ? '收起' : `更多 (${hiddenCount(node)})` }}</span>
-            </button>
           </template>
         </template>
       </nav>
@@ -239,27 +211,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.drawer-more {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 5px;
-  margin-left: 22px;
-  padding: 4px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.76rem;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-}
-
-.drawer-more:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
 
 .drawer-enter-active,
 .drawer-leave-active {

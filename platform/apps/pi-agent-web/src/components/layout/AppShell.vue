@@ -12,7 +12,7 @@
 import { ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useTheme } from '../../composables/useTheme';
-import { useIsCompact, useIsDesktop } from '../../composables/useMediaQuery';
+import { useIsCompact, useIsDesktop, BP } from '../../composables/useMediaQuery';
 import AppIcon from '../ui/AppIcon.vue';
 import AppBreadcrumb from './AppBreadcrumb.vue';
 import AppDrawer from './AppDrawer.vue';
@@ -28,7 +28,10 @@ const isCompact = useIsCompact();
 
 function readInitialDrawerState(): boolean {
   try {
-    return localStorage.getItem(DRAWER_STORAGE_KEY) === '1';
+    const stored = localStorage.getItem(DRAWER_STORAGE_KEY);
+    if (stored !== null) return stored === '1';
+    // 首次访问：桌面端默认展开，移动端默认收起
+    return window.matchMedia(`(min-width: ${BP.desktop + 1}px)`).matches;
   } catch {
     return false;
   }
@@ -129,7 +132,9 @@ watch(
 }
 
 .app-main {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 .app-shell--full-width .app-header {

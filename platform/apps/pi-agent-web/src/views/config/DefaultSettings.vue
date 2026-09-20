@@ -450,7 +450,9 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
 
 <style scoped>
 .default-settings {
-  max-width: 560px;
+  max-width: 1240px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .page-title {

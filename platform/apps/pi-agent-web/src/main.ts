@@ -43,12 +43,19 @@ const baseRoutes = [
     component: AgentsListView,
     meta: { navLabel: 'Agents', navOrder: 10, navIcon: 'agents' },
   },
-  // Agent 编辑器：内容型弹框 → 路由页（spec route-based-modals）
+  // Agent 创建页
   {
     path: '/agents/new',
     component: AgentEditorView,
     meta: { crumbTitle: 'New Agent' },
   },
+  // Agent 查看页（只读）
+  {
+    path: '/agents/:id',
+    component: AgentEditorView,
+    meta: { crumbTitleFromParam: 'id', crumbTitle: 'Agent' },
+  },
+  // Agent 编辑器
   {
     path: '/agents/:id/edit',
     component: AgentEditorView,
@@ -60,13 +67,20 @@ const baseRoutes = [
     meta: { navLabel: 'Sessions', navOrder: 20, navIcon: 'sessions' },
   },
   {
+    path: '/sessions/:id',
+    component: () => import('./views/sessions/SessionDetailView.vue'),
+    meta: { crumbTitleFromParam: 'id', crumbTitle: 'Session' },
+  },
+  {
+    path: '/sessions/:id/edit',
+    component: () => import('./views/sessions/SessionDetailView.vue'),
+    meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Session' },
+  },
+  {
     path: '/architecture',
     component: () => import('./views/ArchitectureView.vue'),
     // mobileHidden：架构图是撑满视口的 iframe，紧凑断点下不出现在抽屉里
     meta: {
-      navLabel: '架构图',
-      navOrder: 90,
-      navIcon: 'architecture',
       fullWidth: true,
       mobileHidden: true,
     },

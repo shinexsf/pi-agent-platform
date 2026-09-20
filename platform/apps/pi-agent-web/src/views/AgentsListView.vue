@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AgentDTO } from '@pi-agent-platform/shared-types';
 import AppIcon from '../components/ui/AppIcon.vue';
+import DropdownMenu from '../components/ui/DropdownMenu.vue';
 import { confirmDelete, toast } from '../composables/useFeedback';
 
 const router = useRouter();
@@ -16,8 +17,8 @@ const searchQuery = ref('');
 const filteredAgents = computed(() => {
   if (!searchQuery.value.trim()) return agents.value;
   const query = searchQuery.value.toLowerCase();
-  return agents.value.filter(a => 
-    a.name.toLowerCase().includes(query) || 
+  return agents.value.filter(a =>
+    a.name.toLowerCase().includes(query) ||
     (a.description ?? '').toLowerCase().includes(query)
   );
 });
@@ -39,7 +40,6 @@ async function loadAgents(showLoading = true) {
   }
 }
 
-// 内容型弹框已改为路由页（spec route-based-modals）
 function openCreateModal(): void {
   void router.push('/agents/new');
 }
@@ -56,7 +56,6 @@ async function startSession(agentId: string) {
       throw new Error(`The session couldn't be created (server response ${res.status}). Try again.`);
     }
     const data = (await res.json()) as { sessionId: string; agentId: string };
-    // 打开新的独立会话页面（生产环境base是/web/）
     const base = import.meta.env.BASE_URL || '/';
     window.open(`${base}chat/${data.sessionId}?agentId=${data.agentId}`, '_blank');
   } catch {
@@ -69,17 +68,14 @@ async function startSession(agentId: string) {
 async function deleteAgent(agent: AgentDTO) {
   const confirmed = await confirmDelete('Agent', agent.name);
   if (!confirmed) return;
-
   deletingId.value = agent.id;
   try {
     const res = await fetch(`/api/agents/${agent.id}/delete`, { method: 'POST' });
-    if (!res.ok) {
-      throw new Error(`The agent couldn't be deleted (server response ${res.status}). Try again.`);
-    }
+    if (!res.ok) throw new Error(`The agent couldn't be deleted (server response ${res.status}). Try again.`);
     toast(`Agent「${agent.name}」已删除`, 'success');
     await loadAgents(false);
   } catch {
-    toast('The agent couldn\'t be deleted. Check the server connection and try again.', 'error');
+    toast("The agent couldn't be deleted. Check the server connection and try again.", 'error');
   } finally {
     deletingId.value = null;
   }
@@ -100,8 +96,8 @@ onMounted(() => loadAgents());
 <template>
   <section class="page-shell" aria-labelledby="agents-title">
     <div class="surface-panel" :aria-busy="loading">
-      <!-- 工具栏与列表同容器（spec app-layout「工具栏与列表绑定」） -->
-      <div class="panel-toolbar">
+      <!-- 工具栏 -->
+      <div class="panel-toolbar agents-toolbar">
         <div class="panel-toolbar-group agents-search">
           <input
             v-model="searchQuery"
@@ -136,6 +132,8 @@ onMounted(() => loadAgents());
           </button>
         </div>
       </div>
+
+      <!-- loading / error / empty -->
       <div v-if="loading" class="skeleton-list" aria-label="Loading agents" aria-live="polite">
         <div class="loading-caption">Loading agents…</div>
         <div v-for="index in 3" :key="index" class="skeleton-row">
@@ -163,66 +161,42 @@ onMounted(() => loadAgents());
         </div>
       </div>
 
-      <ul v-else class="resource-list">
-        <li v-for="agent in filteredAgents" :key="agent.id" class="resource-row">
-          <div class="resource-row-inner">
-            <div class="resource-identity">
-              <span class="resource-avatar">{{ initials(agent.name) }}</span>
-              <div class="resource-content">
-                <h2 class="resource-title">{{ agent.name }}</h2>
-                <div class="resource-meta">
-                  <span class="meta-item truncate" :title="`${agent.model} · ${agent.workspacePath}`">
-                    <AppIcon name="model" :size="14" />
-                    <span>{{ agent.model }} · {{ agent.workspacePath }}</span>
-                  </span>
-                </div>
-                <p v-if="agent.description" class="resource-description">{{ agent.description }}</p>
-                <p class="resource-tools">Tools: {{ (agent.config?.builtinTools ?? []).join(', ') || 'default' }}</p>
-              </div>
+      <!-- agent 列表 -->
+      <ul v-else class="resource-list agent-list">
+        <li v-for="agent in filteredAgents" :key="agent.id" class="resource-row agent-row">
+          <div class="agent-row-main" @click="router.push(`/agents/${agent.id}`)">
+            <span class="resource-avatar agent-avatar">{{ initials(agent.name) }}</span>
+            <div class="agent-info">
+              <span class="agent-name">{{ agent.name }}</span>
+              <span class="agent-meta truncate" :title="`${agent.model} · ${agent.workspacePath}`">
+                {{ agent.model }} · {{ agent.workspacePath }}
+              </span>
             </div>
-            <div class="resource-actions">
-              <router-link 
-                class="btn btn-secondary btn-icon" 
-                :to="`/sessions?agent_id=${agent.id}`"
-                title="View sessions"
-              >
-                <AppIcon name="sessions" :size="16" />
-              </router-link>
-              <button
-                class="btn btn-primary btn-icon"
-                type="button"
+            <div class="agent-row-right">
+              <button class="btn-icon-sm is-live" type="button" title="新建会话"
                 :class="{ 'is-loading': startingId === agent.id }"
                 :disabled="startingId === agent.id || deletingId === agent.id"
-                @click="startSession(agent.id)"
-                title="New session"
-              >
-                <AppIcon :name="startingId === agent.id ? 'refresh' : 'plus'" :size="16" />
+                @click.stop="startSession(agent.id)">
+                <AppIcon :name="startingId === agent.id ? 'refresh' : 'play'" :size="14" />
               </button>
-              <button
-                class="btn btn-secondary btn-icon"
-                type="button"
-                :aria-label="`Edit ${agent.name}`"
-                title="Edit"
-                @click="openEditModal(agent)"
-              >
-                <AppIcon name="edit" :size="16" />
+              <button class="btn-icon-sm" type="button" title="查看会话" @click.stop="router.push(`/sessions?agent_id=${agent.id}`)">
+                <AppIcon name="sessions" :size="14" />
               </button>
-              <button
-                class="btn btn-secondary btn-icon"
-                type="button"
-                :aria-label="`Delete ${agent.name}`"
-                title="Delete"
-                :disabled="deletingId === agent.id || startingId === agent.id"
-                @click="deleteAgent(agent)"
-              >
-                <AppIcon name="trash" :size="16" />
-              </button>
+              <DropdownMenu>
+                <button class="dropdown-item" @click.stop="openEditModal(agent)">
+                  <AppIcon name="edit" :size="14" />
+                  <span>编辑</span>
+                </button>
+                <button class="dropdown-item is-danger" :disabled="deletingId === agent.id" @click.stop="deleteAgent(agent)">
+                  <AppIcon name="trash" :size="14" />
+                  <span>删除</span>
+                </button>
+              </DropdownMenu>
             </div>
           </div>
         </li>
       </ul>
     </div>
-
   </section>
 </template>
 
@@ -239,14 +213,38 @@ onMounted(() => loadAgents());
   min-width: 0;
 }
 
+/* --- agent row --- */
+.agent-row { padding: 0; }
+.agent-row-main { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px 12px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background 120ms; }
+.agent-row-main:hover { background: var(--surface-subtle); }
+.agent-avatar { flex: 0 0 28px; width: 28px; height: 28px; font-size: 11px; border-radius: 6px; display: grid; place-items: center; background: var(--surface-subtle); color: var(--text-secondary); }
+.agent-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.agent-name { font-size: 0.88rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.agent-meta { font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.agent-row-right { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.btn-icon-sm { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; }
+.btn-icon-sm:hover { background: var(--surface-hover); color: var(--text); }
+.btn-icon-sm.is-live { color: var(--success); }
+.btn-icon-sm.is-live:hover { background: var(--success-soft); }
+.dropdown-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; border: 0; background: transparent; color: var(--text); font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
+.dropdown-item:hover { background: var(--surface-hover); }
+.dropdown-item.is-danger { color: var(--danger); }
+.dropdown-item.is-danger:hover { background: var(--danger-soft); }
+
+/* --- compact --- */
 @media (max-width: 767px) {
   .panel-toolbar .agents-search,
   .panel-toolbar .toolbar-meta {
     width: 100%;
   }
 
+  .panel-toolbar.agents-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
   .toolbar-meta {
-    justify-content: space-between;
+    justify-content: flex-end;
   }
 
   .agents-search .search-input {

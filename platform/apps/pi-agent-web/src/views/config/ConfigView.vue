@@ -56,6 +56,9 @@ function selectSection(id: string): void {
   height: 100%;
   min-height: 0;
   flex-direction: column;
+  max-width: 1240px;
+  margin: 0 auto;
+  width: 100%;
   background: var(--bg);
 }
 
@@ -111,10 +114,8 @@ function selectSection(id: string): void {
 
 .config-content {
   flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
   padding: 16px 12px;
 }
 

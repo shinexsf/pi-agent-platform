@@ -254,7 +254,9 @@ function getSourceLabel(source: string): string {
 
 <style scoped>
 .extensions-config {
-  max-width: 800px;
+  max-width: 1240px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .page-title {

@@ -350,7 +350,9 @@ function toggleApiKeyVisibility(key: string) {
 
 <style scoped>
 .models-config {
-  max-width: 900px;
+  max-width: 1240px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .page-title {

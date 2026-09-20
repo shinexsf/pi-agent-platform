@@ -165,16 +165,13 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(100%, 1240px);
+  width: 100%;
   min-height: var(--app-header-h);
-  margin: 0 auto;
   padding: 0 16px;
 }
 
 .app-main {
   width: 100%;
-  max-width: 1240px;
-  margin: 0 auto;
   padding: 44px 28px 64px;
   animation: app-arrive 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -339,6 +336,8 @@ html[data-route-direction="lateral"]::view-transition-new(app-stage) {
 
 .page-shell {
   width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
 }
 
 .page-heading {

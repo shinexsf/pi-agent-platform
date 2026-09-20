@@ -12,6 +12,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useNavTree, isWithin } from './nav-tree';
+import { getCrumbName } from '../../composables/breadcrumbNames';
 
 interface Crumb {
   label: string;
@@ -44,7 +45,10 @@ const crumbs = computed<Crumb[]>(() => {
   if (typeof meta.crumbTitleFromParam === 'string' && meta.crumbTitleFromParam) {
     const raw = route.params[meta.crumbTitleFromParam];
     const value = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof value === 'string' && value) result.push({ label: value });
+    if (typeof value === 'string' && value) {
+      const resolved = getCrumbName(value);
+      result.push({ label: resolved || value });
+    }
   }
   if (typeof meta.crumbTitle === 'string' && meta.crumbTitle) {
     result.push({ label: meta.crumbTitle });
