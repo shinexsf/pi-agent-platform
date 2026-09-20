@@ -17,9 +17,8 @@ flowchart TB
         Loader["channel-loader.ts<br/>读 manifest + dynamic import"]
         HostImpl["channel-host-impl.ts<br/>ChannelHost 实现"]
         Map["session-channel-map.ts<br/>Map&lt;sessionId, ChannelCtx&gt;"]
-        Routing["routing.ts<br/>3 态决策 + /new + 30min timeout"]
+        Routing["routing.ts<br/>3 态决策 + /new"]
         Bridge["session-bridge.ts<br/>调 worker pool IPC"]
-        IdleScanner["im-idle-scanner.ts<br/>(30min 内存 Map 扫描)"]
         Reply["reply-sender.ts<br/>订阅 message_end"]
         Slash["slash-commands/<br/>/help /new /session /model /think /compact"]
         Routes["routes/im-gateway.ts<br/>/api/im/{manifest,health,channels}"]
@@ -187,9 +186,9 @@ adapter 收到文件
   → host.uploadAttachment(sessionId, bytes, mime, filename)
   → attachmentStore.upsert → 写磁盘(uuid.ext) + INSERT DB(id, sha, filename)
   → 返回 att_id
-  → adapter 拼 [pi-attachment:att_xxx] 到文本
+  → adapter 拼 <file attId="..." type="..." name="..."> 到文本
   → routing.ts → resolvePrompt(sessionId, text)
-    → 正则匹配 [pi-attachment:att_xxx]
+    → 正则匹配 <file attId>
     → attachmentStore.lookupForPrompt(sessionId, ids)
     → 返回 { path, mimeType, originalFilename }
   → worker:
@@ -206,20 +205,20 @@ adapter 收到文件
 - **DB 新增列**: `filename TEXT NOT NULL DEFAULT ''`（存磁盘文件名）
 
 ### prompt-resolver.ts（独立模块）
-统一处理：斜杠命令检查 → `[pi-attachment:att_xxx]` 占位符解析 → agent config 加载 → streamingBehavior 判断。HTTP 和 IM 两端都调它。
+统一处理：斜杠命令检查 → `<file attId>` 标签解析 → agent config 加载 → streamingBehavior 判断。HTTP 和 IM 两端都调它。
 
 ### worker 分流
 - 图片（png/jpeg/gif/webp）→ `resizeImage` → base64 → multimodal
 - 非图片 → `<file path name type></file>` → agent 用 read 工具读取
 
-## IM session idle timeout(30 分钟,内存实现)
+## IM session 管理
 
-现有 `session-timeout-scanner` 只杀 placeholder,active session 永不回收 — IM 场景会占满 `maxWorkers`。新增规则:
-- IM 网关自己维护 `Map<sessionId, SessionMeta>`,内容 `{ agentId, channelId, chatId, lastActiveAt }`
-- 定时扫描(每分钟一次),`Date.now() - lastActiveAt > 30 * 60 * 1000` → kill worker(reason='im-idle-timeout')
-- sessions row 保留(status='active'),下次消息触发自然 respawn
-- 下次消息触发自然 respawn(`spawnAndCreate` 已支持按 `pi_session_path` 恢复)
-- web / IDE session 不适用此规则(走原 placeholder timeout + LRU 驱逐)
+IM session 不再有独立的空闲超时机制（已删除 im-idle-scanner）。Worker 生命周期由 worker pool 统一管理。
+
+`session-channel-map` 仍维护 `Map<sessionId, SessionMeta>`（内容 `{ agentId, channelId, chatId, lastActiveAt }`），用于：
+- reply-sender 查找 adapter
+- 重启会话恢复（B2 fallback）
+- debug state 展示
 
 ## 重启会话恢复（State B2 fallback）
 
@@ -306,8 +305,8 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
 ## 相关决策
 
 - [`doc/architecture/current/pi-agent-server_overview.md`](pi-agent-server_overview.md) — IM 渠道从"⏸️ 待实现"升级为"✅ 已设计,实施中"
-- [`doc/architecture/current/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度(IM session idle timeout 影响 placeholder 驱逐)
-- [`doc/architecture/current/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机扩展 IM idle timeout 规则
+- [`doc/architecture/current/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度
+- [`doc/architecture/current/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机
 - [`doc/architecture/current/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
 - [`doc/architecture/current/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 待补充"主包零渠道知识"硬约束
 - [`openspec/changes/im-gateway/proposal.md`](../../openspec/changes/im-gateway/proposal.md) — 提案(163 行)
