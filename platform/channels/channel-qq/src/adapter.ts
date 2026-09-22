@@ -33,6 +33,7 @@ import type {
   OutboundTarget,
 } from '@pi-agent-platform/channel-types';
 import { QQ_SYSTEM_PROMPT } from './system-prompt.js';
+import { logger } from '../../shared/logger.js';
 
 export interface QqAdapterOptions {
   config: ChannelConfig;
@@ -491,8 +492,8 @@ export class QqAdapter implements ChannelAdapter {
     };
     const openId = m.author?.user_openid ?? '';
     let text = m.content ?? '';
-    // DIAG: log raw message shape
-    console.warn(`[QQ-DIAG] handleC2C: content=${JSON.stringify(m.content)}, attachments=${m.attachments?.length ?? 0}, text=${JSON.stringify(text)}`);
+    // DIAG (debug level): raw message shape
+    logger.debug({ content: m.content, attachmentCount: m.attachments?.length ?? 0, text }, '[QQ-DIAG] handleC2C raw message');
 
     // Download and persist attachments → build placeholder text
     if (m.attachments && m.attachments.length > 0
@@ -500,7 +501,7 @@ export class QqAdapter implements ChannelAdapter {
       try {
         // Ensure session exists so we have a valid sessionId for uploadAttachment
         const sessionId = await this.opts.host.ensureSession(this._configId, openId);
-        console.warn(`[QQ-DIAG] ensureSession returned: ${sessionId}`);
+        logger.debug({ sessionId }, '[QQ-DIAG] ensureSession returned');
         for (const att of m.attachments) {
           try {
             const resp = await fetch(att.url);
@@ -543,8 +544,8 @@ export class QqAdapter implements ChannelAdapter {
       }
     }
 
-    // DIAG: log final text before sending to routing
-    console.warn(`[QQ-DIAG] msgHandler: text=${JSON.stringify(text)}, openId=${openId}`);
+    // DIAG (debug level): final text before routing
+    logger.debug({ text, openId }, '[QQ-DIAG] msgHandler final text');
     this.msgHandler({
       channelId: this._configId,
       channelType: 'qq',

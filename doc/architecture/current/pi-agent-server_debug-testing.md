@@ -81,19 +81,26 @@ mount 在 `apps/pi-agent-server/src/im-gateway/routes/im-gateway.ts`：
 
 **反例**：`GET /api/sessions?page=1&pageSize=20`（生产 API 该分页）。**debug 端点永远一次性返回**。
 
-### 3. dev-only gating
+### 3. dev-only gating + debug 代码解耦（hard rule）
 
 ```ts
-// apps/pi-agent-server/src/index.ts:80-86
+// apps/pi-agent-server/src/index.ts —— dynamic import 是正式代码与 debug 代码的唯一接点
 if (config.isDev) {
-    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db));
-    console.log('[server] debug routes mounted at /debug');
+  const { createDebugRouter } = await import('./routes/debug.js');
+  app.route('/debug', createDebugRouter(workerPool, sessionRepo, db));
+  logger.info('debug routes mounted at /debug');
 } else {
-    console.log('[server] debug routes disabled (production mode)');
+  logger.info('debug routes disabled (production mode)');
 }
 ```
 
-**不要**在生产 server 上挂 debug 端点（即使有 auth）。**约定**：dev 才挂；prod 即使有 `NODE_ENV=development` 也别开。
+**三条解耦约束**（hard rule，见 `pi-agent-server_invariants.md`）：
+
+1. **单向依赖**：debug 代码只依赖正式代码；正式代码不依赖 debug（组合根 dynamic import 是唯一接点）
+2. **随时可剥离**：删 debug 文件（`routes/debug.ts` / `im-gateway/routes/im-debug.ts`）+ 删两处 wiring 即整体移除，正式行为零变化
+3. **正式包零加载**：production 不只是不挂载——debug 模块**不被加载**（含 `/debug/db` raw SQL）
+
+**不要**在生产 server 上挂 debug 端点（即使有 auth）。
 
 ### 4. 不影响主路径性能
 
@@ -129,7 +136,8 @@ setSystemPrompt(sessionId, systemPrompt): void { /* cache on entry */ }
 
 1. **判断放哪**：
    - 全局 server 状态（workers / sessions / DB）→ `apps/pi-agent-server/src/routes/debug.ts` 的 `createDebugRouter`
-   - 子模块内部状态（IM gateway state、channel adapter 状态）→ 子模块自己的 `routes/<sub>.ts` + `createXxxDebugRouter`
+   - 子模块内部状态（IM gateway state、channel adapter 状态）→ 子模块自己的 `routes/<sub>-debug.ts` + `createXxxDebugRouter`（参考 `im-gateway/routes/im-debug.ts`）
+   - 新文件必须由组合根在 `if (config.isDev)` 内 **dynamic import**（约束见上）
 2. **路径命名**：`/debug/<area>/<resource>` 或 `/api/<module>/debug/<resource>`
 3. **返回完整状态**：不分页，**一次性返回所有相关字段**（caller 一次看全）
 4. **dev-only gating**：跟全局 `/debug` 一样的 `config.isDev` 判断
@@ -161,11 +169,11 @@ router.get('/<resource>', (c) => {
 
 ### IM gateway debug
 
-- `GET /api/im/debug/state`
-- `GET /api/im/debug/logs` (SSE)
+- `GET /api/im/debug/state`（实现于 `im-gateway/routes/im-debug.ts`）
 
 ### 生产可用但承载 debug 能力
 
+- `GET /api/im/events` (SSE，渠道日志实时流 — admin UI QR 登录的正式依赖，**全模式正式端点**，已不算 debug)
 - `GET /api/sessions/:id/context` (`systemPrompt` 字段)
 - `GET /api/sessions/:id/messages`
 - `GET /api/sessions/:id/events` (SSE)
@@ -203,11 +211,11 @@ curl -s http://localhost:3000/api/sessions/$SESSION/messages | jq
 ### 场景 B：worker 抛异常时排查
 
 ```bash
-# 1. worker stderrTail 抓 console.error
+# 1. worker stderrTail 抓错误（主日志 name=session-worker 也可 grep，见 logging 文档）
 curl -s http://localhost:3000/debug/sessions/$SESSION | jq .worker.stderrTail
 
 # 2. 如果 error 在 worker 代码深处 + 不知道哪一行
-#    → 在 worker code 加 console.error(...)
+#    → 在 worker code 加 logger.error(...)（自动 tee 进主日志，stderrTail 同步保留）
 #    → 重启 server
 #    → 重新 spawn session 触发
 #    → 再 curl /debug/sessions/:id 看 stderrTail
@@ -235,16 +243,14 @@ curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 
 ## 禁止事项
 
+- ❌ **让正式代码依赖 debug 模块**（唯一接点：组合根 dynamic import）
+- ❌ **让 production 加载 debug 代码**（不只是不挂载；含 `/debug/db` raw SQL）
 - ❌ **不要在生产 server 挂 debug 端点**（即使有 auth）——`config.isDev` gating 是 hard rule
 - ❌ **不要给 debug 端点写 unit tests**（mock 失去意义；改用 curl 端到端）
 - ❌ **不要把大字段（>1KB）每次 IPC 拉**——必须 cache 到 `WorkerEntry`
 - ❌ **不要把 debug 端点混入生产 API 命名空间**（`/api/debug/*` 之类的）
 - ❌ **不要让 debug 端点分页**（一次性返回完整状态，caller 自己挑）
 - ❌ **不要跳过 dev-journal 记录**（即使简单端点也要写一条，方便后人复用模式）
-
-## 历史决策
-
-（历史变更轨迹见 `doc/architecture/changelog/`，gitignored 私域）
 
 ## 相关 dev-journal
 

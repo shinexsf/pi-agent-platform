@@ -20,6 +20,6 @@ export async function startCommand(): Promise<void> {
 
   const { pid } = startServer();
   log(`started pid=${pid}`);
-  log(`logs: ${process.platform === 'win32' ? '%USERPROFILE%\\.pi\\server\\logs\\server.log' : '~/.pi/server/logs/server.log'}`);
+  log(`logs: ${process.platform === 'win32' ? '%USERPROFILE%\\.pi\\server\\logs\\server.log' : '~/.pi/server/logs/server.log'} (fixed name — active log; archives: server.<timestamp>.log)`);
   process.exit(0);
 }

@@ -22,6 +22,7 @@ import type {
   WorkerMethod,
 } from '@pi-agent-platform/ipc-protocol';
 import type { RuntimeConfig } from '@pi-agent-platform/shared-types';
+import { logger } from './logger.js';
 // pi-coding-agent's `processImage` is not exposed via the package's main export
 // map, but its two building blocks (resizeImage + formatDimensionNote) ARE.
 // Server only uploads PNG/JPEG/GIF/WebP (mimeType validation), so we skip
@@ -93,11 +94,19 @@ async function dispatch(req: CallRequest): Promise<void> {
     switch (method as WorkerMethod) {
       case 'createSession': {
         const [config, sessionId, existingSessionPath] = args as [RuntimeConfig, string, string | undefined];
-        console.log(`[worker] received createSession sessionId=${sessionId}`)
+        logger.info({ sessionId }, 'received createSession');
         const { session, handle } = await createSession(config, sessionId, emit, callMaster, existingSessionPath);
         currentSession = session;
         currentHandle = handle.id;
-        console.log(`[worker] session ready sessionId=${sessionId} handle=${handle.id} piSessionPath=${handle.piSessionPath} model=${handle.model ? `${handle.model.provider}/${handle.model.modelId}` : '(default)'}`)
+        logger.info(
+          {
+            sessionId,
+            handle: handle.id,
+            piSessionPath: handle.piSessionPath,
+            model: handle.model ? `${handle.model.provider}/${handle.model.modelId}` : '(default)',
+          },
+          'session ready',
+        );
         respond(req.id, true, { sessionHandle: handle.id, piSessionPath: handle.piSessionPath, model: handle.model, thinkingLevel: handle.thinkingLevel });
         return;
       }
@@ -130,7 +139,7 @@ async function dispatch(req: CallRequest): Promise<void> {
             try {
               bytes = readAttachmentBytes(currentHandle ?? '', att.filename, att.sha, att.mimeType);
             } catch (err) {
-              console.warn(`[worker] skip image ${att.id}: ${(err as Error).message}`);
+              logger.warn({ err, attachmentId: att.id }, 'skip image');
               const ext = extForMimeType(att.mimeType);
               augmentedText += `\n<file path="${absPath}">[attachment load failed: ${(err as Error).message}]</file>`;
               continue;
@@ -155,7 +164,7 @@ async function dispatch(req: CallRequest): Promise<void> {
                 };
               }
             } catch (err) {
-              console.warn(`[worker] resizeImage failed for ${att.id}: ${(err as Error).message}`);
+              logger.warn({ err, attachmentId: att.id }, 'resizeImage failed');
               augmentedText += `\n<file path="${absPath}">[image processing failed]</file>`;
               continue;
             }
@@ -174,7 +183,7 @@ async function dispatch(req: CallRequest): Promise<void> {
               const displayName = att.originalFilename || att.id;
               augmentedText += `\n<file path="${absPath}" name="${displayName}" type="${att.mimeType}"></file>`;
             } catch (err) {
-              console.warn(`[worker] skip non-image ${att.id}: ${(err as Error).message}`);
+              logger.warn({ err, attachmentId: att.id }, 'skip non-image');
               augmentedText += `\n<file path="${absPath}">[attachment load failed: ${(err as Error).message}]</file>`;
             }
           }
@@ -263,8 +272,7 @@ async function dispatch(req: CallRequest): Promise<void> {
     // when reporting, so we log the full trace here while we still have it.
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
-    console.error(`[worker] dispatch error method=${method} message=${msg}`);
-    if (stack) console.error(stack);
+    logger.error({ method, errMsg: msg, stack }, 'dispatch error');
     respond(req.id, false, err);
   }
 }
@@ -315,7 +323,7 @@ setInterval(() => {}, 60_000);
 // with realpath sandbox check and sha256 secondary verification.
 const ATTACHMENTS_ROOT = process.env.PI_AGENT_ATTACHMENTS_ROOT;
 if (!ATTACHMENTS_ROOT) {
-  console.error('[worker] FATAL: PI_AGENT_ATTACHMENTS_ROOT env not set; worker cannot start');
+  logger.error('PI_AGENT_ATTACHMENTS_ROOT env not set; worker cannot start');
   process.exit(2);
 }
 

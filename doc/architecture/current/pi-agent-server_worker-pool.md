@@ -1,7 +1,7 @@
 # pi-agent-server worker-pool
 
 > Worker Pool 架构。master 通过 `child_process.spawn` 管理 N 个 worker 子进程。
-> v2：hasRow + LRU + MAX_WORKERS（详见 `doc/architecture/changelog/` README）。
+> v2：hasRow + LRU + MAX_WORKERS。
 
 ## 进程模型
 
@@ -260,34 +260,23 @@ await new Promise<void>((resolve, reject) => {
 - 正常启动需要更长时间（createAgentSession 等 SDK 初始化）
 - 200ms 是折中：太快会误报，太慢上层等待过久
 
-### stderr 诊断收集
+### stderr 诊断收集 + 主时间线 tee
+
+worker 的日志约定（见 [`pi-agent-server_logging.md`](pi-agent-server_logging.md)）：pino JSON 行写 **stderr**。master 端对 stderr 做两件事：
+
+1. **tee 到主时间线**：按行解析 —— JSON 行按原级别重打到 master logger（补 `sessionId` / `workerPid` 字段），非 JSON 行（栈迹 / SDK 输出）落 `raw` 字段 @info
+2. **保留 stderrTail**：最近 100 chunks FIFO，供 `GET /debug/sessions/:id`
 
 ```typescript
-class WorkerPool {
-  // worker stderr 保留最近 100 chunks（用于启动失败诊断）
-  private workerStderr = new Map<workerId, string[]>();
-  
-  private spawn(session: Session): ChildProcess {
-    const worker = fork(...);
-    const stderrChunks: string[] = [];
-    
-    worker.stderr?.on('data', (chunk) => {
-      stderrChunks.push(chunk.toString());
-      if (stderrChunks.length > 100) stderrChunks.shift();
-    });
-    
-    this.workerStderr.set(workerId, stderrChunks);
-    // ...
-  }
-  
-  // 启动失败时 dump
-  getStderr(workerId: string): string {
-    return (this.workerStderr.get(workerId) ?? []).join('');
-  }
-}
+entry.child.stderr.on('data', (chunk) => {
+  entry.stderrTail.push(chunk.toString());   // debug 端点用（100 chunks FIFO）
+  lineBuf += chunk.toString();
+  // 逐行：JSON.parse → logger[level](fields + {sessionId, workerPid}, msg)；
+  //       失败 → logger.info({ raw: line }, 'worker stderr')
+});
 ```
 
-**用途**：worker 启动失败 / 运行时异常时，stderr 通常有关键错误信息。
+**用途**：worker 启动失败 / 运行时异常的错误信息同时进主日志（可 grep）和 stderrTail（debug 端点即时可见）。
 
 ### 优雅停止（SIGTERM → 5s → SIGKILL）
 
@@ -327,9 +316,9 @@ async dispose(sessionId: string): Promise<void> {
 ## 待决
 
 - **数量策略**（决策 20 待决问题 1）：固定 N / 动态 / 无限制 — 暂时不定
-- **日志聚合**：worker 输出怎么聚合查看？
 
 ## 相关文档
 
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— IPC 协议（master ↔ worker）
+- [`pi-agent-server_logging.md`](pi-agent-server_logging.md) —— 日志（worker stderr tee 进主时间线）
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— session 生命周期

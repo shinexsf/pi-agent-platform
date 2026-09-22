@@ -17,7 +17,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import type {
   CallRequest,
   CallResponse,
@@ -26,6 +27,7 @@ import type {
   WorkerEventKind,
 } from '@pi-agent-platform/ipc-protocol';
 import { config } from './config.js';
+import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Prefer the compiled dist (no loader needed); fall back to .ts source under tsx.
@@ -38,16 +40,16 @@ function resolveWorkerEntry(): string {
   if (process.env.PI_SERVER_CLI && process.env.WORKER_DIST_DIR) {
     return path.join(process.env.WORKER_DIST_DIR, 'index.js');
   }
-  // Dev mode: probe well-known relative locations (tsx + built dist both supported).
+  // Dev mode: prefer .ts source (no build needed); fall back to compiled dist.
   const candidates = [
-    path.resolve(process.cwd(), '../../workers/session-worker/dist/index.js'),
     path.resolve(process.cwd(), '../../workers/session-worker/src/index.ts'),
-    path.resolve(__dirname, '../../workers/session-worker/dist/index.js'),
-    path.resolve(__dirname, '../workers/session-worker/dist/index.js'),
-    path.resolve(process.cwd(), 'workers/session-worker/dist/index.js'),
-    path.resolve(process.cwd(), '../workers/session-worker/dist/index.js'),
+    path.resolve(process.cwd(), '../../workers/session-worker/dist/index.js'),
     path.resolve(__dirname, '../../workers/session-worker/src/index.ts'),
+    path.resolve(__dirname, '../workers/session-worker/src/index.ts'),
     path.resolve(process.cwd(), 'workers/session-worker/src/index.ts'),
+    path.resolve(process.cwd(), '../workers/session-worker/src/index.ts'),
+    path.resolve(__dirname, '../../workers/session-worker/dist/index.js'),
+    path.resolve(process.cwd(), 'workers/session-worker/dist/index.js'),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -57,11 +59,19 @@ function resolveWorkerEntry(): string {
 
 const WORKER_ENTRY = resolveWorkerEntry();
 
-/** Detect if master runs under tsx (so we should propagate the loader to children). */
-const RUNS_UNDER_TSX =
-  process.env.NODE_OPTIONS?.includes('--import') ||
-  process.env.NODE_OPTIONS?.includes('--loader') ||
-  process.execArgv.some((a) => a.includes('tsx'));
+/**
+ * Absolute URL of the tsx ESM loader, resolved from the MASTER's module graph.
+ * Passed to workers as `--import <url>`: workers spawn with the agent workspace
+ * as cwd, so the bare specifier 'tsx/esm' would resolve against the workspace
+ * (which usually has no tsx) and crash with ERR_MODULE_NOT_FOUND.
+ */
+const TSX_LOADER_URL: string | null = (() => {
+  try {
+    return pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href;
+  } catch {
+    return null;
+  }
+})();
 
 export interface WorkerEntry {
   sessionId: string;
@@ -138,7 +148,10 @@ export class WorkerPool extends EventEmitter {
       }
     }
 
-    const nodeArgs = WORKER_ENTRY.endsWith('.ts') && RUNS_UNDER_TSX ? ['--import', 'tsx/esm', WORKER_ENTRY] : [WORKER_ENTRY];
+    if (WORKER_ENTRY.endsWith('.ts') && !TSX_LOADER_URL) {
+      throw new Error(`worker entry ${WORKER_ENTRY} is TypeScript but the tsx loader could not be resolved from the server`);
+    }
+    const nodeArgs = WORKER_ENTRY.endsWith('.ts') ? ['--import', TSX_LOADER_URL as string, WORKER_ENTRY] : [WORKER_ENTRY];
     const child = spawn(process.execPath, nodeArgs, {
       // stdin: ignore, stdout: inherit (visible in master log), stderr: pipe (captured), ipc: required
       stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
@@ -191,7 +204,32 @@ export class WorkerPool extends EventEmitter {
       }
     }, config.workerStartupTimeoutMs);
 
-    // Stderr capture (last 100 chunks FIFO)
+    // Stderr capture (last 100 chunks FIFO) + re-log onto the shared timeline.
+    // Worker logs are pino JSON lines on stderr (session-worker/src/logger.ts);
+    // non-JSON lines (stack traces, third-party SDK output) are logged raw.
+    let lineBuf = '';
+    const emitLine = (line: string): void => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      const base = { sessionId, workerPid: entry.child.pid };
+      try {
+        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object' && typeof parsed.level === 'number') {
+          const lv = parsed.level as number;
+          const { level: _lv, time: _time, msg, ...fields } = parsed;
+          const text = typeof msg === 'string' ? msg : trimmed;
+          const merged = { ...fields, ...base };
+          if (lv >= 50) logger.error(merged, text);
+          else if (lv >= 40) logger.warn(merged, text);
+          else if (lv <= 20) logger.debug(merged, text);
+          else logger.info(merged, text);
+          return;
+        }
+      } catch {
+        /* not JSON — fall through */
+      }
+      logger.info({ ...base, raw: trimmed }, 'worker stderr');
+    };
     if (entry.child.stderr) {
       entry.child.stderr.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf8');
@@ -199,6 +237,17 @@ export class WorkerPool extends EventEmitter {
         if (entry.stderrTail.length > 100) {
           entry.stderrTail.shift();
         }
+        lineBuf += text;
+        let idx = lineBuf.indexOf('\n');
+        while (idx >= 0) {
+          emitLine(lineBuf.slice(0, idx).replace(/\r$/, ''));
+          lineBuf = lineBuf.slice(idx + 1);
+          idx = lineBuf.indexOf('\n');
+        }
+      });
+      entry.child.stderr.on('end', () => {
+        if (lineBuf.trim()) emitLine(lineBuf);
+        lineBuf = '';
       });
     }
 

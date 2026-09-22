@@ -5,7 +5,8 @@
   "description": "Node.js monorepo root for pi-agent-platform",
   "type": "module",
   "scripts": {
-    "dev:server": "pnpm --filter @pi-agent-platform/session-worker build && pnpm --filter @pi-agent-platform/server dev",
+    "dev:server": "pnpm --filter @pi-agent-platform/server dev",
+    "stop:server": "node scripts/stop-server.mjs",
     "dev:web": "pnpm --filter @pi-agent-platform/web dev",
     "dev:ide": "pnpm --filter @pi-agent-platform/ide dev",
     "build": "pnpm -r build",

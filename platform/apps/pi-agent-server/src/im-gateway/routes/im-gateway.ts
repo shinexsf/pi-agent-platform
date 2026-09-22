@@ -5,21 +5,18 @@
  *   GET  /api/im/manifest        — list enabled channels (server-authoritative)
  *   GET  /api/im/health          — list all channels with status snapshot
  *   GET  /api/im/channels        — aggregate list (all types)
- *   GET  /api/im/debug/state     — debug-only: full session-channel-map + adapters + QQ notified set
- *   GET  /api/im/debug/logs      — debug-only: live channel log feed (SSE)
+ *   GET  /api/im/events          — SSE live channel log feed (all modes — admin UI QR login depends on it)
  *
  * Channel-type-specific routes are mounted separately under /api/im/<type>/*.
+ * Dev-only debug routes live in ./im-debug.ts (mounted at /api/im/debug by im-gateway/index.ts).
  */
 
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { config } from '../../config.js';
 import type { ChannelConfig, ChannelHost } from '@pi-agent-platform/channel-types';
 import { createChannelHostImpl } from '../channel-host-impl.js';
 import { listChannels } from '../channel-registry.js';
 import type { SessionRepo } from '../../repos/session.repo.js';
-import { snapshot as sessionSnapshot, size as sessionSize } from '../session-channel-map.js';
-import { snapshot as replySnapshot } from '../reply-sender.js';
 
 interface Deps {
   host: ChannelHost;
@@ -72,46 +69,6 @@ export function createImGatewayRouter(deps: Deps): Hono {
     }
     return c.json({ channels: all });
   });
-
-  // ── DEBUG routes (dev / internal verification) ───────────────────────────────
-  if (config.isDev) {
-    router.get('/debug/state', (c) => {
-      const sessions = sessionSnapshot().map(([sid, meta]) => ({
-        sessionId: sid,
-        agentId: meta.agentId,
-        channelId: meta.channelId,
-        chatId: meta.chatId,
-        lastActiveAt: meta.lastActiveAt,
-        idleForMs: Date.now() - meta.lastActiveAt,
-      }));
-      const replyPending = replySnapshot().map(([sid, p]) => ({
-        sessionId: sid,
-        messageId: p.messageId,
-        parentId: p.parentId,
-        textLen: p.text.length,
-        done: p.done,
-      }));
-      const adapters = listChannels().map((rc) => ({
-        channelId: rc.channelId,
-        channelType: rc.channelType,
-        connected: rc.adapter.isConnected(),
-        status: rc.status.status,
-        since: rc.status.since,
-        error: rc.status.error,
-      }));
-      return c.json({
-        uptime: process.uptime(),
-        loadedTypes: deps.helpers.listLoadedTypes(),
-        sessionCount: sessionSize(),
-        sessions,
-        replyPending,
-        adapters,
-        qqGroupNotifiedCount: deps.qqGroupNotified.size,
-        qqGroupNotifiedList: Array.from(deps.qqGroupNotified),
-      });
-    });
-
-  }
 
   // SSE: live channel log feed — exposed in all modes (production-safe)
   // because channel admin pages need it to display QR codes during login.

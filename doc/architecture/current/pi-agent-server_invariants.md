@@ -1,6 +1,6 @@
 # pi-agent-server invariants
 
-> 架构层不变量（system-wide hard rules）。**不能动**，动之前必须写新架构变更并重新评审（详见 `doc/architecture/changelog/` README）。
+> 架构层不变量（system-wide hard rules）。**不能动**，动之前必须写新架构变更并重新评审。
 
 ## 进程模型
 
@@ -104,7 +104,15 @@
 - `platform/channels/manifest.json` `channels` 数组加 `"channel-slack"`
 - 主包任何文件（MUST NOT）改动
 
-**违反以上任一硬约束 = 动架构，必须写新架构变更并重新评审**（详见 `doc/architecture/changelog/` README）。
+## Debug / 可观测性
+
+- **debug 代码只依赖正式代码，正式代码不依赖 debug**（唯一接点：组合根 `if (config.isDev)` 内 dynamic import）
+  - production **不加载** debug 模块（不只是不挂载）
+  - debug 文件必须随时可剥离（删文件 + 删 wiring 即可，正式行为零变化）
+- **日志统一走 pino logger 单时间线**（见 `pi-agent-server_logging.md`）
+  - worker 日志 tee 进主时间线；不允许旁路日志通道
+
+**违反以上任一硬约束 = 动架构，必须写新架构变更并重新评审**。
 
 ## sessionId
 

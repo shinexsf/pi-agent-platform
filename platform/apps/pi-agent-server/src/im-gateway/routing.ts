@@ -146,7 +146,7 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
 
   // ── 5. Forward prompt to worker ──────────────────────────────────────────────
   // Resolve attachment placeholders so worker receives promptOptions.attachments
-  console.warn(`[ROUTING-DIAG] resolvePrompt sessionId=${ensured}`);
+  logger.debug({ sessionId: ensured }, '[ROUTING-DIAG] resolvePrompt');
   const resolved = await resolvePrompt(ensured, msg.text, {
     allowSteer: true,
   }, {
@@ -163,7 +163,14 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
     return { handled: 'command', sessionId: ensured, reply: resolved.intercepted.content };
   }
 
-  console.warn(`[ROUTING-DIAG] prompt: sessionId=${ensured}, textLen=${resolved.message.length}, attachments=${resolved.promptOptions.attachments?.length ?? 0}`);
+  logger.debug(
+    {
+      sessionId: ensured,
+      textLen: resolved.message.length,
+      attachments: resolved.promptOptions.attachments?.length ?? 0,
+    },
+    '[ROUTING-DIAG] prompt',
+  );
   try {
     await ctx.workerPool.call(ensured, 'prompt', [resolved.message, resolved.promptOptions]);
   } catch (err) {

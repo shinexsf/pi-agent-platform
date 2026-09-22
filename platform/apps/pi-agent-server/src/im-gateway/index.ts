@@ -5,7 +5,8 @@
  *   1. Creates the ChannelHost impl
  *   2. Loads all channels from manifest.json (dynamic import)
  *   3. For each loaded channel type, wires inbound messages into routing.ts
- *   4. Mounts /api/im/* routes (manifest, health, channels, debug) + per-type routers
+ *   4. Mounts /api/im/* routes (manifest, health, channels) + per-type routers
+ *      + dev-only /api/im/debug/* (dynamic import — production never loads it)
  *
  * Returns the im-gateway handle so server/index.ts can gracefully shutdown.
  */
@@ -18,6 +19,7 @@ import { logger } from './logger.js';
 import { createChannelHostImpl } from './channel-host-impl.js';
 import { loadChannels } from './channel-loader.js';
 import { createImGatewayRouter } from './routes/im-gateway.js';
+import { config } from '../config.js';
 import { registerChannel, listChannels, clearAll as clearRegistry } from './channel-registry.js';
 import {
   setSessionMeta,
@@ -139,6 +141,15 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
   // 4. Build /api/im/* router — caller (server/index.ts) mounts it BEFORE
   // serve() to avoid Hono's "matcher already built" error.
   const imRouter = createImGatewayRouter({ host, helpers, sessionRepo: deps.sessionRepo, qqGroupNotified });
+
+  // Dev-only debug routes — dynamic import so production never loads debug code.
+  if (config.isDev) {
+    const { createImDebugRouter } = await import('./routes/im-debug.js');
+    imRouter.route('/debug', createImDebugRouter({
+      listLoadedTypes: () => helpers.listLoadedTypes(),
+      qqGroupNotified,
+    }));
+  }
 
   logger.info({ sessionMapSize: sessionMapSize() }, 'im-gateway ready');
 

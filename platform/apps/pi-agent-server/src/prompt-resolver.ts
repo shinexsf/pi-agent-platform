@@ -17,6 +17,9 @@ import type { AgentRepo } from './repos/agent.repo.js';
 import type { AttachmentStore } from './services/attachment-store.js';
 import { runBuiltinCommand } from './im-gateway/slash-commands.js';
 import type { SessionId } from '@pi-agent-platform/channel-types';
+import { childLogger } from './logger.js';
+
+const logger = childLogger('prompt-resolver');
 
 export interface ResolvePromptOpts {
   /** Explicit streamingBehavior from caller (HTTP: body.streamingBehavior). */
@@ -109,7 +112,7 @@ export async function resolvePrompt(
     if (missing.length > 0) {
       // Unknown attachment ids — degrade gracefully (strip markers, continue)
       // or could throw; for robustness, strip and log.
-      console.warn(`[prompt-resolver] unknown attachment ids: ${missing.join(', ')}`);
+      logger.warn({ attachmentIds: missing }, 'unknown attachment ids');
     }
     if (found.length > 0) {
       attachmentMeta = found.map((r) => ({
@@ -131,7 +134,7 @@ export async function resolvePrompt(
   if (agentId) {
     const agent = deps.agentRepo.get(agentId);
     if (!agent) {
-      console.warn(`[prompt-resolver] agent ${agentId} not found for session ${sessionId}`);
+      logger.warn({ agentId, sessionId }, 'agent not found for session');
     }
   }
 

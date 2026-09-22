@@ -21,6 +21,9 @@ import { listAvailableModels } from '../model-registry.js';
 import { spawnPlaceholder, spawnAndCreate } from '../im-gateway/session-bridge.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
+import { childLogger } from '../logger.js';
+
+const logger = childLogger('session-info');
 
 export function createSessionsRouter(
   agentRepo: AgentRepo,
@@ -130,21 +133,21 @@ export function createSessionsRouter(
     const id = c.req.param('id');
     const session = sessionRepo.get(id) ?? null;
 
-    console.log(`[session-info] id=${id} session=${!!session} workerRunning=${workerPool.has(id)}`);
+    logger.debug({ sessionId: id, hasSession: !!session, workerRunning: workerPool.has(id) }, 'session lookup');
 
     // Case: existing session row but worker dead — rebuild synchronously
     if (session && !workerPool.has(id)) {
       const agent = agentRepo.get(session.agentId);
       if (!agent) {
-        console.error(`[session-info] agent not found for session ${id}, agentId=${session.agentId}`);
+        logger.error({ sessionId: id, agentId: session.agentId }, 'agent not found for session');
         return c.json({ error: 'Agent not found' }, 404);
       }
       try {
-        console.log(`[session-info] respawning worker for session ${id}`);
+        logger.info({ sessionId: id }, 'respawning worker');
         await spawnAndCreate(id, agent, sessionRepo, workerPool, session.piSessionPath);
-        console.log(`[session-info] worker respawned for session ${id}, pid=${workerPool.get(id)?.workerPid}`);
+        logger.info({ sessionId: id, workerPid: workerPool.get(id)?.workerPid }, 'worker respawned');
       } catch (err) {
-        console.error(`[session-info] failed to respawn worker for session ${id}:`, err);
+        logger.error({ err, sessionId: id }, 'failed to respawn worker');
       }
     }
 
@@ -173,7 +176,7 @@ export function createSessionsRouter(
     }
 
     // Worker not running, no row — return partial info
-    console.warn(`[session-info] no worker and no session row for ${id}, returning fallback`);
+    logger.warn({ sessionId: id }, 'no worker and no session row, returning fallback');
     const info: SessionInfoDTO = {
       sessionId: id,
       hasRow: !!session,
@@ -505,8 +508,9 @@ export function createSessionsRouter(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') {
-        console.warn(
-          `[server] session delete: failed to unlink ${session.piSessionPath}: ${(err as Error).message}`,
+        logger.warn(
+          { err, path: session.piSessionPath },
+          'session delete: failed to unlink piSessionPath',
         );
       }
     }

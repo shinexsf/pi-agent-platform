@@ -81,7 +81,8 @@ pi-server stop      # 优雅停止
 ~/.pi/server/
 ├── data/data.db          ← SQLite
 ├── attachments/          ← 用户上传
-├── logs/server.log       ← server stdout/stderr
+├── logs/server.log       ← 结构化日志（固定名活跃文件；归档 server.<时间戳>.log 同目录）
+├── logs/server.console.log ← daemon raw stdout/stderr 兜底（pre-logger 崩溃诊断）
 └── run/server.pid        ← 守护进程 PID
 ```
 
@@ -91,7 +92,7 @@ pi-server stop      # 优雅停止
 
 `PI_SERVER_CLI=1` 环境变量是 **marker**：CLI spawn server 时注入它，server 检测到就走"打包态"路径解析。
 
-CLI spawn server 时注入 6 个环境变量：
+CLI spawn server 时注入 8 个环境变量（另强制覆盖 `PORT='9006'`）：
 
 | 变量 | 值 | 用途 |
 |---|---|---|
@@ -102,6 +103,7 @@ CLI spawn server 时注入 6 个环境变量：
 | `PI_ATTACHMENTS_ROOT` | `<dataRoot>/attachments` | 上传目录 |
 | `CHANNELS_DIR` | `<global>/dist/server/channels` | 渠道 manifest + 包路径 |
 | `PUBLIC_DIR` | `<global>/dist/server/public` | SPA 路径 |
+| `PI_LOG_FILE` | `<dataRoot>/logs/server.log` | 结构化日志落盘路径（RollingFileSink 固定名 + 归档，见 logging 文档） |
 
 server 端 4 个文件的路径解析模式（统一）：
 
@@ -206,7 +208,7 @@ CLI `stop` 命令：
 
 - **OpenSpec change `cli-packaging`**（`openspec/changes/cli-packaging/`，gitignored）：本架构变更的 proposal / design / specs / tasks 文档，49/49 tasks done
 - **dev-journal**（`doc/dev-journal/`，gitignored）：开发过程记录 + 踩坑实录
-- **architecture changelog**（`doc/architecture/changelog/`，gitignored）：架构变更轨迹
+- **architecture changelog**（私域，gitignored）：架构变更轨迹
 - **本文档**：公开的"打包架构是什么"，不含决策过程
 
 ## 不在 MVP 范围

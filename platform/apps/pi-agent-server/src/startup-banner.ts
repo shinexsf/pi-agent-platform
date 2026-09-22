@@ -1,5 +1,7 @@
 /**
  * Print startup banner with key configuration.
+ * Raw stdout on purpose — the banner is human-facing ASCII, NOT log data.
+ * (Structured startup facts land in the logger via index.ts.)
  */
 import { config } from './config.js';
 
@@ -17,6 +19,6 @@ export function printStartupBanner(): void {
     `[server] worker stop timeout=${config.workerStopTimeoutMs}ms`,
   ];
   for (const line of lines) {
-    console.log(line);
+    process.stdout.write(`${line}\n`);
   }
 }

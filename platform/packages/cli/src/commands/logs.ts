@@ -39,6 +39,11 @@ async function follow(): Promise<void> {
   const poll = setInterval(async () => {
     try {
       const size = (await stat(file)).size;
+      if (size < lastSize) {
+        // The log was rotated (archived + recreated with the same name) —
+        // restart from offset 0.
+        lastSize = 0;
+      }
       if (size > lastSize) {
         const fh = await import('node:fs').then((m) => m.promises.open(file, 'r'));
         try {

@@ -2,23 +2,13 @@
  * Server entry point.
  */
 
-// Silence noisy third-party SDK logs that bypass pino (e.g. qq-bot-sdk WebSocket
-// heartbeat "[CLIENT] 心跳校验 { op: 1, d: 2 }" prints once per ~30s).
-const originalConsoleLog = console.log;
-console.log = (...args: unknown[]) => {
-  const first = args[0];
-  if (typeof first === 'string' && (first.includes('心跳校验') || first.includes('[CLIENT]'))) {
-    return;
-  }
-  originalConsoleLog(...args);
-};
-
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import path from 'node:path';
 import process from 'node:process';
 import { config } from './config.js';
+import { logger } from './logger.js';
 import { initDb } from './db/init.js';
 import { createAgentRepo } from './repos/agent.repo.js';
 import { createSessionRepo } from './repos/session.repo.js';
@@ -26,7 +16,6 @@ import { workerPool } from './worker-pool.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
-import { createDebugRouter } from './routes/debug.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createConfigRouter } from './routes/config.js';
 import { AttachmentStore } from './services/attachment-store.js';
@@ -45,22 +34,22 @@ async function main() {
   try {
     await initModelRegistry();
     const models = await listAvailableModels();
-    console.log(`[server] model registry initialized (${models.length} available models)`);
+    logger.info({ modelCount: models.length }, 'model registry initialized');
   } catch (err) {
-    console.warn('[server] model registry init failed (GET /:id/context models will be empty):', err);
+    logger.warn({ err }, 'model registry init failed (GET /:id/context models will be empty)');
   }
 
   // Ensure attachments root exists. mkdir recursive + force = idempotent.
   // Per-session subdirectories are created lazily by attachment-store.
   await mkdir(config.attachmentsDir, { recursive: true });
-  console.log(`[server] attachments root: ${config.attachmentsDir}`);
+  logger.info({ dir: config.attachmentsDir }, 'attachments root ready');
 
   // Ensure uploads/extensions directory exists for plugin uploads
   const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
   const sep = home.includes('\\') ? '\\' : '/';
   const uploadsExtensionsDir = `${home}${sep}.pi${sep}server${sep}uploads${sep}extensions`;
   await mkdir(uploadsExtensionsDir, { recursive: true });
-  console.log(`[server] uploads extensions root: ${uploadsExtensionsDir}`);
+  logger.info({ dir: uploadsExtensionsDir }, 'uploads extensions root ready');
 
   const { db, raw } = initDb(config.databasePath);
   const agentRepo = createAgentRepo(db);
@@ -87,12 +76,14 @@ async function main() {
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
   app.route('/api/config', createConfigRouter(config));
 
-  // Debug routes (only in dev/test)
+  // Debug routes (dev/test only) — dynamic import so production never loads
+  // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
   if (config.isDev) {
+    const { createDebugRouter } = await import('./routes/debug.js');
     app.route('/debug', createDebugRouter(workerPool, sessionRepo, db));
-    console.log('[server] debug routes mounted at /debug');
+    logger.info('debug routes mounted at /debug');
   } else {
-    console.log('[server] debug routes disabled (production mode)');
+    logger.info('debug routes disabled (production mode)');
   }
 
   // Start placeholder timeout scanner (active sessions are never auto-killed)
@@ -110,19 +101,19 @@ async function main() {
       attachmentStore,
     });
     app.route('/api/im', imGatewayHandle.imRouter);
-    console.log(`[server] im-gateway started (${imGatewayHandle.loadedCount} channels: ${imGatewayHandle.loadedTypes.join(', ')})`);
+    logger.info({ channels: imGatewayHandle.loadedTypes }, 'im-gateway started');
   } catch (err) {
-    console.warn('[server] im-gateway failed to start:', err);
+    logger.warn({ err }, 'im-gateway failed to start');
   }
 
   // Start HTTP server (after all routes mounted)
   serve({ fetch: app.fetch, port: config.port }, (info) => {
-    console.log(`[server] listening on http://localhost:${info.port}`);
+    logger.info({ port: info.port }, 'server listening');
   });
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
-    console.log(`[server] received ${signal}, shutting down...`);
+    logger.info({ signal }, 'shutting down');
     scanner.stop();
     if (imGatewayHandle) await imGatewayHandle.shutdown();
     await workerPool.shutdown();
@@ -135,12 +126,12 @@ async function main() {
   // Mark worker crashes in DB
   workerPool.on('crash', (sessionId) => {
     sessionRepo.archive(sessionId);
-    console.log(`[server] session ${sessionId} archived (worker crash)`);
+    logger.info({ sessionId }, 'session archived (worker crash)');
   });
 }
 
 main().catch((err) => {
-  console.error('[server] fatal:', err);
+  logger.error({ err }, 'server fatal');
   process.exit(1);
 });
 
@@ -162,7 +153,7 @@ function resolvePublicDir(): string {
  */
 function mountStaticDir(app: Hono, prefix: string, absDir: string, logLabel: string): void {
   if (!existsSync(absDir)) {
-    console.log(`[server] ${logLabel} not found at ${absDir} (run \`pnpm build:ide\` first)`);
+    logger.warn({ dir: absDir, label: logLabel }, 'static dir not found (run pnpm build:web / build:ide first)');
     return;
   }
   // Strip the prefix from the path so serveStatic can find the file under absDir.
@@ -178,5 +169,5 @@ function mountStaticDir(app: Hono, prefix: string, absDir: string, logLabel: str
   if (existsSync(indexHtmlPath)) {
     app.get(`${prefix}*`, createSpaFallback(indexHtmlPath));
   }
-  console.log(`[server] ${logLabel} mounted from ${absDir}`);
+  logger.info({ prefix, dir: absDir }, 'static dir mounted');
 }

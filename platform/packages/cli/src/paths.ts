@@ -62,9 +62,23 @@ export function pidFile(): string {
   return path.join(dataRoot(), 'run', 'server.pid');
 }
 
-/** Where server stdout/stderr is written. */
+/**
+ * Where the structured log is written. Fixed filename = the ACTIVE log
+ * (classic rotation: on roll it is archived to server.<timestamp>.log and
+ * recreated). `pi-server logs` follows this one path forever.
+ */
 export function logFile(): string {
   return path.join(dataRoot(), 'logs', 'server.log');
+}
+
+/**
+ * Raw stdout/stderr fallback from the daemon spawn (pre-logger crashes like
+ * module-load failures). The structured log (server.log) is written by the
+ * server itself via pino-roll (PI_LOG_FILE) — kept separate so rotation never
+ * fights an inherited file handle.
+ */
+export function consoleLogFile(): string {
+  return path.join(dataRoot(), 'logs', 'server.console.log');
 }
 
 /** Sub-directories under dataRoot() that must exist before start. */

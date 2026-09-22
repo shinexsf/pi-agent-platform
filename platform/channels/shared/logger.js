@@ -1,20 +1,26 @@
 /**
- * Channel-shared pino logger (plain JS — not TS, to avoid `pnpm -r build`
- * walking into workspace-internal types).
+ * Channel-shared logger (plain JS — not TS, to avoid `pnpm -r build` walking
+ * into workspace-internal types).
  *
- * Mirror of `apps/pi-agent-server/src/im-gateway/logger.ts`. Exists here so
- * channels don't need to import from `@pi-agent-platform/server/...` (which is
- * a workspace-internal package and does not exist in the packaged npm tarball).
+ * When a channel package is loaded inside the server process, the unified
+ * server logger (`apps/pi-agent-server/src/logger.ts`) has registered itself on
+ * `globalThis.__piPlatformLogger` — we use a named child of it so channel logs
+ * share the server's timeline + rotating log file.
  *
- * If the upstream logger changes (level, target, etc.), copy the change here.
+ * The standalone pino below is only a fallback for running a channel package
+ * outside the server (ad-hoc tests/tools).
  */
 
 import pino from 'pino';
 
-const logger = pino({
-  name: 'im-gateway-channel',
-  level: process.env.LOG_LEVEL ?? 'info',
-});
+const hostLogger = globalThis.__piPlatformLogger;
+
+const logger = hostLogger
+  ? hostLogger.child({ name: 'im-gateway-channel' })
+  : pino({
+      name: 'im-gateway-channel',
+      level: process.env.LOG_LEVEL ?? 'info',
+    });
 
 export { logger };
 export default logger;

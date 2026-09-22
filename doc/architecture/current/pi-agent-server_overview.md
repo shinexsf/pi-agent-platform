@@ -67,7 +67,8 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | db-schema | [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) | ✅ 已写 |
 | http-api | [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) | ✅ 已写 |
 | **im-gateway** | **[`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md)** | ✅ **设计定稿,实施中** |
-| **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证） |
+| **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证；debug 代码解耦三约束） |
+| **logging** | **[`pi-agent-server_logging.md`](pi-agent-server_logging.md)** | ✅ **已定**（pino JSON 单时间线 + worker stderr tee + RollingFileSink 固定名滚动 + console 桥） |
 
 ## 待决项
 
@@ -75,7 +76,7 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 |---|---|
 | worker 数量策略（固定 / 动态 / 无限制）| ⏸️ 暂不定 |
 | worker 崩溃重启策略 | ⏸️ 未讨论 |
-| worker 日志聚合 | ⏸️ 未讨论 |
+| worker 日志聚合 | ✅ 已定 —— 见 `pi-agent-server_logging.md`（stderr tee 进主时间线） |
 | session 超时配置粒度 | ⏸️ 未讨论 |
 | pi TUI 接入方式 | ⏸️ 待定 |
 | IM 渠道(微信 iOS 限制 / qq-bot-sdk AGPL)| ⏸️ 见 `pi-agent-server_im-gateway.md` 待决项 |

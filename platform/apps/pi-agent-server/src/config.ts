@@ -5,6 +5,9 @@
  */
 
 import path from 'node:path';
+import { childLogger } from './logger.js';
+
+const logger = childLogger('config');
 
 export interface ServerConfig {
   port: number;
@@ -29,11 +32,11 @@ function parseIntStrict(name: string, raw: string | undefined, fallback: number)
   if (raw === undefined) return fallback;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || !Number.isInteger(n)) {
-    console.error(`[server] invalid ${name}=${raw}, must be a positive integer`);
+    logger.error({ name, raw }, 'invalid config value: must be a positive integer');
     process.exit(1);
   }
   if (n <= 0) {
-    console.error(`[server] invalid ${name}=${raw}, must be > 0`);
+    logger.error({ name, raw }, 'invalid config value: must be > 0');
     process.exit(1);
   }
   return n;

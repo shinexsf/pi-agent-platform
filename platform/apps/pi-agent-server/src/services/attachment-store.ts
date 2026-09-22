@@ -23,6 +23,9 @@ import path from 'node:path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/init.js';
 import { attachments, type attachments as attachmentsTable } from '../db/schema.js';
+import { childLogger } from '../logger.js';
+
+const logger = childLogger('attachment-store');
 
 /** Hard cap on raw byte count of any single attachment. Matches the spec at
  *  `image-attachments-api/spec.md` §"客户端预校验对齐服务端上限".
@@ -232,7 +235,10 @@ export class AttachmentStore {
       // Find file by: exact filename match → SHA prefix match → fallback
       let diskFile = '';
       const hasFilename = !!(r.filename && files.includes(r.filename));
-      console.warn(`[ATT-DIAG] id=${r.id} filename=${r.filename} files=${JSON.stringify(files)} hasFilename=${hasFilename}`);
+      logger.debug(
+        { id: r.id, filename: r.filename, files, hasFilename },
+        '[ATT-DIAG] attachment row scan',
+      );
       if (hasFilename) {
         diskFile = r.filename!;
       } else {
@@ -273,9 +279,9 @@ export class AttachmentStore {
     } catch (err) {
       // Best-effort. Logged here; the DB delete already happened. Orphan files
       // are detectable via `du` on the attachments root — not a correctness issue.
-      console.warn(
-        `[attachment-store] cascade: failed to rm ${dir}: ${(err as Error).message}. ` +
-        `DB rows (${result.changes}) already deleted; orphan files may remain.`,
+      logger.warn(
+        { err, dir, rowsDeleted: result.changes },
+        'cascade: failed to rm session dir; DB rows already deleted, orphan files may remain',
       );
     }
     return { rowsDeleted: result.changes };

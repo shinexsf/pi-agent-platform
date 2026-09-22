@@ -11,6 +11,9 @@
 import { Hono } from 'hono';
 import type { SessionRepo } from '../repos/session.repo.js';
 import type { WorkerPool } from '../worker-pool.js';
+import { childLogger } from '../logger.js';
+
+const logger = childLogger('attachments');
 import {
   AttachmentStore,
   MAX_ATTACHMENT_BYTES,
@@ -143,7 +146,7 @@ export function createAttachmentsRouter(deps: AttachmentsRouterDeps) {
           413,
         );
       }
-      console.warn(`[attachments] upload failed for session ${id}: ${(err as Error).message}`);
+      logger.warn({ err, sessionId: id }, 'upload failed');
       return c.json({ error: 'Internal upload error', code: 'internal' }, 500);
     }
   });

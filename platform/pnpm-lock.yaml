@@ -333,6 +333,9 @@ importers:
       '@pi-agent-platform/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      pino:
+        specifier: ^9.5.0
+        version: 9.5.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

@@ -1,5 +1,7 @@
 /**
- * Debug routes — only mounted when NODE_ENV !== 'production'.
+ * Debug routes — dev-only, loaded via **dynamic import** in index.ts so
+ * production (NODE_ENV=production) never loads this module — including
+ * /debug/db (raw SQL, agent self-testing tool).
  * Provides internal-state observation for self-testing.
  */
 

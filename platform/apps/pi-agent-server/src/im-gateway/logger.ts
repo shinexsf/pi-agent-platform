@@ -1,12 +1,7 @@
 /**
- * Tiny pino-style logger for the IM gateway module.
- * Falls back to console.log if pino is unavailable.
+ * IM gateway logger — named child of the unified server logger (src/logger.ts).
+ * All output lands on the shared timeline + rotating log file. Level: $LOG_LEVEL.
  */
-import * as pinoNs from 'pino';
+import { childLogger } from '../logger.js';
 
-const pinoFactory: (opts: Record<string, unknown>) => pinoNs.Logger = (pinoNs as unknown as { default: typeof pinoFactory }).default ?? (pinoNs as unknown as typeof pinoFactory);
-
-export const logger: pinoNs.Logger = pinoFactory({
-  name: 'im-gateway',
-  level: process.env.LOG_LEVEL ?? 'info',
-});
+export const logger = childLogger('im-gateway');

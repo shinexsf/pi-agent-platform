@@ -13,6 +13,9 @@
  */
 
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { childLogger } from './logger.js';
+
+const logger = childLogger('model-registry');
 
 export interface ModelInfo {
   provider: string;
@@ -59,7 +62,7 @@ export async function listAvailableModels(): Promise<ModelInfo[]> {
     return cachedModels;
   } catch (err) {
     initFailed = true;
-    console.error('[server] listAvailableModels failed:', err);
+    logger.error({ err }, 'listAvailableModels failed');
     return [];
   }
 }

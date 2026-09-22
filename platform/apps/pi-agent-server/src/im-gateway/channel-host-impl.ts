@@ -200,7 +200,7 @@ export function createChannelHostImpl(deps: Deps) {
     },
 
     seedSessionFromConfig(channelId: ChannelId, sessionId: SessionId, chatId?: ExternalChatId, agentId?: AgentId): void {
-      console.warn(`[SESSION-DIAG] seedSessionFromConfig: channelId=${channelId} sessionId=${sessionId} chatId=${chatId ?? 'UNDEF'}`);
+      logger.debug({ channelId, sessionId, chatId }, '[SESSION-DIAG] seedSessionFromConfig');
       // Find channel config to extract defaultAgentId when not provided
       const cfg = this.getChannelConfig(channelId);
       const finalAgentId = agentId ?? cfg?.defaultAgentId ?? '';
@@ -219,7 +219,7 @@ export function createChannelHostImpl(deps: Deps) {
     },
 
     async ensureSession(channelId: ChannelId, chatId: ExternalChatId): Promise<SessionId> {
-      console.warn(`[SESSION-DIAG] ensureSession called: channelId=${channelId} chatId=${chatId}`);
+      logger.debug({ channelId, chatId }, '[SESSION-DIAG] ensureSession called');
       const existingId = mapGetSessionIdByChat(channelId, chatId);
 
       // State A — alive worker, reuse
@@ -261,7 +261,7 @@ export function createChannelHostImpl(deps: Deps) {
 
       // State B2 — post-restart fallback: map empty but channel config has currentSessionId
       // (private chat only: one bot → one user, so currentSessionId is unambiguous)
-      console.warn(`[SESSION-DIAG] B2 check: cfg.currentSessionId=${cfg.currentSessionId ?? 'UNDEF'}`);
+      logger.debug({ currentSessionId: cfg.currentSessionId }, '[SESSION-DIAG] B2 check');
       if (cfg.currentSessionId) {
         const savedSession = deps.sessionRepo.get(cfg.currentSessionId);
         if (savedSession) {

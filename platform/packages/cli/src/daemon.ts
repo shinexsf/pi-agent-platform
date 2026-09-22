@@ -4,7 +4,7 @@
  * Spawns the server as a detached child process and tracks it via pidfile.
  * Cross-platform kill: POSIX uses SIGTERM→SIGKILL, Windows uses `taskkill /F`.
  *
- * The CLI injects 7 environment variables into the server child process to
+ * The CLI injects 8 environment variables into the server child process to
  * enable packaged-mode path resolution (see proposal/design for details):
  *   - PI_SERVER_CLI=1              (marker — server checks this)
  *   - NODE_ENV=production          (suppresses debug routes)
@@ -21,6 +21,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   channelsDir,
+  consoleLogFile,
   dataRoot,
   logFile,
   pidFile,
@@ -69,7 +70,7 @@ export interface StartResult {
 
 /**
  * Spawn the server as a detached child. Returns immediately.
- * - Server stdout/stderr → logFile (append)
+ * - Server stdout/stderr → consoleLogFile() (raw fallback; the server logs to PI_LOG_FILE itself)
  * - Process is detached (POSIX: setsid + unref; Windows: windowsHide)
  * - pidfile is written before returning
  */
@@ -90,6 +91,7 @@ export function startServer(): StartResult {
     PORT: '9006',
     NODE_ENV: 'production',
     PI_SERVER_CLI: '1',
+    PI_LOG_FILE: logFile(),
     WORKER_DIST_DIR: path.dirname(workerEntry()),
     PI_DATA_DIR: path.join(dataRoot(), 'data'),
     PI_ATTACHMENTS_ROOT: path.join(dataRoot(), 'attachments'),
@@ -97,12 +99,15 @@ export function startServer(): StartResult {
     PUBLIC_DIR: publicDir(),
   };
 
-  // Open log file for append (create if missing). Both stdout and stderr go here.
-  const logFd = openSync(logFile(), 'a');
+  // The server writes its own rotating structured log (pino-roll) to PI_LOG_FILE.
+  // stdout/stderr are captured to a raw fallback file so pre-logger crashes
+  // (module-load failures etc.) stay diagnosable — kept OUT of server.log so
+  // pino-roll can rotate without fighting an inherited file handle.
+  const rawFd = openSync(consoleLogFile(), 'a');
 
   const child = spawn(process.execPath, [entry], {
     detached: true,
-    stdio: ['ignore', logFd, logFd],
+    stdio: ['ignore', rawFd, rawFd],
     env,
     windowsHide: true,
   });

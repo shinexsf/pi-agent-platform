@@ -32,6 +32,7 @@ import type {
   AgentConfig,
 } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
+import { logger } from './logger.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
 import { createDefaultTools, type CallMasterFn } from './tools.js';
 
@@ -109,7 +110,7 @@ export function resolveActualModel(
     const fallback = all[0];
     return fallback ? { provider: fallback.provider, modelId: fallback.id } : null;
   } catch (e) {
-    console.warn('[worker] resolveActualModel failed:', e);
+    logger.warn({ err: e }, 'resolveActualModel failed');
     return null;
   }
 }
@@ -347,7 +348,16 @@ export async function createSession(
   const acc = new DeltaAccumulator();
 
   const agentConfig = config.config;
-  console.log(`[worker] creating session sessionId=${sessionId} model=${config.model} thinkingLevel=${config.thinkingLevel ?? '(none)'} tools=${agentConfig?.builtinTools?.join(',') ?? '(default)'} cwd=${config.workspacePath}`)
+  logger.info(
+    {
+      sessionId,
+      model: config.model,
+      thinkingLevel: config.thinkingLevel ?? '(none)',
+      tools: agentConfig?.builtinTools?.join(',') ?? '(default)',
+      cwd: config.workspacePath,
+    },
+    'creating session',
+  );
 
   // If caller supplies an existing session file path, resume that session.
   // Otherwise create a brand new session.
@@ -372,14 +382,17 @@ export async function createSession(
     appendSystemPrompt: agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : undefined,
     // Resource filters based on agent config
     extensionsOverride: agentConfig?.extensions ? (base) => {
-      console.log(`[worker] extensionsOverride: before=${base.extensions.length}`);
+      logger.debug({ count: base.extensions.length }, 'extensionsOverride: before');
       base.extensions.forEach(ext => {
         const name = extractExtensionName(ext.path);
         const resolvedName = extractExtensionName(ext.resolvedPath);
-        console.log(`  ext path="${ext.path}" resolvedPath="${ext.resolvedPath}" extractedName="${name}" resolvedName="${resolvedName}"`);
+        logger.debug(
+          { extPath: ext.path, resolvedPath: ext.resolvedPath, extractedName: name, resolvedName },
+          'extensionsOverride: ext',
+        );
       });
       const result = createExtensionsFilter(agentConfig.extensions, config.workspacePath)(base);
-      console.log(`[worker] extensionsOverride: after=${result.extensions.length}`);
+      logger.debug({ count: result.extensions.length }, 'extensionsOverride: after');
       return result;
     } : undefined,
     skillsOverride: agentConfig?.skills ? createSkillsFilter(agentConfig.skills) : undefined,
@@ -528,9 +541,12 @@ export async function createSession(
   const effectiveLevel = (realSession as unknown as SessionLike).thinkingLevel
   if (config.thinkingLevel && config.thinkingLevel !== 'off') {
     if (!supportsThinking) {
-      console.warn(`[worker] ⚠️ thinkingLevel='${config.thinkingLevel}' requested but model '${config.model}' does NOT support thinking (model.reasoning=false or model not registered in models.json). Thinking blocks will NOT appear in output.`)
+      logger.warn(
+        { thinkingLevel: config.thinkingLevel, model: config.model },
+        'thinkingLevel requested but model does NOT support thinking (model.reasoning=false or not registered in models.json); thinking blocks will NOT appear in output',
+      )
     } else {
-      console.log(`[worker] thinking enabled: level=${effectiveLevel} (requested=${config.thinkingLevel})`)
+      logger.info({ level: effectiveLevel, requested: config.thinkingLevel }, 'thinking enabled');
     }
   }
 

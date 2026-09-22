@@ -61,7 +61,7 @@ const QqChannelPackage: ChannelPackage = {
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[channel-qq] failed to seed from DB:', String(err));
+      logger.warn({ err: String(err) }, 'failed to seed from DB');
     }
 
     const { router } = createQqRoutes(host);

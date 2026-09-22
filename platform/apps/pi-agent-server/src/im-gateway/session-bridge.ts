@@ -22,6 +22,7 @@ import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 import { readSettings, type GlobalSettings } from '../services/settings-reader.js';
+import { logger } from './logger.js';
 
 interface AgentLike {
   id: string;
@@ -177,7 +178,7 @@ async function cacheSystemPrompt(sessionId: string, workerPool: WorkerPool): Pro
     if (sp) workerPool.setSystemPrompt(sessionId, sp);
   } catch (err) {
     // Non-fatal: /:id/context will just omit systemPrompt for this session.
-    console.warn(`[session-bridge] cacheSystemPrompt failed for ${sessionId}:`, err);
+    logger.warn({ err, sessionId }, 'cacheSystemPrompt failed');
   }
 }
 

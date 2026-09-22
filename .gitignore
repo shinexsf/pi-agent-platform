@@ -5,6 +5,9 @@
 # Pi SDK state
 /.pi/
 
+# Dev logs (rotating, written by the unified logger)
+/platform/apps/pi-agent-server/logs/
+
 # Personal — not for public
 /openspec/
 /reference/projects/

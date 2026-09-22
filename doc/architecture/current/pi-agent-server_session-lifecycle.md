@@ -1,7 +1,7 @@
 # pi-agent-server session-lifecycle
 
 > Session 生命周期。定义 session 何时创建、销毁、配置管理。
-> v2：placeholder 即 spawn + 统一 context 端点 + worker pool 上限 20 + LRU + 删 active 自动超时（详见 `doc/architecture/changelog/` README）。
+> v2：placeholder 即 spawn + 统一 context 端点 + worker pool 上限 20 + LRU + 删 active 自动超时。
 
 ## 状态机
 

@@ -68,7 +68,7 @@ const WechatChannelPackage: ChannelPackage = {
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[channel-wechat] failed to seed from DB:', String(err));
+      logger.warn({ err: String(err) }, 'failed to seed from DB');
     }
 
     // 3. Mount routes
