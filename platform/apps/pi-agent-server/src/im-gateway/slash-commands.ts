@@ -98,8 +98,15 @@ export async function runBuiltinCommand(name: string, ctx: BuiltinContext): Prom
 }
 
 async function handleNew(ctx: BuiltinContext): Promise<string> {
-  const { sessionId: newSessionId } = await ctx.ctx.startNewSession();
-  return `已创建新会话 ${newSessionId.slice(0, 8)}`;
+  try {
+    const { sessionId: newSessionId } = await ctx.ctx.startNewSession();
+    return `已创建新会话 ${newSessionId.slice(0, 8)}`;
+  } catch (err) {
+    // spawnAndCreate failure (worker capacity / workspace gone, etc). The old
+    // session binding is left untouched — next message respawns it (State B).
+    logger.error({ err: String(err), sessionId: ctx.sessionId }, '/new failed');
+    return `创建新会话失败: ${String(err).slice(0, 200)}`;
+  }
 }
 
 async function handleSession(ctx: BuiltinContext): Promise<string> {

@@ -111,20 +111,24 @@ watch(
       class="message-list"
       @scroll="onScroll"
     >
-      <div v-if="messages.length === 0" class="empty-state">
-        Send a message to start the conversation.
+      <!-- 内容列：768 居中限宽（可读宽度不变）；滚动容器本身全宽，
+           所以滚动条紧贴窗口右缘而不是长在内容列边上。 -->
+      <div class="messages-column">
+        <div v-if="messages.length === 0" class="empty-state">
+          Send a message to start the conversation.
+        </div>
+        <MessageItem
+          v-for="msg in messages"
+          :key="msg.id"
+          :message="msg"
+          :agent-id="agentId"
+          :file-attachments="fileAttachmentsByMsg?.get(msg.id)"
+          @retry="(text: string, agentId: string) => emit('retry', text, agentId)"
+          @dismiss-error="(id: string) => emit('dismissError', id)"
+        />
+        <!-- Typing indicator (per E2) -->
+        <TypingIndicator v-if="sending" class="typing-indicator" />
       </div>
-      <MessageItem
-        v-for="msg in messages"
-        :key="msg.id"
-        :message="msg"
-        :agent-id="agentId"
-        :file-attachments="fileAttachmentsByMsg?.get(msg.id)"
-        @retry="(text: string, agentId: string) => emit('retry', text, agentId)"
-        @dismiss-error="(id: string) => emit('dismissError', id)"
-      />
-      <!-- Typing indicator (per E2) -->
-      <TypingIndicator v-if="sending" class="typing-indicator" />
     </div>
     <button
       v-if="!autoScroll"
@@ -145,9 +149,19 @@ watch(
   min-height: 0;
 }
 
+/* 滚动容器 —— 全宽（滚动条贴窗口右缘）；padding 下沉到 .messages-column */
 .message-list {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 消息内容列 —— 768 居中，行宽与输入框一致；原 .message-list 的 padding 移到这里 */
+.messages-column {
+  width: 100%;
+  max-width: 768px;
+  margin: 0 auto;
   padding: 12px 16px;
   display: flex;
   flex-direction: column;
@@ -164,10 +178,11 @@ watch(
   margin-top: 8px;
 }
 
+/* 对齐到内容列右缘（wrapper 现在是全宽，直接 right:12px 会飞到窗口边上） */
 .jump-to-latest {
   position: absolute;
   bottom: 12px;
-  right: 12px;
+  right: max(12px, calc((100% - 768px) / 2 + 12px));
   padding: 6px 12px;
   border-radius: 16px;
   background: var(--surface);

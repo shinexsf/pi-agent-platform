@@ -193,7 +193,7 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- 会话内容区 —— 无边框，与背景融合 -->
+    <!-- 会话内容区 —— 全宽容器（滚动条贴窗口右缘），限宽下沉到内容层 -->
     <div class="chat-body">
       <MessageList
         :messages="sse.messages.value"
@@ -203,21 +203,24 @@ onUnmounted(() => {
         @retry="(text: string, aid: string) => sse.retry(text, aid)"
         @dismiss-error="(id: string) => sse.clearError(id)"
       />
-      <SteerSubBar
-        :steering="sse.steeringQueue.value"
-      />
-      <InputBox
-        :session-id="sessionId"
-        :agent-id="agentId"
-        :disabled="!sse.connected.value"
-        :sending="sse.sending.value"
-        :attachments-uploader="attachments"
-        @send="handleSend"
-        @abort="sse.abort"
-        @dispatch-command="(name: string, args: string) => sse.dispatchCommand(name, args)"
-        @set-model="(p: string, m: string) => sse.setModel(p, m)"
-        @set-thinking-level="(l: 'off' | 'low' | 'medium' | 'high') => sse.setThinkingLevel(l)"
-      />
+      <!-- 底部区（steer + 输入框）保持 768 居中，与消息内容列对齐 -->
+      <div class="chat-footer">
+        <SteerSubBar
+          :steering="sse.steeringQueue.value"
+        />
+        <InputBox
+          :session-id="sessionId"
+          :agent-id="agentId"
+          :disabled="!sse.connected.value"
+          :sending="sse.sending.value"
+          :attachments-uploader="attachments"
+          @send="handleSend"
+          @abort="sse.abort"
+          @dispatch-command="(name: string, args: string) => sse.dispatchCommand(name, args)"
+          @set-model="(p: string, m: string) => sse.setModel(p, m)"
+          @set-thinking-level="(l: 'off' | 'low' | 'medium' | 'high') => sse.setThinkingLevel(l)"
+        />
+      </div>
     </div>
 
     <!-- Session Info Modal -->
@@ -261,17 +264,24 @@ onUnmounted(() => {
   background: var(--surface, #ffffff);
 }
 
-/* 会话内容区 —— 无边框/无卡片，直接坐在页面背景上；
- * 内容居中限宽，输入框贴底。 */
+/* 会话内容区 —— 全宽（不再限宽居中）：滚动条属于窗口，紧贴右缘。
+ * 限宽下沉到两层内容：
+ *   - MessageList 内部 .messages-column（768 居中，消息可读宽度不变）
+ *   - .chat-footer（steer + 输入框，768 居中，与消息列对齐） */
 .chat-body {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   width: 100%;
+  overflow: hidden;
+}
+
+.chat-footer {
+  width: 100%;
   max-width: 768px;
   margin: 0 auto;
-  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .header-left {
@@ -407,7 +417,7 @@ onUnmounted(() => {
     padding: 0 12px;
   }
 
-  .chat-body {
+  .chat-footer {
     max-width: 100%;
   }
 

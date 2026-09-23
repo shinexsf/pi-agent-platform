@@ -111,15 +111,18 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
           await ctx.workerPool.call(ensured, 'compact', []);
         },
         startNewSession: async () => {
-          // /new — kill old worker, create new session id, persist
+          // /new — same flow as a brand-new session (ensureSession State C):
+          // spawn the worker FIRST so createSession returns the real piSessionPath,
+          // then persist the row via spawnAndCreate → createFromAgent(path).
+          // NEVER pre-create the row with piSessionPath '' — history
+          // (GET /:id/messages) reads that file directly and would return empty.
           const oldSessionId = ensured;
           const newSessionId = ctx.sessionRepo.newSessionId();
           await ctx.workerPool.kill(oldSessionId, 'new-command');
-          ctx.sessionRepo.createFromAgent({
-            sessionId: newSessionId,
-            agentId: agent.id,
-            piSessionPath: '', // will be set by spawnAndCreate
-          });
+          const result = await spawnAndCreate(newSessionId, agent, ctx.sessionRepo, ctx.workerPool);
+          if (!result) {
+            throw new Error('failed to create new session worker');
+          }
           ctx.setChannelCurrentSession(channel.id, msg.chatId, newSessionId);
           setSessionMeta(newSessionId, {
             agentId: agent.id,

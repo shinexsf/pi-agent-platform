@@ -30,6 +30,8 @@ import {
 import { routeAndSpawn, type RouteContext } from './routing.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
 import { runBuiltinCommand } from './slash-commands.js';
+import { spawnAndCreate } from './session-bridge.js';
+import type { ChannelHost } from '@pi-agent-platform/channel-types';
 
 // onMessageEnd/onMessageUpdate are imported but used only transitively (via routing.ts).
 void onMessageEnd;
@@ -63,6 +65,7 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
   const qqGroupNotified = new Set<string>();
 
   // 1. Build host
+  let hostRef: ChannelHost | null = null;
   const { host, helpers } = createChannelHostImpl({
     agentExists: (id) => !!deps.agentRepo.get(id),
     promptWorker: async (sessionId, text) => {
@@ -95,15 +98,39 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
             await deps.workerPool.call(sessionId, 'compact', []);
           },
           startNewSession: async () => {
-            // /new — kill old worker + create new session id
+            // /new — same flow as routing.ts (brand-new session path):
+            // spawn the worker FIRST so createSession returns the real
+            // piSessionPath, then persist the row with that path — never with
+            // '' (GET /:id/messages reads session.pi_session_path directly).
             const oldSessionId = sessionId;
+            const oldMeta = getSessionMeta(oldSessionId);
+            const agentId = oldMeta?.agentId ?? deps.sessionRepo.get(oldSessionId)?.agentId;
+            if (!agentId) {
+              throw new Error(`session ${oldSessionId.slice(0, 8)} has no bound agent`);
+            }
+            const agent = deps.agentRepo.get(agentId);
+            if (!agent) throw new Error(`agent ${agentId} not found`);
+
             const newSessionId = deps.sessionRepo.newSessionId();
             await deps.workerPool.kill(oldSessionId, 'new-command');
-            deps.sessionRepo.createFromAgent({
-              sessionId: newSessionId,
-              agentId: deps.sessionRepo.get(oldSessionId)?.agentId ?? '',
-              piSessionPath: '', // will be set by spawnAndCreate
-            });
+            const result = await spawnAndCreate(newSessionId, agent, deps.sessionRepo, deps.workerPool);
+            if (!result) throw new Error('failed to create new session worker');
+
+            // Rebind chat → new session (memory + DB), mirroring routing.ts.
+            if (oldMeta) {
+              const cfg = hostRef?.getChannelConfig(oldMeta.channelId);
+              if (cfg && hostRef) {
+                // Memory: ChannelConfig.currentSessionId + session map
+                hostRef.setCurrentSession(oldMeta.channelId, oldMeta.chatId, newSessionId);
+                // DB: channels_<type>.current_session_id so it survives restart (State B2)
+                deps.rawDb.exec(
+                  `UPDATE channels_${cfg.type} SET current_session_id = '${newSessionId}', updated_at = ${Date.now()} WHERE id = '${oldMeta.channelId}'`,
+                );
+              }
+              // Session map meta — keep the actual bound agentId
+              // (setCurrentSession writes cfg.defaultAgentId, which may differ).
+              setSessionMeta(newSessionId, { ...oldMeta, lastActiveAt: Date.now() });
+            }
             return { sessionId: newSessionId };
           },
         },
@@ -126,6 +153,7 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
     workerPool: deps.workerPool,
     qqGroupNotified,
   });
+  hostRef = host;
 
   // 2. Load channels
   const loaded = await loadChannels(host);
@@ -148,6 +176,8 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
     imRouter.route('/debug', createImDebugRouter({
       listLoadedTypes: () => helpers.listLoadedTypes(),
       qqGroupNotified,
+      handleInbound: (msg) => host.handleInbound(msg),
+      getChannelType: (channelId) => host.getChannelConfig(channelId)?.type ?? null,
     }));
   }
 

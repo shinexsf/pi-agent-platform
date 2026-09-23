@@ -20,6 +20,7 @@ export const CONFIG_SECTIONS: readonly ConfigSectionMeta[] = [
   { id: 'skills', label: 'Skills', icon: '📚' },
   { id: 'prompts', label: 'Prompts', icon: '💬' },
   { id: 'extensions', label: '插件管理', icon: '🧩' },
+  { id: 'logs', label: '系统日志', icon: '📜' },
 ] as const;
 
 export const DEFAULT_CONFIG_SECTION = CONFIG_SECTIONS[0]!.id;

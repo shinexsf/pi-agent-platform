@@ -31,6 +31,7 @@ import DefaultSettings from './views/config/DefaultSettings.vue';
 import SkillsConfig from './views/config/SkillsConfig.vue';
 import PromptsConfig from './views/config/PromptsConfig.vue';
 import ExtensionsConfig from './views/config/ExtensionsConfig.vue';
+import SystemLogs from './views/config/SystemLogs.vue';
 import ProviderEditorView from './views/config/ProviderEditorView.vue';
 import ResourceEditorView from './views/config/ResourceEditorView.vue';
 import AgentEditorView from './views/agents/AgentEditorView.vue';
@@ -137,6 +138,7 @@ const baseRoutes = [
         meta: { crumbTitleFromParam: 'name' },
       },
       { path: 'extensions', name: 'config-extensions', component: ExtensionsConfig },
+      { path: 'logs', name: 'config-logs', component: SystemLogs },
     ],
   },
 

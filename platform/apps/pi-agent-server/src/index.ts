@@ -18,6 +18,7 @@ import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createConfigRouter } from './routes/config.js';
+import { createServerLogsRouter } from './routes/server-logs.js';
 import { AttachmentStore } from './services/attachment-store.js';
 import { startTimeoutScanner } from './session-timeout-scanner.js';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
@@ -75,6 +76,8 @@ async function main() {
   app.route('/api/sessions', createEventsRouter(workerPool));
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
   app.route('/api/config', createConfigRouter(config));
+  // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
+  app.route('/api/server-logs', createServerLogsRouter());
 
   // Debug routes (dev/test only) — dynamic import so production never loads
   // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
