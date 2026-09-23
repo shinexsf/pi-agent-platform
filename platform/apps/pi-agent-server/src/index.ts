@@ -131,6 +131,23 @@ async function main() {
     sessionRepo.archive(sessionId);
     logger.info({ sessionId }, 'session archived (worker crash)');
   });
+
+  // session_info_changed → sync sessions.title (session-title-sync, design D2/D4).
+  // Fires for ANY pi-side rename source: HTTP/IM /name, pi TUI, future plugins.
+  workerPool.on('session_info_changed', (sessionId: string, rawName: unknown) => {
+    const session = sessionRepo.get(sessionId);
+    if (!session) {
+      // No row yet (placeholder) — skip, never create a row (D4). Auto-naming
+      // plugins can't hit this either: the row is INSERTed before the first prompt.
+      logger.debug({ sessionId }, 'session_info_changed skipped (no DB row)');
+      return;
+    }
+    const name = typeof rawName === 'string' ? rawName.trim() : '';
+    const title = name ? name : undefined; // empty → clear (既有清空语义)
+    if ((session.title ?? undefined) === title) return; // idempotent
+    sessionRepo.update(sessionId, { title });
+    logger.debug({ sessionId, title }, 'session title synced from pi');
+  });
 }
 
 main().catch((err) => {

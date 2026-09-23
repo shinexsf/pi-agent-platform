@@ -107,7 +107,7 @@ async function dispatch(req: CallRequest): Promise<void> {
           },
           'session ready',
         );
-        respond(req.id, true, { sessionHandle: handle.id, piSessionPath: handle.piSessionPath, model: handle.model, thinkingLevel: handle.thinkingLevel });
+        respond(req.id, true, { sessionHandle: handle.id, piSessionPath: handle.piSessionPath, model: handle.model, thinkingLevel: handle.thinkingLevel, sessionName: handle.sessionName });
         return;
       }
       case 'prompt': {
@@ -219,6 +219,13 @@ async function dispatch(req: CallRequest): Promise<void> {
         if (!currentSession) throw new Error('no active session');
         const [tools] = args as [string[]];
         await currentSession.setTools(tools);
+        respond(req.id, true, null);
+        return;
+      }
+      case 'setSessionName': {
+        if (!currentSession) throw new Error('no active session');
+        const [name] = args as [string];
+        currentSession.setSessionName(name);
         respond(req.id, true, null);
         return;
       }

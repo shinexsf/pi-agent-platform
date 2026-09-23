@@ -104,6 +104,9 @@ export interface WorkerEntry {
    *  Drives /:id/context's `currentThinkingLevel` field for placeholder sessions
    *  that don't yet have a DB row. */
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
+  /** pi-native session display name cached from createSession's result — used by
+   *  spawnAndCreate's heal comparison when reusing an alive placeholder worker. */
+  sessionName?: string;
 }
 
 type PendingListener = { listener: (event: WorkerEvent) => void; attached: boolean };
@@ -267,6 +270,11 @@ export class WorkerPool extends EventEmitter {
         }
         for (const listener of entry.eventListeners) {
           listener(event);
+        }
+        // Master-internal consumption: pi-native renames (any source) sync into
+        // sessions.title — wired in index.ts; the pool itself never touches the DB.
+        if (event.event === 'session_info_changed') {
+          this.emit('session_info_changed', sessionId, (event.data as { name?: string } | undefined)?.name);
         }
         return;
       }
@@ -573,6 +581,13 @@ export class WorkerPool extends EventEmitter {
   setThinkingLevel(sessionId: string, level: 'off' | 'low' | 'medium' | 'high' | null): void {
     const entry = this.workers.get(sessionId);
     if (entry) entry.thinkingLevel = level;
+  }
+
+  /** Cache the pi-native session display name returned by createSession so
+   *  spawnAndCreate's heal can compare it against sessions.title. */
+  setSessionName(sessionId: string, name: string | undefined): void {
+    const entry = this.workers.get(sessionId);
+    if (entry) entry.sessionName = name;
   }
 
   /** Cache the worker's system prompt (text + length + source) so /:id/context

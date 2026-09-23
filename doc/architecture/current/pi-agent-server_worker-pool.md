@@ -42,6 +42,7 @@ master: spawnAndCreate → INSERT sessions + markRowWritten
 [继续 prompt / steer / followUp]
   ↓
 [事件流] session.subscribe → worker → IPC → master → SSE → 客户端
+         （`session_info_changed` 由 master 内部消费写 sessions.title，不进 SSE）
 
 [用户/IDE 关 tab 或 master 退出]
   ↓

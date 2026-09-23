@@ -88,6 +88,7 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 - 写/更新 `sessions` 表（`createFromAgent` or `update({model})`）
 - **`workerPool.markRowWritten(sessionId)`**——`hasRow` 设为 true，从 placeholder 变 active
 - **`cacheSystemPrompt(sessionId, workerPool)`**（见下）—— fetch `getSystemPrompt` IPC、缓存到 WorkerEntry，让 `GET /:id/context` 能返回完整 systemPrompt 文本
+- **`healPiSessionName(...)`（title 同步）** —— 比对 `createSession` 返回的 `sessionName` 与 `row.title`：相等（含双方空）跳过、不等 DB 优先调 `setSessionName` 收敛 pi 侧（冲突记 info 日志）；`spawnPlaceholder`（无 row）不比对。见下方“Session title 双向同步”。
 
 **`spawnPlaceholder` 关键职责**（同路径独立调）：
 - `workerPool.spawn(sessionId, workspacePath)`
@@ -173,6 +174,26 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 ```
 
 **session 恢复**：完全读 sessions 表，**不读 agent 表**。
+
+## Session title 双向同步（pi 原生命名）
+
+`sessions.title`（平台展示源：Web/IDE/IM 列表）与 pi display name（jsonl `session_info` entry）通过“事件回流 + 加载 heal”收敛：
+
+| 会话状态 | 手动改名（master 发起） | pi 侧改名（TUI / 未来插件） |
+|---|---|---|
+| active（worker 活 + row）| `setSessionName` IPC → **DB 由事件回流写入**（单写入路径：title 出现 ⟺ 桥通；事件先于 IPC response，HTTP 响应返回时 DB 已一致）| `session_info_changed` → master → `sessionRepo.update({title})`（同值幂等；name 空 = 清空）|
+| worker 死（row 在）| fallback 直写 DB（响应语义不变）→ 下次加载 heal 收敛 pi | 无 worker 即无事件，不存在此场景 |
+| placeholder（无 row）| `/name`、`/rename` 均 404，不缓冲 pending | 时序上不可达：row 在首条 prompt 到达时先 INSERT 才 dispatch prompt，自动命名必在首轮 settled 之后 |
+
+**heal（加载收敛，DB 优先）**：`spawnAndCreate` 比对 `createSession` 返回的 `sessionName` 与 `row.title`——
+
+| pi 侧 | DB title | 动作 |
+|---|---|---|
+| 相等（含双方空）| 同 | 跳过（幂等，不产生废 jsonl entry）|
+| 空 | `X` | `setSessionName(X)` 回填 pi（worker-dead 改名）|
+| `X` | `Y` / 空 | DB 赢 `setSessionName(DB)` + info 冲突日志（清空同理）|
+
+三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）共用 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 的 `setTitle` 回调尚未 wiring**（现状两处 `runBuiltinCommand` 均未提供 → 返回“当前 channel 不支持重命名”），待补后复用同款策略。
 
 ## sessionId 由 master 生成
 

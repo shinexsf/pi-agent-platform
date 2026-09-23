@@ -23,6 +23,9 @@ export function createEventsRouter(workerPool: WorkerPool) {
       // Subscribe to worker events (late-binds if worker not yet spawned).
       // Worker emits already-simplified MessageDeltaDTOs in `event.data`.
       const unsubscribe = workerPool.subscribe(sessionId, (event: WorkerEvent) => {
+        // session_info_changed is master-internal (consumed to sync sessions.title
+        // in index.ts) — not part of the SSE client contract (design D6).
+        if (event.event === 'session_info_changed') return;
         void stream.writeSSE({
           event: event.event,
           id: (event.data as { messageId?: string } | undefined)?.messageId,

@@ -26,7 +26,7 @@
 { kind: 'reverse-response', id: number, ok: boolean, result?: any, error?: { message: string } }
 ```
 
-**master→worker method** 直接是 pi SDK API（`prompt` / `setModel` / `abort` / 等）。
+**master→worker method** 直接是 pi SDK API（`prompt` / `setModel` / `abort` / `setSessionName` / 等）。
 
 **worker→master method** 是自定义的 `ReverseMethod`（当前仅 `'sendFileToUser'`，可扩展）。
 
@@ -142,6 +142,16 @@ session.subscribe((event) => {           // 也像本地
 worker 抛错 → 错误通过 `kind: 'response'` 的 `error` 字段传回 → proxy 重建 Error 对象抛出。
 
 业务错误（model 不可用等）→ 通过 `kind: 'event'` 透传 pi SDK 的 error event → master SSE 推到客户端 chat 流。
+
+## 标题同步通道（title ↔ pi 原生命名）
+
+三组协议字段服务 `sessions.title` 与 pi display name 的双向同步：
+
+- **master→worker**：`setSessionName` —— pi SDK `AgentSession.setSessionName()` 的透传。它是内存 API 但穿透写文件（内部 append jsonl `session_info` entry 并**同步**发事件，先于本次 call 的 response 到达 master，FIFO 无竞态）；worker 活着时禁止绕过它直接改 jsonl（树簿记依赖内存态）。
+- **worker→master 事件**：`session_info_changed`（`data: { name }`）—— **master 内部消费**写 `sessions.title`（无 row 即 placeholder → debug 跳过、不缓冲），**不进 SSE 流**（`routes/events.ts` 过滤，双端 useSSE 契约不变）。
+- **`CreateSessionResult.sessionName`**：`createSession` 带出 pi 侧当前名字，供 `spawnAndCreate` 加载时与 DB title 比对（heal，DB 优先）。
+
+命名来源三通道（平台手动改名 / pi TUI / 未来自动命名插件）全部汇入同一事件回流；三种会话状态的行为矩阵见 [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) 的“Session title 双向同步”。
 
 ## 相关文档
 

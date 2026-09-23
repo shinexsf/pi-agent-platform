@@ -33,6 +33,27 @@ export function createSessionsRouter(
 ) {
   const router = new Hono();
 
+  /**
+   * Rename a session with pi-native sync (session-title-sync, design D2/D3).
+   * - worker alive → `setSessionName` IPC. pi emits `session_info_changed`
+   *   synchronously BEFORE the IPC response, so the DB row is already updated
+   *   by the master event回流 (index.ts) when this await returns — single write path:
+   *   title present ⟺ the event bridge works.
+   * - worker dead or IPC failure → direct DB write; heal on next load (session-bridge)
+   *   converges the pi side (DB wins).
+   */
+  async function renameSession(id: string, title: string | undefined): Promise<void> {
+    if (workerPool.has(id)) {
+      try {
+        await workerPool.call(id, 'setSessionName', [title ?? '']);
+        return;
+      } catch (err) {
+        logger.warn({ err, sessionId: id }, 'setSessionName failed; falling back to direct DB write');
+      }
+    }
+    sessionRepo.update(id, { title });
+  }
+
   // GET /api/sessions?agent_id=&workspacePath=&search=&page=&pageSize=
   // workspacePath filter joins agents table; see session.repo for rationale.
   router.get('/', (c) => {
@@ -549,7 +570,7 @@ export function createSessionsRouter(
     }
     const session = sessionRepo.get(id);
     if (!session) return c.json({ error: 'Session not found' }, 404);
-    sessionRepo.update(id, { title });
+    await renameSession(id, title);
     return c.json({ ok: true, title });
   });
 
@@ -560,14 +581,20 @@ export function createSessionsRouter(
     const session = sessionRepo.get(id);
     if (!session) return c.json({ error: 'Session not found' }, 404);
     const patch: Record<string, unknown> = {};
+    let newTitle: string | undefined;
+    let titleTouched = false;
     if (body.title !== undefined) {
       const raw = body.title;
-      patch.title = (raw === null || raw.trim() === '') ? undefined : raw.trim().slice(0, 200);
+      titleTouched = true;
+      newTitle = (raw === null || raw.trim() === '') ? undefined : raw.trim().slice(0, 200);
     }
     if (body.model !== undefined) patch.model = body.model;
     if (body.thinkingLevel !== undefined) patch.thinkingLevel = body.thinkingLevel || undefined;
     if (body.config !== undefined) patch.config = body.config;
     sessionRepo.update(id, patch as any);
+    // Title goes through the pi-sync path (worker alive → setSessionName + event回流;
+    // dead → direct DB write) instead of landing in `patch` above.
+    if (titleTouched) await renameSession(id, newTitle);
     return c.json({ ok: true, session: sessionRepo.get(id) });
   });
 
@@ -719,7 +746,7 @@ export function createSessionsRouter(
           if (args.length > 200) {
             return c.json({ error: 'Title too long (max 200 chars)', code: 'title_too_long' }, 400);
           }
-          sessionRepo.update(id, { title: args });
+          await renameSession(id, args);
           return c.json({ ok: true, result: { kind: 'text', content: `Session renamed to \`${args}\`` } });
         }
         case 'hotkeys': {

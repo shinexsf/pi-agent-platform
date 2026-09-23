@@ -25,7 +25,8 @@ export type WorkerMethod =
   | 'compact'
   | 'getContextUsage'
   | 'getSystemPrompt'
-  | 'getSessionResources';
+  | 'getSessionResources'
+  | 'setSessionName';
 
 export interface CallRequest {
   kind: 'call';
@@ -61,7 +62,10 @@ export type WorkerEventKind =
   | 'tool_result'
   | 'agent_end'
   | 'queue_update'
-  | 'error';
+  | 'error'
+  /** pi-native session display name changed (data: { name }) — master-internal,
+   *  consumed to sync sessions.title; NOT forwarded to SSE clients. */
+  | 'session_info_changed';
 
 export interface WorkerEvent {
   kind: 'event';
@@ -105,4 +109,7 @@ export interface CreateSessionResult {
   model?: { provider: string; modelId: string } | null;
   /** Active thinking level (pi SDK AgentSession.thinkingLevel) — same caching rationale. */
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
+  /** pi-native session display name at creation time (sessionManager.getSessionName()).
+   *  Master compares it against sessions.title on load (heal, DB wins). */
+  sessionName?: string;
 }

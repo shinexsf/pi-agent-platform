@@ -24,7 +24,7 @@
 |---|---|---|
 | `/api/sessions` | GET | 列出 sessions（agentId 可选过滤）|
 | `/api/sessions/:id` | GET | 详情（**保留兼容**，web 端用；新客户端用 `/context`）|
-| `/api/sessions/:id` | POST | 更新（title）|
+| `/api/sessions/:id` | POST | 更新（title 走改名同步语义，见下）|
 | `/api/sessions/:id/archive` | POST | 归档（软删除：DB status='archived'，sessions row 保留，可从历史重开）|
 | `/api/sessions/:id/delete` | POST | **硬删除**：DB row + pi session 文件 + attachment 子目录全部级联清掉 |
 | `/api/sessions/:id/messages` | GET | 历史消息列表（master 直接读 `pi_session_path` jsonl 文件，不走 IPC）|
@@ -41,7 +41,7 @@
 | `/api/sessions/:id/model` | POST | 切模型 | URL |
 | `/api/sessions/:id/think` | POST | 切 thinking | URL |
 | `/api/sessions/:id/command` | POST | dispatch slash command | URL |
-| `/api/sessions/:id/rename` | POST | 重命名 session（title 1-200 字符，空/undefined → 清空）| URL |
+| `/api/sessions/:id/rename` | POST | 重命名 session（title 1-200 字符，空/undefined → 清空）；**同步 pi 原生命名**，见下“改名端点语义” | URL |
 | `/api/sessions/:id/attachments` | POST | 上传图片（base64，magic-byte sniff；上限 25 MB；PNG/JPEG/GIF/WebP） | URL |
 | `/api/sessions/:id/attachments` | GET | 列出 session 附件元数据（不含文件路径，新→旧） | URL |
 | **`/api/sessions/import-from-file`** | **POST** | **关联外部 pi session 文件入库**（读 .jsonl 头部拿 sessionId，snapshot agent 配置建 row；不 spawn worker）。body: `{ agentId, piSessionPath, title? }`。Idempotent（id 冲突返已存在 row） | master |
@@ -50,6 +50,18 @@
 **两阶段流程**（v2）：
 1. 客户端打开新对话 → `POST /api/sessions/agents/:agentId` → **master 生成 sessionId + spawn placeholder worker + 调 listCommands/listAvailableModels** → 返回 `{ sessionId, agentId, commands[], models[] }`（**sessions 表未写**）
 2. 客户端发 prompt → `POST /api/sessions/:sessionId/prompt` → master `spawnAndCreate`（INSERT sessions + `markRowWritten`）+ 发消息
+
+### 改名端点语义（title ↔ pi 原生命名同步）
+
+三个改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）共用同一策略：
+
+| 会话状态 | 行为 |
+|---|---|
+| worker 存活 | 调 `setSessionName` IPC（pi 落 jsonl `session_info` entry），**DB 由 `session_info_changed` 事件回流写入**——单写入路径，响应返回时 DB 已一致（IPC FIFO）；title 出现 ⟺ 事件桥通 |
+| worker 已死（row 在）| fallback 直写 DB（与旧行为一致），下次加载时 heal 收敛 pi 侧（DB 优先）|
+| placeholder（无 row）| 404 `session_not_found`（`/name`、`/rename` 均是，不缓冲）|
+
+校验不变：title 1-200 字符（超长 400 `title_too_long`），空/undefined → 清空。pi 侧改名回流、加载 heal 细节见 [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) 的“Session title 双向同步”。
 
 ## 统一端点（v2 新增）
 
@@ -154,6 +166,8 @@ data: {"type":"tool_result","output":"..."}
 event: agent_end
 data: {"type":"agent_end"}
 ```
+
+> `session_info_changed` **不出现在此流**——它是 master 内部消费事件（写 `sessions.title` 后过滤，见 `routes/events.ts`），客户端契约不变。
 
 ## Request / Response 示例
 

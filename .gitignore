@@ -11,6 +11,7 @@
 # Personal — not for public
 /openspec/
 /reference/projects/
+/reference/pi-knowledge/
 /doc/dev-journal/
 /doc/notes/
 /doc/research/
@@ -23,6 +24,7 @@ dist/
 # Runtime data (server)
 /data.db*
 /logs/
+*.log
 /platform/apps/pi-agent-server/data.db
 /platform/apps/pi-agent-server/data.db-shm
 /platform/apps/pi-agent-server/data.db-wal

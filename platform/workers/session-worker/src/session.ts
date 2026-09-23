@@ -45,6 +45,9 @@ export interface SessionHandle {
   model: { provider: string; modelId: string } | null;
   /** Active thinking level (from pi SDK AgentSession.thinkingLevel). */
   thinkingLevel: ThinkingLevel | null;
+  /** pi-native session display name at creation (sessionManager.getSessionName()).
+   *  Master compares it against sessions.title on load (heal, DB wins). */
+  sessionName?: string;
 }
 
 function defaultAgentDir(): string {
@@ -134,6 +137,8 @@ function mapEventType(eventType: string | undefined): WorkerEventKind | null {
       return 'queue_update';
     case 'error':
       return 'error';
+    case 'session_info_changed':
+      return 'session_info_changed';
     default:
       return null; // skip (agent_start, turn_start, turn_end)
   }
@@ -572,6 +577,13 @@ export async function createSession(
     const mapped = mapEventType(e.type);
     if (!mapped) return;
 
+    // session_info_changed: not a message event — no DTO; forward the raw name.
+    // Master consumes it to sync sessions.title (session-title-sync).
+    if (mapped === 'session_info_changed') {
+      emit({ event: 'session_info_changed', data: { name: (e as { name?: string }).name } });
+      return;
+    }
+
     // Assign a fresh id on message_start; reuse it for update/end of the same message.
     if (e.type === 'message_start') {
       currentMessageId = `msg-${++messageCounter}`;
@@ -607,6 +619,8 @@ export async function createSession(
     piSessionPath: piPath,
     model,
     thinkingLevel: (realSession as unknown as { thinkingLevel?: ThinkingLevel }).thinkingLevel ?? null,
+    sessionName:
+      (realSession.sessionManager as { getSessionName?: () => string | undefined }).getSessionName?.() ?? undefined,
   };
 
   return { session: adapter, handle };
@@ -632,7 +646,8 @@ interface AgentSessionLike {
   };
   getAllTools(): Array<{ name: string; description: string; sourceInfo: { path: string; source: string } }>;
   sendUserMessage(content: string): Promise<void>;
-  sessionManager: { getSessionFile(): string | undefined };
+  setSessionName(name: string): void;
+  sessionManager: { getSessionFile(): string | undefined; getSessionName?(): string | undefined };
 }
 
 import type { Model } from '@earendil-works/pi-ai';
@@ -701,6 +716,12 @@ export class PiSessionAdapter {
 
   async setThinkingLevel(level: string): Promise<void> {
     this.real.setThinkingLevel(level as ThinkingLevel);
+  }
+
+  /** Set the pi-native session display name — appends a `session_info` entry to
+   *  the jsonl and emits `session_info_changed` (sync, before any IPC response). */
+  setSessionName(name: string): void {
+    this.real.setSessionName(name);
   }
 
   async setTools(tools: string[]): Promise<void> {

@@ -37,6 +37,8 @@ interface CreateSessionResult {
   piSessionPath: string;
   model?: { provider: string; modelId: string } | null;
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
+  /** pi-native session display name (session-title-sync heal input). */
+  sessionName?: string;
 }
 
 /** Phase 1: spawn placeholder worker + createSession (no DB row yet). */
@@ -55,6 +57,7 @@ export async function spawnPlaceholder(
   workerPool.setSessionPath(sessionId, result.piSessionPath);
   workerPool.setModel(sessionId, result.model ?? null);
   workerPool.setThinkingLevel(sessionId, result.thinkingLevel ?? null);
+  workerPool.setSessionName(sessionId, result.sessionName);
   // Cache the system prompt for /:id/context (avoid IPC round-trip on every
   // context fetch; the prompt can be 10K+ chars).
   await cacheSystemPrompt(sessionId, workerPool);
@@ -74,6 +77,7 @@ export async function spawnAndCreate(
   existingSessionPath?: string,
 ): Promise<{ piSessionPath: string } | undefined> {
   let piSessionPath: string;
+  let piSessionName: string | undefined;
   let actualModelOverride: string | undefined;
   let actualThinkingLevelOverride: 'off' | 'low' | 'medium' | 'high' | undefined;
 
@@ -83,6 +87,7 @@ export async function spawnAndCreate(
       throw new Error(`placeholder worker ${sessionId} has no cached piSessionPath`);
     }
     piSessionPath = entry.piSessionPath;
+    piSessionName = entry.sessionName;
     actualModelOverride = entry.model ? `${entry.model.provider}/${entry.model.modelId}` : undefined;
     actualThinkingLevelOverride = entry.thinkingLevel ?? undefined;
   } else {
@@ -94,11 +99,13 @@ export async function spawnAndCreate(
       [runtimeConfig, sessionId, existingSessionPath],
     );
     piSessionPath = result.piSessionPath;
+    piSessionName = result.sessionName;
     actualModelOverride = result.model ? `${result.model.provider}/${result.model.modelId}` : undefined;
     actualThinkingLevelOverride = result.thinkingLevel ?? undefined;
     workerPool.setSessionPath(sessionId, piSessionPath);
     workerPool.setModel(sessionId, result.model ?? null);
     workerPool.setThinkingLevel(sessionId, result.thinkingLevel ?? null);
+    workerPool.setSessionName(sessionId, result.sessionName);
     await cacheSystemPrompt(sessionId, workerPool);
   }
 
@@ -118,7 +125,41 @@ export async function spawnAndCreate(
     return undefined;
   }
   workerPool.markRowWritten(sessionId);
+
+  // ── Heal (session-title-sync, design D5): converge pi-native name to DB title ──
+  // Equal (incl. both empty) → skip: no extra jsonl entry on every respawn.
+  // Diverged → DB wins via setSessionName; covers worker-dead renames (direct DB
+  // write) and legacy drift. Runs before the caller dispatches the prompt.
+  await healPiSessionName(sessionId, workerPool, created.title, piSessionName);
+
   return { piSessionPath };
+}
+
+/**
+ * Heal the pi-native session name toward the DB title (DB wins — design D5).
+ * - db === pi (incl. both empty) → no-op (idempotent; avoids jsonl entry spam).
+ * - both set but different → info-log the conflict, then overwrite pi with DB.
+ * Placeholder sessions never reach this: heal only runs inside spawnAndCreate,
+ * which always has a row by the time it executes.
+ */
+async function healPiSessionName(
+  sessionId: string,
+  workerPool: WorkerPool,
+  dbTitle: string | undefined,
+  piName: string | undefined,
+): Promise<void> {
+  const db = (dbTitle ?? '').trim();
+  const pi = (piName ?? '').trim();
+  if (db === pi) return;
+  if (db && pi) {
+    logger.info({ sessionId, dbTitle: db, piName: pi }, 'session title conflict: DB wins (heal)');
+  }
+  try {
+    await workerPool.call(sessionId, 'setSessionName', [db]);
+    logger.debug({ sessionId, title: db || null }, 'healed pi session name from DB title');
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'heal setSessionName failed');
+  }
 }
 
 function buildRuntimeConfig(agent: AgentLike): RuntimeConfig {
