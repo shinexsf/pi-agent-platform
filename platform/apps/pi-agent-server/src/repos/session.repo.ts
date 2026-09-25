@@ -137,7 +137,11 @@ export function createSessionRepo(db: DB) {
       const existing = this.get(id);
       if (!existing) return undefined;
       const updates: Partial<typeof sessions.$inferInsert> = { lastActiveAt: Date.now() };
-      if (patch.title !== undefined) updates.title = patch.title;
+      // Explicit `title` key (even with value undefined) = clear → write NULL.
+      // The old `!== undefined` guard silently skipped clears, so DB kept the
+      // old title and next-load heal resurrected it on the pi side too
+      // (clear was broken end-to-end; found while extracting session-ops).
+      if ('title' in patch) updates.title = patch.title ?? null;
       if (patch.model !== undefined) updates.model = patch.model;
       if (patch.thinkingLevel !== undefined) updates.thinkingLevel = patch.thinkingLevel;
       if (patch.config !== undefined) updates.config = patch.config ? JSON.stringify(patch.config) : null;

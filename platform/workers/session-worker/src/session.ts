@@ -34,7 +34,7 @@ import type {
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 import { logger } from './logger.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
-import { createDefaultTools, type CallMasterFn } from './tools.js';
+import { createServerTools, type CallMasterFn } from './tools.js';
 
 export type EventEmitter = (event: Omit<WorkerEvent, 'kind'>) => void;
 
@@ -426,8 +426,14 @@ export async function createSession(
       })()
     : undefined;
 
-  // Build default tools (sendFileToUser, etc.) — injected into every session.
-  const customTools = createDefaultTools(sessionId, callMaster);
+  // Build server-side tools (sendFileToUser / callServer) — gated by
+  // AgentConfig.serverBuiltinTools (default: sendFileToUser only; callServer opt-in).
+  // capabilityIndex (master-pushed) embeds the capability index into the
+  // callServer description for zero-round-trip first use.
+  const customTools = createServerTools(sessionId, callMaster, {
+    serverBuiltinTools: agentConfig?.serverBuiltinTools,
+    capabilityIndex: config.capabilityIndex,
+  });
 
   const result = await createAgentSession({
     cwd: config.workspacePath,

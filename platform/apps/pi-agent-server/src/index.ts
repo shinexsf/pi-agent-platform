@@ -79,12 +79,44 @@ async function main() {
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
 
+  // Capability control plane — SINGLE entry for all server-management abilities
+  // exposed to agents via the callServer tool (register → dispatch → authorize → audit).
+  const { registerAllCapabilities, installControlPlane } = await import('./capabilities/index.js');
+  registerAllCapabilities({
+    agentRepo,
+    sessionRepo,
+    workerPool,
+    serverOpts: { nodeEnv: config.nodeEnv, port: config.port, maxWorkers: config.maxWorkers },
+  });
+  installControlPlane({ agentRepo, sessionRepo, workerPool, registerReverseCallHandler: (m, h) => workerPool.registerReverseCallHandler(m, h) });
+
+  // Read-only capability metadata for the WebUI agent editor (capabilities 授权
+  // checkbox list). Registry is the single source of truth — the UI never
+  // hardcodes method names. Production endpoint (read-only, no secrets),
+  // distinct from /debug/capabilities (dev-only, adds policy + invoke).
+  const { listCapabilities: listCaps, CAPABILITY_MODULES: CAP_MODULES } = await import('./capabilities/registry.js');
+  app.get('/api/capabilities', (c) =>
+    c.json({
+      modules: CAP_MODULES.map((m) => ({
+        module: m,
+        capabilities: listCaps(m).map((d) => ({
+          method: d.method,
+          access: d.access,
+          scoped: d.scoped,
+          summary: d.summary,
+        })),
+      })),
+    }),
+  );
+
   // Debug routes (dev/test only) — dynamic import so production never loads
   // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
   if (config.isDev) {
     const { createDebugRouter } = await import('./routes/debug.js');
     app.route('/debug', createDebugRouter(workerPool, sessionRepo, db));
-    logger.info('debug routes mounted at /debug');
+    const { createCapabilityDebugRouter } = await import('./routes/capabilities-debug.js');
+    app.route('/debug/capabilities', createCapabilityDebugRouter(agentRepo, sessionRepo, workerPool));
+    logger.info('debug routes mounted at /debug (incl. /debug/capabilities)');
   } else {
     logger.info('debug routes disabled (production mode)');
   }

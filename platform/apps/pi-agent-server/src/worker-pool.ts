@@ -107,6 +107,11 @@ export interface WorkerEntry {
   /** pi-native session display name cached from createSession's result — used by
    *  spawnAndCreate's heal comparison when reusing an alive placeholder worker. */
   sessionName?: string;
+  /** Agent this session belongs to — set at spawn time by session-bridge (agent
+   *  context is known there). Needed by the capability control plane: placeholder
+   *  sessions have NO sessions row, so ctx.agentId would otherwise be unresolved
+   *  (own-mode + allowlist would fail closed on placeholders). */
+  agentId?: string;
 }
 
 type PendingListener = { listener: (event: WorkerEvent) => void; attached: boolean };
@@ -559,7 +564,14 @@ export class WorkerPool extends EventEmitter {
     if (entry) entry.hasRow = true;
   }
 
-  /** Record the pi session file path returned by worker's createSession IPC.
+  /** Record the agent owning this session (see WorkerEntry.agentId). Called from
+   *  session-bridge right after spawn — placeholder and active paths alike. */
+  setAgentId(sessionId: string, agentId: string): void {
+    const entry = this.workers.get(sessionId);
+    if (entry) entry.agentId = agentId;
+  }
+
+  /** Cache the pi session file path returned by worker's createSession IPC.
    *  Called by spawnPlaceholder (placeholder worker) and spawnAndCreate (active worker)
    *  so subsequent spawnAndCreate calls on a still-alive worker can reuse it
    *  without re-creating the underlying session. */

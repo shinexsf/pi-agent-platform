@@ -46,6 +46,7 @@
 | `/api/sessions/:id/attachments` | GET | 列出 session 附件元数据（不含文件路径，新→旧） | URL |
 | **`/api/sessions/import-from-file`** | **POST** | **关联外部 pi session 文件入库**（读 .jsonl 头部拿 sessionId，snapshot agent 配置建 row；不 spawn worker）。body: `{ agentId, piSessionPath, title? }`。Idempotent（id 冲突返已存在 row） | master |
 | **`/api/models`** | **GET** | **全局 model registry**（IDE Add-Agent 对话框下拉用） | master |
+| **`/api/capabilities`** | **GET** | **callServer 能力元数据**（method/module/access/scoped/summary）——WebUI 授权勾选列表唯一事实源，见 [capabilities](pi-agent-server_capabilities.md) | master |
 
 **两阶段流程**（v2）：
 1. 客户端打开新对话 → `POST /api/sessions/agents/:agentId` → **master 生成 sessionId + spawn placeholder worker + 调 listCommands/listAvailableModels** → 返回 `{ sessionId, agentId, commands[], models[] }`（**sessions 表未写**）

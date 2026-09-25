@@ -79,7 +79,11 @@ export type WorkerMessage = CallResponse | WorkerEvent | ReverseCallResponse;
 
 /** Methods callable on the master from worker (reverse direction) */
 export type ReverseMethod =
-  | 'sendFileToUser';
+  | 'sendFileToUser'
+  /** Server-management capability dispatch. args contract: `[method: string, params?: object]`.
+   *  Registered once by the master-side control plane (capabilities/index.ts) at startup;
+   *  all callServer methods flow through this single reverse method. */
+  | 'invokeCapability';
 
 /** Worker → Master: reverse RPC call request */
 export interface ReverseCallRequest {

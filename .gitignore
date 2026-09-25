@@ -39,6 +39,9 @@ dist/
 # Node
 node_modules/
 
+# Integration-test agent workspace (agent-facing fixtures; local only)
+/test-workspace/
+
 # Misc
 /tmp/
 /nul

@@ -34,6 +34,8 @@ mount 在 `apps/pi-agent-server/src/index.ts:81`，`config.isDev = nodeEnv !== '
 | `GET /debug/sessions/:id` | `{session, worker: {workerPid, ready, stderrTail, pendingCalls} \| null}` | 单 session + worker 元数据 + **最近 100 段 stderr**（关键排查点）|
 | `GET /debug/workers` | `{workers: WorkerSummary[]}` | 仅 workers |
 | `GET /debug/db?sql=...` | `{rows: any[]}` | **直接执行 SQL**（Drizzle `sql.raw`，仅 dev）|
+| `GET /debug/capabilities[?agentId=]` | 完整状态 | 能力控制面：固定策略 + 注册表分组 + agent 字段解析（见 [capabilities](pi-agent-server_capabilities.md)）|
+| `POST /debug/capabilities/invoke` | `{ok, ctx, result/error}` | synthetic ctx 走**真实 dispatch**（`{ sessionId?|agentId?, method, params? }`）——授权矩阵 L1 测试入口，不烧 LLM token |
 
 **关键点**：`stderrTail` 是 worker 子进程 `child.stderr.on('data')` 收集的最后 100 段 chunk（`worker-pool.ts:177-185`）。worker 端任何 `console.error` 都会进这里。
 
@@ -166,6 +168,8 @@ router.get('/<resource>', (c) => {
 - `GET /debug/sessions/:id`
 - `GET /debug/workers`
 - `GET /debug/db?sql=...`
+- `GET /debug/capabilities[?agentId=]`（能力控制面状态）
+- `POST /debug/capabilities/invoke`（真实 dispatch 的 synthetic 入口）
 
 ### IM gateway debug
 

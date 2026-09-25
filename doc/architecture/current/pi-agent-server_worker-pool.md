@@ -66,6 +66,10 @@ export interface WorkerEntry {
    *  Active sessions are never auto-killed; placeholder workers (`hasRow=false`)
    *  participate in the 5-minute placeholder timeout and LRU eviction. */
   hasRow: boolean;
+  /** Agent this session belongs to — set at spawn time by session-bridge. Needed by
+   *  the capability control plane: placeholder sessions have NO sessions row, so
+   *  ctx.agentId would otherwise be unresolved (allowlist / own checks fail closed). */
+  agentId?: string;
 }
 ```
 
@@ -160,7 +164,8 @@ class WorkerPool {
 Worker 可通过 `callMaster(method, args)` 回调 master。WorkerPool 在 `wireUpHandlers` 中监听 `reverse-call` 消息，分发到 `registerReverseCallHandler()` 注册的 handler。
 
 ```typescript
-// 注册 handler（IM gateway 初始化时）
+// 注册 handler（sendFileToUser 在 IM gateway 初始化时注册；
+// invokeCapability（agent 管理 server 能力）由控制面在组合根 index.ts 启动时统一注册）
 workerPool.registerReverseCallHandler('sendFileToUser', async (sessionId, args) => {
   const meta = getSessionMeta(sessionId);
   if (!meta) return { ok: true }; // IDE/Web session — no-op

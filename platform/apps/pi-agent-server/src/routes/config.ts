@@ -60,6 +60,8 @@ interface ServerDefaultsConfig {
   defaultSkills?: string[];
   defaultPrompts?: string[];
   defaultBuiltinTools?: string[];
+  /** Global default for AgentConfig.serverBuiltinTools (sendFileToUser / callServer). */
+  defaultServerBuiltinTools?: string[];
   [key: string]: unknown;
 }
 

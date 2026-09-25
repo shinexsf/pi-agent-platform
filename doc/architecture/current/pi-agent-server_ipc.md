@@ -28,7 +28,7 @@
 
 **master→worker method** 直接是 pi SDK API（`prompt` / `setModel` / `abort` / `setSessionName` / 等）。
 
-**worker→master method** 是自定义的 `ReverseMethod`（当前仅 `'sendFileToUser'`，可扩展）。
+**worker→master method** 是自定义的 `ReverseMethod`（`'sendFileToUser'` + `'invokeCapability'`——后者的 args 契约 `[method, params?]`，是 agent 管理 server 能力的统一入口，全部业务方法从这一个反向方法过，见 [`capabilities`](pi-agent-server_capabilities.md)）。
 
 ## Master 端：AgentSessionProxy
 
@@ -156,4 +156,5 @@ worker 抛错 → 错误通过 `kind: 'response'` 的 `error` 字段传回 → p
 ## 相关文档
 
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 进程模型
+- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— `invokeCapability` 反向调用的控制面消费方
 - [`pi-agent-server_overview.md`](pi-agent-server_overview.md) —— 整体定位

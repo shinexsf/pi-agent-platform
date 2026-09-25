@@ -11,6 +11,9 @@ export interface GlobalSettings {
   defaultSkills?: string[];
   defaultPrompts?: string[];
   defaultBuiltinTools?: string[];
+  /** Global default for AgentConfig.serverBuiltinTools (server-side custom tools:
+   *  sendFileToUser / callServer). undefined = built-in default ['sendFileToUser']. */
+  defaultServerBuiltinTools?: string[];
   [key: string]: unknown;
 }
 

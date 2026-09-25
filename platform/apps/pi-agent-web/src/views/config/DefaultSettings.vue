@@ -41,6 +41,7 @@ interface Settings {
   defaultSkills?: string[];
   defaultPrompts?: string[];
   defaultBuiltinTools?: string[];
+  defaultServerBuiltinTools?: string[];
   [key: string]: unknown;
 }
 
@@ -164,6 +165,8 @@ async function loadData() {
       defaultSkills: serverConfig.defaultSkills,
       defaultPrompts: serverConfig.defaultPrompts,
       defaultBuiltinTools: serverConfig.defaultBuiltinTools,
+      // 未配置时 seed 内置默认（仅 sendFileToUser）——让勾选态如实反映生效值
+      defaultServerBuiltinTools: serverConfig.defaultServerBuiltinTools ?? ['sendFileToUser'],
     };
     allModels.value = await modelsRes.json();
     allExtensions.value = await extensionsRes.json();
@@ -208,6 +211,7 @@ async function saveSettings() {
         defaultSkills: settings.value.defaultSkills,
         defaultPrompts: settings.value.defaultPrompts,
         defaultBuiltinTools: settings.value.defaultBuiltinTools,
+        defaultServerBuiltinTools: settings.value.defaultServerBuiltinTools,
       }),
     });
     toast('保存成功！新配置将在创建新 session 时生效。', 'success');
@@ -243,7 +247,7 @@ function deselectAllModels() {
 
 // ── Resource list helpers (extensions/skills/prompts/builtinTools) ──
 
-function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', name: string) {
+function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', name: string) {
   if (!settings.value[key]) {
     settings.value[key] = [];
   }
@@ -256,15 +260,15 @@ function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPro
   }
 }
 
-function selectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', names: string[]) {
+function selectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', names: string[]) {
   settings.value[key] = [...names];
 }
 
-function deselectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools') {
+function deselectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools') {
   settings.value[key] = [];
 }
 
-function isResourceEnabled(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools', name: string): boolean {
+function isResourceEnabled(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', name: string): boolean {
   const arr = settings.value[key];
   if (!arr) return true; // null/undefined = all enabled (default)
   return arr.includes(name);
@@ -275,6 +279,13 @@ const extensionNames = computed(() => allExtensions.value.map(e => e.name));
 const skillNames = computed(() => allSkills.value.map(s => s.name));
 const promptNames = computed(() => allPrompts.value.map(p => p.name));
 const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
+
+// Server 侧自定义工具全局默认（AgentConfig.serverBuiltinTools 的 fallback）
+const SERVER_BUILTIN_TOOLS = [
+  { value: 'sendFileToUser', label: 'sendFileToUser (发送文件给用户)' },
+  { value: 'callServer', label: 'callServer (调用 server 管理能力)' },
+];
+const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.value));
 </script>
 
 <template>
@@ -432,6 +443,28 @@ const builtinToolNames = computed(() => BUILTIN_TOOLS.map(t => t.value));
               type="checkbox"
               :checked="isResourceEnabled('defaultBuiltinTools', tool.value)"
               @change="toggleResource('defaultBuiltinTools', tool.value)"
+            />
+            <span class="model-label">{{ tool.label }}</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Default Enabled Server Builtin Tools -->
+      <div class="form-group">
+        <div class="models-header">
+          <label>默认启用的 Server 工具</label>
+          <div class="models-actions">
+            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultServerBuiltinTools', serverBuiltinToolNames)">全选</button>
+            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultServerBuiltinTools')">全不选</button>
+          </div>
+        </div>
+        <div class="resource-hint">agent 未单独配置 serverBuiltinTools 时生效；内置默认 = 仅 sendFileToUser。callServer 开启后仍需在 agent 的 capabilities 中授权可用方法</div>
+        <div class="models-checkbox-list">
+          <label v-for="tool in SERVER_BUILTIN_TOOLS" :key="tool.value" class="checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isResourceEnabled('defaultServerBuiltinTools', tool.value)"
+              @change="toggleResource('defaultServerBuiltinTools', tool.value)"
             />
             <span class="model-label">{{ tool.label }}</span>
           </label>

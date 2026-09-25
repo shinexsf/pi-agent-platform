@@ -175,6 +175,8 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 
 **session 恢复**：完全读 sessions 表，**不读 agent 表**。
 
+**恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config **优先于 agent**，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。**唯一例外**：row config 缺 `capabilities` key（存量 row 未快照过）→ 授权回落 agent 行（`null` 显式 ≠ `undefined` 未快照，见 [`capabilities`](pi-agent-server_capabilities.md)）。spawn 时同时下发 `capabilityIndex`（按有效授权过滤）供 callServer 工具内嵌 description。
+
 ## Session title 双向同步（pi 原生命名）
 
 `sessions.title`（平台展示源：Web/IDE/IM 列表）与 pi display name（jsonl `session_info` entry）通过“事件回流 + 加载 heal”收敛：
@@ -193,7 +195,7 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 | 空 | `X` | `setSessionName(X)` 回填 pi（worker-dead 改名）|
 | `X` | `Y` / 空 | DB 赢 `setSessionName(DB)` + info 冲突日志（清空同理）|
 
-三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）共用 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 的 `setTitle` 回调尚未 wiring**（现状两处 `runBuiltinCommand` 均未提供 → 返回“当前 channel 不支持重命名”），待补后复用同款策略。
+三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）与 callServer 控制面的 `session.update` title 分支共用 `services/session-ops.ts` 的 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 的 `setTitle` 回调尚未 wiring**（现状两处 `runBuiltinCommand` 均未提供 → 返回“当前 channel 不支持重命名”），待补后复用同款策略。
 
 ## sessionId 由 master 生成
 

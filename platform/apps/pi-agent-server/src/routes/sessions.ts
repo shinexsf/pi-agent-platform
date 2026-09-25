@@ -19,6 +19,7 @@ import type { AttachmentStore } from '../services/attachment-store.js';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo, SessionInfoDTO } from '@pi-agent-platform/api-types';
 import { listAvailableModels } from '../model-registry.js';
 import { spawnPlaceholder, spawnAndCreate } from '../im-gateway/session-bridge.js';
+import { renameSession as renameSessionOp } from '../services/session-ops.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
 import { childLogger } from '../logger.js';
@@ -34,24 +35,12 @@ export function createSessionsRouter(
   const router = new Hono();
 
   /**
-   * Rename a session with pi-native sync (session-title-sync, design D2/D3).
-   * - worker alive → `setSessionName` IPC. pi emits `session_info_changed`
-   *   synchronously BEFORE the IPC response, so the DB row is already updated
-   *   by the master event回流 (index.ts) when this await returns — single write path:
-   *   title present ⟺ the event bridge works.
-   * - worker dead or IPC failure → direct DB write; heal on next load (session-bridge)
-   *   converges the pi side (DB wins).
+   * Rename a session with pi-native sync — shared semantics now live in
+   * `services/session-ops.ts` (used by HTTP routes AND the callServer control
+   * plane; see session-title-sync). Thin wrapper binding this router's deps.
    */
   async function renameSession(id: string, title: string | undefined): Promise<void> {
-    if (workerPool.has(id)) {
-      try {
-        await workerPool.call(id, 'setSessionName', [title ?? '']);
-        return;
-      } catch (err) {
-        logger.warn({ err, sessionId: id }, 'setSessionName failed; falling back to direct DB write');
-      }
-    }
-    sessionRepo.update(id, { title });
+    await renameSessionOp({ sessionRepo, workerPool }, id, title);
   }
 
   // GET /api/sessions?agent_id=&workspacePath=&search=&page=&pageSize=

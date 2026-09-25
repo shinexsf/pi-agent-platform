@@ -29,6 +29,19 @@ export interface AgentConfig {
 
   // MCP servers (future)
   mcpServers?: Record<string, unknown>;
+
+  // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
+  // that talk to the master via reverse IPC). Semantics: undefined/null = default
+  // `['sendFileToUser']` (callServer OFF by default, opt-in); [] = none; array = allowlist.
+  // Independent from `builtinTools` (which only governs pi builtin tools).
+  serverBuiltinTools?: string[];
+
+  // callServer method-level allowlist. null/undefined = use the global default
+  // policy (control-plane default: reads on, writes off); [] = deny all business
+  // methods (list/detail stay available); array = explicit allowlist.
+  // Enforced by the master-side control plane at dispatch time — the tool
+  // switch (serverBuiltinTools) only controls prompt-layer injection.
+  capabilities?: string[] | null;
 }
 
 // ---------- Agent ----------
@@ -160,4 +173,54 @@ export interface RuntimeConfig {
   thinkingLevel?: string;
   workspacePath: string;
   config?: AgentConfig; // All agent config (systemPrompt, tools, extensions, etc.)
+  /** Control-plane capability index (compact), pushed by master at createSession so
+   *  the callServer tool description can embed it (zero-round-trip first use).
+   *  Plain data — no handlers; the single source of truth stays on master. */
+  capabilityIndex?: CapabilityIndexEntry[];
 }
+
+// ---------- Server capability control plane (callServer) ----------
+
+/** Functional module a capability belongs to (list/detail grouping dimension). */
+export type CapabilityModule = 'server' | 'agent' | 'session' | 'channel' | 'config';
+
+/** Authorization class (orthogonal to module): read vs write, gated by the
+ *  global read/write × all/own policy in the control plane. */
+export type CapabilityAccess = 'read' | 'write';
+
+/** Compact per-capability entry pushed to workers (RuntimeConfig.capabilityIndex). */
+export interface CapabilityIndexEntry {
+  method: string;       // e.g. 'session.update'
+  module: CapabilityModule;
+  access: CapabilityAccess;
+  scoped: boolean;       // own-mode restricts to caller's own agent/session rows
+  summary: string;      // one-liner shown in the tool description
+}
+
+/** Who is invoking a capability — resolved by the control plane from the
+ *  reverse-call's sessionId (trust boundary: master, never the worker). */
+export interface InvokeContext {
+  sessionId: string;
+  /** Agent the calling session belongs to (from sessions row); undefined for
+   *  placeholder sessions (no row yet) — own-mode checks must handle this. */
+  agentId?: string;
+}
+
+/** Full capability definition — registered master-side only (handler never
+ *  crosses IPC). `list`/`detail` are built-in and exempt from allowlist checks. */
+export interface CapabilityDef<Params = unknown, Result = unknown> {
+  method: string;                       // unique, dotted: '<module>.<action>'
+  module: CapabilityModule;
+  access: CapabilityAccess;
+  /** true = own-mode restricts to the caller's own agent/session rows. */
+  scoped: boolean;
+  summary: string;                      // one-liner for list/description
+  paramsSchema: Record<string, unknown>; // JSON Schema (for detail)
+  returns: string;                      // incl. effect-timing notes (for detail)
+  handler: (ctx: InvokeContext, params: Params) => Promise<Result> | Result;
+}
+
+/** Storage/return type for heterogeneous capability collections (handler param
+ *  is contravariant — specific Params defs won't assign to CapabilityDef<unknown>). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyCapabilityDef = CapabilityDef<any, any>;

@@ -26,6 +26,23 @@ interface NamedItem {
 }
 
 const BUILTIN_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+// Server-side custom tools (AgentConfig.serverBuiltinTools) — gated separately
+// from pi builtin tools; null = 默认（仅 sendFileToUser），[]=全关，数组=白名单
+const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
+
+// callServer 方法级授权（AgentConfig.capabilities）：
+// null=未配置（opt-in：无任何方法权限）、[]=显式全禁、数组=授权白名单
+// 方法列表从 GET /api/capabilities 拉（注册表唯一事实源，前端不硬编码）
+interface CapabilityInfo {
+  method: string;
+  module: string;
+  access: 'read' | 'write';
+  scoped: boolean;
+  summary: string;
+}
+const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
+/** 全局默认 server 工具（~/.pi/server/config.json）——agent 未配置时 callServer 是否实际生效 */
+const globalServerTools = ref<string[]>(['sendFileToUser']);
 
 const route = useRoute();
 const router = useRouter();
@@ -65,6 +82,8 @@ const form = ref({
     systemPrompt: '',
     appendSystemPrompt: '',
     builtinTools: null as string[] | null,
+    serverBuiltinTools: null as string[] | null,
+    capabilities: null as string[] | null,
     extensions: null as string[] | null,
     skills: null as string[] | null,
     prompts: null as string[] | null,
@@ -78,23 +97,50 @@ const canSave = computed(
 const skillNames = computed(() => availableSkills.value.map((item) => item.name));
 const promptNames = computed(() => availablePrompts.value.map((item) => item.name));
 
+/** callServer 是否实际启用（显式配置优先，否则看全局默认）——联动 Capabilities 区显隐 */
+const callServerEnabled = computed(() => {
+  const sbt = form.value.config.serverBuiltinTools;
+  if (sbt !== null) return sbt.includes('callServer');
+  return globalServerTools.value.includes('callServer');
+});
+
+/** 非空模块（channel/config 占位空组不展示） */
+const capabilityGroups = computed(() => capabilityModules.value.filter((g) => g.capabilities.length > 0));
+const allCapabilityMethods = computed(() => capabilityModules.value.flatMap((g) => g.capabilities.map((c) => c.method)));
+
+function capabilitiesSummary(items: string[] | null): string {
+  if (items === null) return '未授权';
+  if (items.length === 0) return '0 项';
+  return `${items.length} / ${allCapabilityMethods.value.length} 项`;
+}
+
 /** 资源折叠状态 */
 const resourcesExpanded = ref(false);
 
 onMounted(async () => {
   try {
-    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes] = await Promise.all([
+    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes, capsRes, serverCfgRes] = await Promise.all([
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
       routeId.value ? fetch(`/api/agents/${routeId.value}`) : Promise.resolve(null),
+      fetch('/api/capabilities'),
+      fetch('/api/config/server'),
     ]);
 
     if (modelsRes.ok) allModels.value = (await modelsRes.json()) as ModelOption[];
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as NamedItem[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as NamedItem[];
     if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (capsRes.ok) {
+      const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
+      capabilityModules.value = data.modules ?? [];
+    }
+    if (serverCfgRes.ok) {
+      const cfg = (await serverCfgRes.json()) as { defaultServerBuiltinTools?: string[] };
+      if (Array.isArray(cfg.defaultServerBuiltinTools)) globalServerTools.value = cfg.defaultServerBuiltinTools;
+    }
 
     if (agentRes) {
       if (!agentRes.ok) throw new Error(`HTTP ${agentRes.status}`);
@@ -108,6 +154,8 @@ onMounted(async () => {
           systemPrompt: agent.config?.systemPrompt ?? '',
           appendSystemPrompt: agent.config?.appendSystemPrompt ?? '',
           builtinTools: agent.config?.builtinTools ?? null,
+          serverBuiltinTools: agent.config?.serverBuiltinTools ?? null,
+          capabilities: agent.config?.capabilities ?? null,
           extensions: agent.config?.extensions ?? null,
           skills: agent.config?.skills ?? null,
           prompts: agent.config?.prompts ?? null,
@@ -152,6 +200,13 @@ function resourceSummary(items: string[] | null, total: number): string {
   if (items === null) return `默认（全部 ${total} 项）`;
   if (items.length === 0) return '无';
   return items.length === total ? `全部 ${total} 项` : `${items.length} / ${total} 项`;
+}
+
+/** serverBuiltinTools 的默认不是“全部”，是仅 sendFileToUser —— 专用 summary。 */
+function serverToolsSummary(items: string[] | null): string {
+  if (items === null) return '默认（仅 sendFileToUser）';
+  if (items.length === 0) return '无';
+  return items.length === SERVER_BUILTIN_TOOLS.length ? `全部 ${items.length} 项` : `${items.length} / ${SERVER_BUILTIN_TOOLS.length} 项`;
 }
 </script>
 
@@ -239,6 +294,7 @@ function resourceSummary(items: string[] | null, total: number): string {
             <span class="section-title">Resources</span>
             <span class="section-badge" v-if="!resourcesExpanded">
               {{ resourceSummary(form.config.builtinTools, BUILTIN_TOOLS.length) }},
+              {{ serverToolsSummary(form.config.serverBuiltinTools) }},
               {{ resourceSummary(form.config.extensions, availableExtensions.names.length) }},
               {{ resourceSummary(form.config.skills, availableSkills.length) }},
               {{ resourceSummary(form.config.prompts, availablePrompts.length) }}
@@ -277,6 +333,42 @@ function resourceSummary(items: string[] | null, total: number): string {
                       <span>{{ tool }}</span>
                     </label>
                   </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Server builtin tools (serverBuiltinTools) -->
+            <div class="resource-group">
+              <div class="resource-group-header">
+                <span class="resource-group-title">Server Builtin Tools</span>
+                <span class="resource-group-count">{{ serverToolsSummary(form.config.serverBuiltinTools) }}</span>
+              </div>
+              <template v-if="isView">
+                <div v-if="form.config.serverBuiltinTools === null" class="resource-default">默认（仅 sendFileToUser）</div>
+                <div v-else class="tag-list">
+                  <span v-for="tool in form.config.serverBuiltinTools" :key="tool" class="tag">{{ tool }}</span>
+                  <span v-if="form.config.serverBuiltinTools.length === 0" class="resource-empty">无</span>
+                </div>
+              </template>
+              <template v-else>
+                <label class="checkbox-inline">
+                  <input type="checkbox" :checked="form.config.serverBuiltinTools === null"
+                    @change="form.config.serverBuiltinTools = ($event.target as HTMLInputElement).checked ? null : ['sendFileToUser']" />
+                  <span>使用默认（仅 sendFileToUser）</span>
+                </label>
+                <div v-if="form.config.serverBuiltinTools !== null" class="resource-edit">
+                  <div class="resource-edit-actions">
+                    <button type="button" class="btn-link" @click="form.config.serverBuiltinTools = [...SERVER_BUILTIN_TOOLS]">全选</button>
+                    <button type="button" class="btn-link" @click="form.config.serverBuiltinTools = []">清空</button>
+                  </div>
+                  <div class="tag-list editable">
+                    <label v-for="tool in SERVER_BUILTIN_TOOLS" :key="tool" class="tag-check"
+                      :class="{ checked: form.config.serverBuiltinTools.includes(tool) }">
+                      <input type="checkbox" :value="tool" v-model="form.config.serverBuiltinTools" />
+                      <span>{{ tool }}</span>
+                    </label>
+                  </div>
+                  <div class="resource-hint" style="margin-top:4px;opacity:.7;font-size:12px">callServer = 调用 server 管理能力（需在 agent 配置 capabilities 中授权可用方法）</div>
                 </div>
               </template>
             </div>
@@ -389,6 +481,49 @@ function resourceSummary(items: string[] | null, total: number): string {
               </template>
             </div>
           </div>
+        </div>
+
+        <!-- Capabilities（callServer 方法级授权）— 放在 Resources 外：授权语义，且随 callServer 联动显隐 -->
+        <div v-if="callServerEnabled" class="section">
+          <h3 class="section-title">
+            Capabilities
+            <span style="font-size:12px;font-weight:400;opacity:.65;margin-left:8px">callServer 可调用的 server 方法授权</span>
+          </h3>
+
+          <template v-if="isView">
+            <div v-if="form.config.capabilities === null" class="resource-default">未授权（未配置 = 无任何方法权限；list / detail 可调但为空）</div>
+            <div v-else-if="form.config.capabilities.length === 0" class="resource-empty">已配置 0 项（未授权任何方法）</div>
+            <div v-else class="tag-list">
+              <span v-for="m in form.config.capabilities" :key="m" class="tag">{{ m }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <label class="checkbox-inline">
+              <input type="checkbox" :checked="form.config.capabilities === null"
+                @change="form.config.capabilities = ($event.target as HTMLInputElement).checked ? null : []" />
+              <span>未配置（不授权任何方法）</span>
+            </label>
+            <div v-if="form.config.capabilities !== null" class="resource-edit">
+              <div class="resource-edit-actions">
+                <button type="button" class="btn-link" @click="form.config.capabilities = [...allCapabilityMethods]">全选</button>
+                <button type="button" class="btn-link" @click="form.config.capabilities = []">清空（全禁）</button>
+              </div>
+              <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
+                <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
+                <div class="tag-list editable">
+                  <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
+                    :class="{ checked: form.config.capabilities.includes(cap.method) }">
+                    <input type="checkbox" :value="cap.method" v-model="form.config.capabilities" />
+                    <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
+                  </label>
+                </div>
+              </div>
+              <div style="font-size:12px;opacity:.7;line-height:1.6">
+                授权是显式的：未配置 = 无任何方法权限（callServer 开着也只能用 list / detail）；勾选即授权，list / detail 返回内容同样按授权收敛。
+                scoped 写方法仅能操作本 agent / 本 session 自己的行（固定安全网，不可配置）。
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </EditorPage>

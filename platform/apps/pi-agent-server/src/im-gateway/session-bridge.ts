@@ -22,6 +22,7 @@ import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 import { readSettings, type GlobalSettings } from '../services/settings-reader.js';
+import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilities/registry.js';
 import { logger } from './logger.js';
 
 interface AgentLike {
@@ -48,6 +49,7 @@ export async function spawnPlaceholder(
   workerPool: WorkerPool,
 ): Promise<void> {
   await workerPool.spawn(sessionId, agent.workspacePath);
+  workerPool.setAgentId(sessionId, agent.id);
   const runtimeConfig = buildRuntimeConfig(agent);
   const result = await workerPool.call<CreateSessionResult>(
     sessionId,
@@ -92,7 +94,20 @@ export async function spawnAndCreate(
     actualThinkingLevelOverride = entry.thinkingLevel ?? undefined;
   } else {
     await workerPool.spawn(sessionId, agent.workspacePath);
-    const runtimeConfig = buildRuntimeConfig(agent);
+    workerPool.setAgentId(sessionId, agent.id);
+    // Session-row-wins on respawn (session-lifecycle: "session 恢复：完全读 sessions 表，
+    // 不读 agent 表"). The row snapshots agent config at creation; later session-level
+    // edits (model / thinkingLevel / config) must survive worker death. Without these
+    // overrides respawn silently reverted to agent values AND wrote them back over the
+    // row (pre-existing bug, found via callserver session.restart testing).
+    const existingRow = sessionRepo.get(sessionId);
+    const runtimeConfig = buildRuntimeConfig(agent, existingRow
+      ? {
+          model: existingRow.model || undefined,
+          thinkingLevel: existingRow.thinkingLevel,
+          config: existingRow.config,
+        }
+      : undefined);
     const result = await workerPool.call<CreateSessionResult>(
       sessionId,
       'createSession',
@@ -109,8 +124,11 @@ export async function spawnAndCreate(
     await cacheSystemPrompt(sessionId, workerPool);
   }
 
-  const actualModel = actualModelOverride ?? agent.model;
   const existing = sessionRepo.get(sessionId);
+  // For an existing row, the row's model IS the session's model (it was fed to
+  // createSession above) — only refresh from the worker's resolution; never
+  // clobber a row with agent.model.
+  const actualModel = existing ? (actualModelOverride ?? existing.model) : (actualModelOverride ?? agent.model);
   const created = existing
     ? sessionRepo.update(sessionId, { model: actualModel }) ?? sessionRepo.get(sessionId)
     : sessionRepo.createFromAgent({
@@ -162,14 +180,31 @@ async function healPiSessionName(
   }
 }
 
-function buildRuntimeConfig(agent: AgentLike): RuntimeConfig {
+function buildRuntimeConfig(
+  agent: AgentLike,
+  /** Session-row overrides (respawn path): row wins over agent (full-snapshot semantics). */
+  sessionOverrides?: { model?: string; thinkingLevel?: string | null; config?: AgentConfig | null },
+): RuntimeConfig {
   // Merge agent config with global defaults from settings.json
-  const mergedConfig = mergeWithGlobalDefaults(agent.config);
+  const mergedConfig = mergeWithGlobalDefaults(
+    sessionOverrides && sessionOverrides.config !== null && sessionOverrides.config !== undefined
+      ? sessionOverrides.config
+      : agent.config,
+  );
   return {
     workspacePath: agent.workspacePath,
-    model: agent.model,
-    thinkingLevel: agent.thinkingLevel,
+    model: sessionOverrides?.model || agent.model,
+    thinkingLevel: sessionOverrides?.thinkingLevel ?? agent.thinkingLevel,
     config: mergedConfig,
+    // Capability index (callserver-control-plane D2): compact method+summary list
+    // pushed at spawn so the callServer tool description can embed it (registry
+    // on master is the single source of truth; next spawn picks up changes).
+    // Filtered by the EFFECTIVE authorization (session row key > agent fallback —
+    // the exact resolver dispatch uses), so the description lists only methods
+    // this session may actually call.
+    capabilityIndex: buildCapabilityIndex(
+      resolveEffectiveCapabilities(sessionOverrides?.config, agent.config),
+    ),
   };
 }
 
@@ -188,6 +223,7 @@ function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undef
   if (!agentConfig) {
     return {
       builtinTools: globalSettings.defaultBuiltinTools,
+      serverBuiltinTools: globalSettings.defaultServerBuiltinTools,
       extensions: globalSettings.defaultExtensions,
       skills: globalSettings.defaultSkills,
       prompts: globalSettings.defaultPrompts,
@@ -198,6 +234,7 @@ function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undef
   return {
     ...agentConfig,
     builtinTools: agentConfig.builtinTools ?? globalSettings.defaultBuiltinTools,
+    serverBuiltinTools: agentConfig.serverBuiltinTools ?? globalSettings.defaultServerBuiltinTools,
     extensions: agentConfig.extensions ?? globalSettings.defaultExtensions,
     skills: agentConfig.skills ?? globalSettings.defaultSkills,
     prompts: agentConfig.prompts ?? globalSettings.defaultPrompts,

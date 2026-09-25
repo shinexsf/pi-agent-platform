@@ -14,6 +14,19 @@ import { setCrumbName } from '../../composables/breadcrumbNames';
 
 interface ModelOption { provider: string; modelId: string; displayName: string }
 
+// callServer 方法级授权（AgentConfig.capabilities，快照在 sessions.config 上）：
+// null=未配置（opt-in：无任何方法权限；缺 key 的存量会话继承 agent）、[]=显式全禁、数组=授权白名单
+// 控制面读取：session 行有 key 用 session 的，缺 key（存量）fallback agent
+interface CapabilityInfo {
+  method: string;
+  module: string;
+  access: 'read' | 'write';
+  scoped: boolean;
+  summary: string;
+}
+const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
+const globalServerTools = ref<string[]>(['sendFileToUser']);
+
 const route = useRoute();
 const router = useRouter();
 
@@ -41,12 +54,18 @@ const title = ref('');
 const model = ref('');
 const thinkingLevel = ref('');
 const builtinTools = ref<string[] | null>(null);
+// Server 侧自定义工具白名单（AgentConfig.serverBuiltinTools）：null=默认（仅 sendFileToUser）、[]=全关、数组=白名单
+const serverBuiltinTools = ref<string[] | null>(null);
+// callServer 方法级授权（session 快照级，null=未配置=无权限、[]=全禁、数组=白名单；
+// 缺 key（存量）时 UI 展示并继承 agent 当前值，保存即固化为 session 级）
+const capabilities = ref<string[] | null>(null);
 const extensions = ref<string[] | null>(null);
 const skills = ref<string[] | null>(null);
 const prompts = ref<string[] | null>(null);
 
 const thinkingLevels = ['low', 'medium', 'high'];
 const BUILTIN_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
 const builtinToolCount = computed(() => BUILTIN_TOOLS.length);
 
 // available resources
@@ -56,17 +75,33 @@ const availableExtensions = ref<{ names: string[] }>({ names: [] });
 const skillNames = computed(() => availableSkills.value.map(i => i.name));
 const promptNames = computed(() => availablePrompts.value.map(i => i.name));
 
+/** callServer 是否实际启用（session 显式配置优先，否则看全局默认）——联动 Capabilities 区显隐 */
+const callServerEnabled = computed(() => {
+  const sbt = serverBuiltinTools.value;
+  if (sbt !== null) return sbt.includes('callServer');
+  return globalServerTools.value.includes('callServer');
+});
+const capabilityGroups = computed(() => capabilityModules.value.filter(g => g.capabilities.length > 0));
+const allCapabilityMethods = computed(() => capabilityModules.value.flatMap(g => g.capabilities.map(c => c.method)));
+function capabilitiesSummary(items: string[] | null): string {
+  if (items === null) return '未授权';
+  if (items.length === 0) return '0 项';
+  return `${items.length} / ${allCapabilityMethods.value.length} 项`;
+}
+
 // resource section collapsed state
 const resourcesExpanded = ref(false);
 
 onMounted(async () => {
   try {
-    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes] = await Promise.all([
+    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes, serverCfgRes] = await Promise.all([
       fetch(`/api/sessions/${sessionId.value}`),
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
+      fetch('/api/capabilities'),
+      fetch('/api/config/server'),
     ]);
 
     if (!sessionRes.ok) throw new Error(`HTTP ${sessionRes.status}`);
@@ -75,6 +110,14 @@ onMounted(async () => {
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as { name: string }[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as { name: string }[];
     if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (capsRes.ok) {
+      const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
+      capabilityModules.value = data.modules ?? [];
+    }
+    if (serverCfgRes.ok) {
+      const cfg = (await serverCfgRes.json()) as { defaultServerBuiltinTools?: string[] };
+      if (Array.isArray(cfg.defaultServerBuiltinTools)) globalServerTools.value = cfg.defaultServerBuiltinTools;
+    }
 
     // load agent info
     if (session.value.agentId) {
@@ -88,6 +131,18 @@ onMounted(async () => {
     thinkingLevel.value = session.value.thinkingLevel ?? '';
     setCrumbName(session.value.id, session.value.title || session.value.id.slice(0, 8));
     builtinTools.value = session.value.config?.builtinTools !== undefined ? [...(session.value.config.builtinTools ?? [])] : null;
+    // serverBuiltinTools：缺省/显式 null 都是「默认」（仅 sendFileToUser）；数组才展开
+    const sbt = session.value.config?.serverBuiltinTools as string[] | null | undefined;
+    serverBuiltinTools.value = sbt == null ? null : [...sbt];
+    // capabilities：session 有 key（数组/null）→ 用 session 的（纯快照）；缺 key（存量，
+    // 未快照过）→ 展示并继承 agent 当前值（控制面同款 fallback），保存后固化为 session 级
+    const caps = session.value.config?.capabilities as string[] | null | undefined;
+    if (caps !== undefined) {
+      capabilities.value = caps === null ? null : [...caps];
+    } else {
+      const agentCaps = agent.value?.config?.capabilities as string[] | null | undefined;
+      capabilities.value = agentCaps === undefined ? null : (agentCaps === null ? null : [...agentCaps]);
+    }
     extensions.value = session.value.config?.extensions !== undefined ? [...(session.value.config.extensions ?? [])] : null;
     skills.value = session.value.config?.skills !== undefined ? [...(session.value.config.skills ?? [])] : null;
     prompts.value = session.value.config?.prompts !== undefined ? [...(session.value.config.prompts ?? [])] : null;
@@ -109,6 +164,8 @@ async function save(): Promise<void> {
     body.config = {
       ...(session.value?.config ?? {}),
       builtinTools: builtinTools.value,
+      serverBuiltinTools: serverBuiltinTools.value,
+      capabilities: capabilities.value,
       extensions: extensions.value,
       skills: skills.value,
       prompts: prompts.value,
@@ -310,6 +367,27 @@ function workerUptime(ms: number): string {
               </template>
             </div>
 
+            <!-- Server builtin tools (serverBuiltinTools) -->
+            <div class="sd-resource-group">
+              <div class="sd-resource-header">
+                <span class="sd-resource-title">Server Builtin Tools</span>
+                <span class="sd-resource-count">{{ serverBuiltinTools === null ? '默认（仅 sendFileToUser）' : `${serverBuiltinTools.length} / ${SERVER_BUILTIN_TOOLS.length} 项` }}</span>
+              </div>
+              <template v-if="isView">
+                <div v-if="serverBuiltinTools === null" class="tag-list"><span class="tag tag-default">默认（仅 sendFileToUser）</span></div>
+                <div v-else-if="serverBuiltinTools.length" class="tag-list"><span v-for="t in serverBuiltinTools" :key="t" class="tag">{{ t }}</span></div>
+                <span v-else class="sd-empty">无</span>
+              </template>
+              <template v-else>
+                <label class="checkbox-inline"><input type="checkbox" :checked="serverBuiltinTools === null" @change="serverBuiltinTools = ($event.target as HTMLInputElement).checked ? null : ['sendFileToUser']" /><span>使用默认（仅 sendFileToUser）</span></label>
+                <div v-if="serverBuiltinTools !== null" class="resource-edit">
+                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="serverBuiltinTools = [...SERVER_BUILTIN_TOOLS]">全选</button><button type="button" class="btn-link" @click="serverBuiltinTools = []">清空</button></div>
+                  <div class="tag-list editable"><label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check" :class="{ checked: serverBuiltinTools.includes(t) }"><input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}</span></label></div>
+                  <div style="margin-top:4px;opacity:.7;font-size:12px">⚠️ 仅下次 spawn 生效（完全快照）；可用方法由 agent 配置的 capabilities 授权</div>
+                </div>
+              </template>
+            </div>
+
             <!-- Extensions -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
@@ -370,6 +448,49 @@ function workerUptime(ms: number): string {
               </template>
             </div>
           </div>
+        </div>
+
+        <!-- Capabilities（callServer 方法级授权，快照在 session 行；Resources 外） -->
+        <div v-if="callServerEnabled" class="sd-section">
+          <h3 class="sd-section-title">
+            Capabilities
+            <span style="font-size:12px;font-weight:400;opacity:.65;margin-left:8px">callServer 可调用的 server 方法授权（session 快照级）</span>
+          </h3>
+
+          <template v-if="isView">
+            <div v-if="capabilities === null" class="resource-default">未授权（未配置 = 无任何方法权限；缺 key 的存量会话继承 agent）</div>
+            <div v-else-if="capabilities.length === 0" class="resource-empty">已配置 0 项（未授权任何方法）</div>
+            <div v-else class="tag-list">
+              <span v-for="m in capabilities" :key="m" class="tag">{{ m }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <label class="checkbox-inline">
+              <input type="checkbox" :checked="capabilities === null"
+                @change="capabilities = ($event.target as HTMLInputElement).checked ? null : []" />
+              <span>未配置（不授权任何方法；缺 key 时继承 agent）</span>
+            </label>
+            <div v-if="capabilities !== null" class="resource-edit">
+              <div class="resource-edit-actions">
+                <button type="button" class="btn-link" @click="capabilities = [...allCapabilityMethods]">全选</button>
+                <button type="button" class="btn-link" @click="capabilities = []">清空（全禁）</button>
+              </div>
+              <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
+                <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
+                <div class="tag-list editable">
+                  <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
+                    :class="{ checked: capabilities.includes(cap.method) }">
+                    <input type="checkbox" :value="cap.method" v-model="capabilities" />
+                    <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
+                  </label>
+                </div>
+              </div>
+              <div style="font-size:12px;opacity:.7;line-height:1.6">
+                ⚠️ 仅影响本会话（session 快照，不写回 agent）；写入后即固化，不再跟随 agent 配置。
+                存量会话未配置过时继承 agent 当前值；授权是显式的，未配置 = 无任何方法权限。list / detail 返回同样按授权收敛。
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- System prompt -->
