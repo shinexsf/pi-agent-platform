@@ -41,6 +41,26 @@ interface ChannelRoutesState {
   activeAdapters: Map<string, import('@pi-agent-platform/channel-types').ChannelAdapter>;
 }
 
+/**
+ * `POST /start` guard: an adapter instance stays in `activeAdapters` even when
+ * its WebSocket died (`status: 'error'`) — which used to make every restart
+ * answer `409 Channel already started` forever. Live adapters (starting /
+ * connected) still 409; anything else is torn down so a fresh one can start.
+ */
+async function evictStaleAdapter(
+  state: ChannelRoutesState,
+  id: string,
+): Promise<'live' | 'replaced' | 'fresh'> {
+  const existing = state.activeAdapters.get(id);
+  if (!existing) return 'fresh';
+  const status = existing.getStatus().status;
+  if (status === 'starting' || status === 'connected') return 'live';
+  await existing.stop().catch(() => undefined);
+  state.activeAdapters.delete(id);
+  logger.warn({ channelId: id, status }, 'qq: evicted stale adapter before restart');
+  return 'replaced';
+}
+
 export function createQqRoutes(host: ChannelHost): { router: Hono; state: ChannelRoutesState } {
   const router = new Hono();
   const state: ChannelRoutesState = { activeAdapters: new Map() };
@@ -217,9 +237,14 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
     const cfg = host.getChannelConfig(id);
     if (!cfg || cfg.type !== 'qq') return c.json({ error: 'Channel not found' }, 404);
     if (state.activeAdapters.has(id)) {
-      return c.json({ error: 'Channel already started' }, 409);
+      const verdict = await evictStaleAdapter(state, id);
+      if (verdict === 'live') return c.json({ error: 'Channel already started' }, 409);
     }
-    const extra = cfg.extra as { appId?: string; appSecret?: string } | undefined;
+    const extra = cfg.extra as {
+      appId?: string;
+      appSecret?: string;
+      autoReconnect?: boolean;
+    } | undefined;
     const adapter = new QqAdapter({
       config: cfg,
       host: {
@@ -245,6 +270,7 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
       },
       appId: extra?.appId ?? '',
       appSecret: extra?.appSecret ?? '',
+      autoReconnect: (extra?.autoReconnect as boolean | undefined) ?? true,
     });
     adapter.onMessage(async (msg) => {
       logger.info({ msg: msg.text, channelId: msg.channelId, isGroup: msg.isGroup }, 'qq inbound');
@@ -273,9 +299,14 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
     const cfg = host.getChannelConfig(id);
     if (!cfg || cfg.type !== 'qq') return c.json({ error: 'Channel not found' }, 404);
     if (state.activeAdapters.has(id)) {
-      return c.json({ error: 'Channel already started' }, 409);
+      const verdict = await evictStaleAdapter(state, id);
+      if (verdict === 'live') return c.json({ error: 'Channel already started' }, 409);
     }
-    const extra = cfg.extra as { appId?: string; appSecret?: string } | undefined;
+    const extra = cfg.extra as {
+      appId?: string;
+      appSecret?: string;
+      autoReconnect?: boolean;
+    } | undefined;
     const adapter = new QqAdapter({
       config: cfg,
       host: {
@@ -285,6 +316,7 @@ export function createQqRoutes(host: ChannelHost): { router: Hono; state: Channe
       },
       appId: extra?.appId ?? '',
       appSecret: extra?.appSecret ?? '',
+      autoReconnect: (extra?.autoReconnect as boolean | undefined) ?? true,
     });
     adapter.onMessage(async (msg) => {
       logger.info({ msg: msg.text, channelId: msg.channelId, isGroup: msg.isGroup }, 'qq inbound');

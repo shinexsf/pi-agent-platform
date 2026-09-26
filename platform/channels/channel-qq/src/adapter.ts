@@ -21,6 +21,17 @@ import { createOpenAPI, createWebsocket, WsEventType, AvailableIntentsEventsEnum
 import { startQrConnect, type QrConnectCredentials } from '@tencent-connect/qqbot-connector';
 
 type QQBotEnv = 'production' | 'test';
+
+/**
+ * Auto-reconnect backoff: 5s, 10s, 20s ... capped at 5min (±20% jitter).
+ *
+ * Why we need our own layer: `qq-bot-sdk` retries a dead session `maxRetry`
+ * (default 10) times **with no backoff**, so a transient DNS blip
+ * (`getaddrinfo ENOTFOUND api.bot.qq.com`) burns all 10 retries in <1s and
+ * then emits `DEAD` — from which point the SDK never recovers on its own.
+ */
+const RECONNECT_BASE_MS = 5_000;
+const RECONNECT_MAX_MS = 5 * 60_000;
 import type {
   ChannelAdapter,
   ChannelConfig,
@@ -58,6 +69,10 @@ export interface QqAdapterOptions {
   /** Connector environment: 'production' (default) or 'test' (sandbox).
    *  Set via QQ_BOT_ENV env var in channel-qq package. */
   env?: QQBotEnv;
+  /** Auto-restart the WebSocket with backoff after the SDK reports DEAD
+   *  (or the OpenAPI client fails to be created). Defaults to true;
+   *  mirrors `channels_qq.auto_reconnect`. */
+  autoReconnect?: boolean;
 }
 
 /**
@@ -78,6 +93,15 @@ export class QqAdapter implements ChannelAdapter {
   private useQrFlow: boolean;
   /** Monotonic msg_seq counter for outbound messages (QQ requires unique seq per msg). */
   private _msgSeq = 0;
+  /** Auto-reconnect backoff state (see RECONNECT_BASE_MS). */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  /** True once `stop()` was called — suppresses any pending/planned reconnect. */
+  private manuallyStopped = false;
+  private readonly autoReconnect: boolean;
+  /** Last credentials used to open the WS — reconnect needs them after a DEAD. */
+  private lastAppId = '';
+  private lastAppSecret = '';
 
   constructor(private readonly opts: QqAdapterOptions) {
     this._configId = opts.config.id;
@@ -96,9 +120,16 @@ export class QqAdapter implements ChannelAdapter {
     };
     // QR flow is only used when we don't have real credentials yet
     this.useQrFlow = !opts.appId || !opts.appSecret;
+    this.autoReconnect = opts.autoReconnect ?? true;
+    this.lastAppId = opts.appId;
+    this.lastAppSecret = opts.appSecret;
   }
 
   async start(): Promise<void> {
+    // A (re)start always re-arms reconnects — `stop()` is what disarms them.
+    this.manuallyStopped = false;
+    this.reconnectAttempt = 0;
+    this.clearReconnectTimer();
     this.updateStatus({ status: 'starting' });
     try {
       if (this.useQrFlow) {
@@ -273,6 +304,8 @@ export class QqAdapter implements ChannelAdapter {
   }
 
   private startWebSocketFlowWith(appId: string, appSecret: string): void {
+    this.lastAppId = appId;
+    this.lastAppSecret = appSecret;
     const sandbox = this.opts.env === 'test';
     const intents = [AvailableIntentsEventsEnum.GROUP_AND_C2C_EVENT];
 
@@ -296,11 +329,20 @@ export class QqAdapter implements ChannelAdapter {
       this.client = createOpenAPI(config);
       this.wsClient = createWebsocket(config);
     } catch (err) {
+      const msg = `createOpenAPI/Websocket threw: ${(err as Error).message}`;
       this.opts.host.logEvent({
         channelId: this._configId,
         channelType: 'qq',
         kind: 'error',
-        message: `createOpenAPI/Websocket threw: ${(err as Error).message}`,
+        message: msg,
+      });
+      // Nothing will ever emit DEAD for a client that never got created —
+      // schedule our own reconnect or the channel would sit in `starting`.
+      const delay = this.scheduleReconnect('create-client-failed');
+      this.updateStatus({
+        status: 'error',
+        error: delay === null ? msg : `${msg} — auto-reconnect in ${Math.ceil(delay / 1000)}s`,
+        metrics: { reconnectAttempt: this.reconnectAttempt },
       });
       return;
     }
@@ -329,7 +371,9 @@ export class QqAdapter implements ChannelAdapter {
         data: { eventMsg: d.eventMsg as unknown },
       });
       if (ev === 'READY' || ev === 'RESUMED') {
-        this.updateStatus({ status: 'connected' });
+        // Healthy again → reset the backoff ladder.
+        this.reconnectAttempt = 0;
+        this.updateStatus({ status: 'connected', error: undefined });
         this.opts.host.logEvent({
           channelId: this._configId,
           channelType: 'qq',
@@ -337,10 +381,26 @@ export class QqAdapter implements ChannelAdapter {
           message: 'QQ WebSocket connected',
         });
       } else if (ev === 'DISCONNECT') {
-        this.updateStatus({ status: 'reconnecting' });
+        // Drop the previous DEAD error text — the countdown it mentions is
+        // either over or superseded by this new disconnect.
+        this.updateStatus({ status: 'reconnecting', error: undefined });
       } else if (ev === 'DEAD') {
-        this.updateStatus({ status: 'error', error: 'WebSocket DEAD — restart required' });
+        // Legacy path (the SDK currently emits DEAD as its own event name,
+        // see below) — kept so either shape ends up in the same handler.
+        this.handleWsDead('WebSocket DEAD — restart required');
       }
+    });
+
+    // THE ACTUAL DEAD PATH: `WebsocketClient` emits `DEAD` as a bare event
+    // name (`emit(SessionEvents.DEAD, { eventType: 'ERROR', msg })`), NOT as an
+    // EVENT_WS payload — so without this listener the adapter used to stay
+    // `reconnecting` forever after the SDK burned its 10 no-backoff retries.
+    const registeredClient = this.wsClient;
+    ws.on('DEAD', (...args: unknown[]) => {
+      // Stale client (already torn down + replaced) — ignore.
+      if (this.wsClient !== registeredClient) return;
+      const payload = args[0] as { msg?: string } | undefined;
+      this.handleWsDead(payload?.msg ?? 'WebSocket DEAD');
     });
 
     // Patch the SDK's access_token fetch path: qq-bot-sdk uses config.sandbox
@@ -358,12 +418,15 @@ export class QqAdapter implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    // Disarm reconnects FIRST so a close-triggered event can't re-schedule one.
+    this.manuallyStopped = true;
+    this.clearReconnectTimer();
     try {
       this.stopQrConnect?.();
       this.stopQrConnect = null;
       this.client = null;
-      this.wsClient = null;
-      this.updateStatus({ status: 'stopped' });
+      this.teardownWs();
+      this.updateStatus({ status: 'stopped', error: undefined });
     } catch (err) {
       this.opts.host.logEvent({
         channelId: this._configId,
@@ -376,6 +439,127 @@ export class QqAdapter implements ChannelAdapter {
 
   isConnected(): boolean {
     return this._status.status === 'connected' && this.wsClient !== null;
+  }
+
+  /** SDK reported the connection is permanently dead → log + plan a restart. */
+  private handleWsDead(msg: string): void {
+    if (this.manuallyStopped) return;
+    const delay = this.scheduleReconnect('ws-dead');
+    this.opts.host.logEvent({
+      channelId: this._configId,
+      channelType: 'qq',
+      kind: 'error',
+      message: delay === null
+        ? `QQ WebSocket dead: ${msg}`
+        : `QQ WebSocket dead: ${msg} — auto-reconnect #${this.reconnectAttempt} in ${Math.ceil(delay / 1000)}s`,
+    });
+    this.updateStatus({
+      status: 'error',
+      error: delay === null ? msg : `${msg} — auto-reconnect in ${Math.ceil(delay / 1000)}s`,
+      metrics: { reconnectAttempt: this.reconnectAttempt },
+    });
+  }
+
+  /**
+   * Arm a single backoff-scheduled reconnect. Returns the delay in ms, or
+   * `null` when reconnecting is not possible (stopped / disabled / no creds /
+   * a timer is already pending).
+   */
+  private scheduleReconnect(reason: string): number | null {
+    if (this.manuallyStopped || !this.autoReconnect) return null;
+    if (this.reconnectTimer) return null;
+    if (!this.lastAppId || !this.lastAppSecret) return null;
+
+    const attempt = ++this.reconnectAttempt;
+    const base = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+    const delay = Math.round(base * (0.8 + Math.random() * 0.4));
+    this.opts.host.logEvent({
+      channelId: this._configId,
+      channelType: 'qq',
+      kind: 'info',
+      message: `QQ reconnect #${attempt} scheduled in ${Math.ceil(delay / 1000)}s (${reason})`,
+    });
+    const timer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.attemptReconnect();
+    }, delay);
+    // Never keep the process alive just for a retry timer.
+    (timer as { unref?: () => void }).unref?.();
+    this.reconnectTimer = timer;
+    return delay;
+  }
+
+  private attemptReconnect(): void {
+    if (this.manuallyStopped) return;
+    const appId = this.lastAppId;
+    const appSecret = this.lastAppSecret;
+    if (!appId || !appSecret) return;
+
+    this.updateStatus({
+      status: 'reconnecting',
+      error: undefined,
+      metrics: { reconnectAttempt: this.reconnectAttempt },
+    });
+    this.opts.host.logEvent({
+      channelId: this._configId,
+      channelType: 'qq',
+      kind: 'info',
+      message: `QQ reconnect attempt #${this.reconnectAttempt}`,
+    });
+
+    // Drop the dead client, then build a fresh OpenAPI + Websocket pair
+    // (the SDK's internal retry counter is exhausted — reusing it is useless).
+    this.teardownWs();
+    try {
+      this.startWebSocketFlowWith(appId, appSecret);
+    } catch (err) {
+      const msg = `reconnect start threw: ${(err as Error).message}`;
+      this.opts.host.logEvent({
+        channelId: this._configId,
+        channelType: 'qq',
+        kind: 'error',
+        message: msg,
+      });
+      const delay = this.scheduleReconnect('restart-threw');
+      this.updateStatus({
+        status: 'error',
+        error: delay === null ? msg : `${msg} — auto-reconnect in ${Math.ceil(delay / 1000)}s`,
+        metrics: { reconnectAttempt: this.reconnectAttempt },
+      });
+    }
+  }
+
+  /**
+   * Detach + close the current SDK websocket client.
+   *
+   * `removeAllListeners()` is deliberate: it also strips the SDK's own
+   * DISCONNECT→retry listener, so a manually-closed client can't spin up a
+   * ghost connection behind our back (and can't deliver messages to the
+   * handlers we just abandoned).
+   */
+  private teardownWs(): void {
+    const ws = this.wsClient as unknown as {
+      removeAllListeners?: () => unknown;
+      disconnect?: () => void;
+    } | null;
+    this.wsClient = null;
+    if (!ws) return;
+    try {
+      ws.removeAllListeners?.();
+    } catch {
+      /* noop — client may be a partial/mocked object */
+    }
+    try {
+      ws.disconnect?.();
+    } catch {
+      /* noop — ws never finished connecting */
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   async sendText(target: OutboundTarget, text: string): Promise<string> {
