@@ -18,7 +18,7 @@ import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo, SessionInfoDTO } from '@pi-agent-platform/api-types';
 import { listAvailableModels } from '../model-registry.js';
-import { spawnPlaceholder, spawnAndCreate } from '../im-gateway/session-bridge.js';
+import { sessionRegistry } from '../services/session.js';
 import { renameSession as renameSessionOp } from '../services/session-ops.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
@@ -62,10 +62,10 @@ export function createSessionsRouter(
       limit: pageSize,
     });
     const list = rows.map((s) => {
-        // Attach live thinkingLevel from worker pool (DB doesn't persist it — OQ-D2).
-        // Worker pool is the authority for the runtime value.
-        const entry = workerPool.get(s.id);
-        const thinkingLevel = entry?.thinkingLevel ?? s.thinkingLevel ?? null;
+        // Attach live thinkingLevel (DB doesn't persist it — OQ-D2).
+        // The Session object is the authority for the runtime value (worker
+        // alive ⇒ tracked; dead ⇒ disposed ⇒ row value below, same as before).
+        const thinkingLevel = sessionRegistry().get(s.id)?.thinkingLevel ?? s.thinkingLevel ?? null;
         return { ...s, worker: workerPool.toSummary(s.id), thinkingLevel };
       });
       return c.json({ sessions: list, total, page, pageSize });
@@ -96,7 +96,7 @@ export function createSessionsRouter(
     if (session && !workerPool.has(id)) {
       const agent = agentRepo.get(session.agentId);
       if (!agent) return c.json({ error: 'Agent not found' }, 404);
-      await spawnAndCreate(id, agent, sessionRepo, workerPool, session.piSessionPath);
+      await sessionRegistry().getOrCreate(id, agent);
     }
 
     if (workerPool.has(id)) {
@@ -105,20 +105,20 @@ export function createSessionsRouter(
         workerPool.call<ModelInfo[]>(id, 'listAvailableModels', []),
         workerPool.call<{ tokens: number | null; contextWindow: number; percent: number | null } | null>(id, 'getContextUsage', []),
       ]);
-      const entry = workerPool.get(id);
+      const live = sessionRegistry().get(id);
       return c.json({
         sessionId: id,
         hasRow: !!session,
         session,
         commands,
         models,
-        currentModel: computeCurrentModel(session, entry?.model),
-        currentThinkingLevel: computeCurrentThinkingLevel(session, entry?.thinkingLevel),
+        currentModel: computeCurrentModel(session, live?.model),
+        currentThinkingLevel: computeCurrentThinkingLevel(session, live?.thinkingLevel),
         contextUsage: contextUsage ?? null,
-        // Cached at createSession time (see cacheSystemPrompt in spawnPlaceholder
-        // / spawnAndCreate). Avoids re-fetching the full system prompt string
+        // Cached at createSession time (see cacheSystemPrompt in services/session)
+        // on the Session object. Avoids re-fetching the full system prompt string
         // over IPC on every context call.
-        systemPrompt: entry?.systemPrompt ?? null,
+        systemPrompt: live?.systemPrompt ?? null,
       });
     }
 
@@ -154,7 +154,7 @@ export function createSessionsRouter(
       }
       try {
         logger.info({ sessionId: id }, 'respawning worker');
-        await spawnAndCreate(id, agent, sessionRepo, workerPool, session.piSessionPath);
+        await sessionRegistry().getOrCreate(id, agent);
         logger.info({ sessionId: id, workerPid: workerPool.get(id)?.workerPid }, 'worker respawned');
       } catch (err) {
         logger.error({ err, sessionId: id }, 'failed to respawn worker');
@@ -166,20 +166,21 @@ export function createSessionsRouter(
         workerPool.call<{ tokens: number | null; contextWindow: number; percent: number | null } | null>(id, 'getContextUsage', []),
         workerPool.call<SessionInfoDTO['resources']>(id, 'getSessionResources', []),
       ]);
-      const entry = workerPool.get(id);
+      const entry = workerPool.get(id); // process facts (pid/spawnTime) only
+      const live = sessionRegistry().get(id); // domain state
       const agent = session ? agentRepo.get(session.agentId) : null;
 
       const info: SessionInfoDTO = {
         sessionId: id,
         hasRow: !!session,
         session,
-        systemPrompt: entry?.systemPrompt ?? null,
+        systemPrompt: live?.systemPrompt ?? null,
         resources: resources ?? { prompts: [], skills: [], extensions: [], tools: [] },
         workerPid: entry?.workerPid ?? -1,
         cwd: agent?.workspacePath ?? '',
         uptimeMs: entry ? Date.now() - entry.spawnTime : 0,
-        currentModel: computeCurrentModel(session, entry?.model),
-        currentThinkingLevel: computeCurrentThinkingLevel(session, entry?.thinkingLevel),
+        currentModel: computeCurrentModel(session, live?.model),
+        currentThinkingLevel: computeCurrentThinkingLevel(session, live?.thinkingLevel),
         contextUsage: contextUsage ?? null,
       };
       return c.json(info);
@@ -392,9 +393,13 @@ export function createSessionsRouter(
       return c.json({ error: `Agent workspacePath does not exist: ${agent.workspacePath}. Edit the agent to set a valid directory.` }, 400);
     }
 
-    const sessionId = sessionRepo.newSessionId();
+    let sessionId: string | undefined;
     try {
-      await spawnPlaceholder(sessionId, agent, workerPool);
+      // createFromAgent: generates the id + spawns the placeholder worker.
+      // It kills a partial worker itself if the SPAWN fails; the outer catch
+      // below only needs to clean up when a post-spawn IPC call fails.
+      const session = await sessionRegistry().createFromAgent(agentId);
+      sessionId = session.id;
       const [commands, models] = await Promise.all([
         workerPool.call<SlashCommandDTO[]>(sessionId, 'listCommands', []),
         workerPool.call<ModelInfo[]>(sessionId, 'listAvailableModels', []),
@@ -402,8 +407,8 @@ export function createSessionsRouter(
       const response: PlaceholderSessionResponse = { sessionId, agentId, commands, models };
       return c.json(response, 200);
     } catch (err) {
-      // Cleanup partial worker on spawn failure (e.g. LRU-evict failed and capacity exceeded)
-      if (workerPool.has(sessionId)) await workerPool.kill(sessionId, 'spawn-failed');
+      // Cleanup partial worker on post-spawn IPC failure (capacity eviction etc).
+      if (sessionId && workerPool.has(sessionId)) await workerPool.kill(sessionId, 'spawn-failed');
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('No placeholder worker available to evict')) {
         return c.json({ error: 'Server at worker capacity. Please close some tabs.', code: 'capacity_exceeded' }, 503);
@@ -446,12 +451,12 @@ export function createSessionsRouter(
         return c.json({ error: 'agentId mismatch with existing session' }, 400);
       }
       if (!workerPool.has(id)) {
-        await spawnAndCreate(id, agent, sessionRepo, workerPool, existing.piSessionPath);
+        await sessionRegistry().getOrCreate(id, agent);
       }
       sessionRepo.update(id, {});
     } else {
       // Case 2: No session row — this is the placeholder sessionId being activated
-      await spawnAndCreate(id, agent, sessionRepo, workerPool);
+      await sessionRegistry().getOrCreate(id, agent);
     }
 
     // Use prompt-resolver to handle slash commands, attachment placeholders,
@@ -596,8 +601,9 @@ export function createSessionsRouter(
     }
     if (!workerPool.has(id)) return c.json({ error: 'Session not active (worker not running)' }, 400);
     await workerPool.call(id, 'setModel', [body.provider, body.modelId]);
-    // Sync the entry so /:id/context can report the new currentModel without an extra IPC round-trip.
-    workerPool.setModel(id, { provider: body.provider, modelId: body.modelId });
+    // Sync the Session object so /:id/context can report the new currentModel without an extra IPC round-trip.
+    const live = sessionRegistry().get(id);
+    if (live) live.model = { provider: body.provider, modelId: body.modelId };
     // Persist as `provider/modelId` so `GET /:id` returns a parseable runtime model identifier.
     sessionRepo.update(id, { model: `${body.provider}/${body.modelId}` });
     return c.json({ ok: true, provider: body.provider, modelId: body.modelId });
@@ -615,8 +621,9 @@ export function createSessionsRouter(
     if (!workerPool.has(id)) return c.json({ error: 'Session not active (worker not running)' }, 400);
     const level = body.level as 'off' | 'low' | 'medium' | 'high';
     await workerPool.call(id, 'setThinkingLevel', [level]);
-    // Sync the entry so /:id/context can report the new currentThinkingLevel without an extra IPC round-trip.
-    workerPool.setThinkingLevel(id, level);
+    // Sync the Session object so /:id/context can report the new currentThinkingLevel without an extra IPC round-trip.
+    const live = sessionRegistry().get(id);
+    if (live) live.thinkingLevel = level;
     // NOTE: per OQ-D2 decision, do NOT persist to agents table or sessions.thinkingLevel.
     return c.json({ ok: true, level: body.level });
   });
@@ -705,74 +712,25 @@ export function createSessionsRouter(
     const args = (body.args ?? '').trim();
 
     if (BUILTIN_SERVER_COMMANDS.includes(name)) {
-      const needsWorker = name === 'model' || name === 'thinking' || name === 'compact';
-      if (needsWorker && !workerPool.has(id)) {
-        return c.json({ error: 'Session not active (send a message first)', code: 'session_not_active' }, 400);
+      // Session-level builtins moved into Session.executeCommand (task 2.7).
+      // track() anchors a workerless object — session/name/hotkeys work on dead
+      // sessions exactly as before; worker-needed ops return session_not_active.
+      const anchored = sessionRegistry().track(id);
+      const outcome = await anchored.executeCommand(name, args);
+      // Dead session + no subscribers → nothing anchors this object; drop it so
+      // repo-only /command queries don't accumulate workerless shells.
+      if (!anchored.alive && anchored.listenerCount === 0) {
+        sessionRegistry().dispose(id, 'command-on-dead-session');
       }
-      switch (name) {
-        case 'session': {
-          const session = sessionRepo.get(id);
-          if (!session) {
-            return c.json({ ok: true, result: { kind: 'text', content: 'This session is a placeholder — send a message to activate it.' } });
-          }
-          const content = [
-            `**Session** \`${session.id.slice(0, 8)}\``,
-            `- Status: ${session.status}`,
-            `- Title: ${session.title ?? '(untitled)'}`,
-            `- Model: ${session.model}`,
-            `- Thinking: ${session.thinkingLevel ?? '(default)'}`,
-            `- Worker: ${workerPool.has(id) ? 'running' : 'not running'}`,
-            `- Created: ${new Date(session.createdAt).toLocaleString()}`,
-          ].join('\n');
-          return c.json({ ok: true, result: { kind: 'text', content } });
+      if (outcome.handled) {
+        if (outcome.ok) {
+          return c.json({ ok: true, result: { kind: 'text', content: outcome.text } });
         }
-        case 'name': {
-          const session = sessionRepo.get(id);
-          if (!session) return c.json({ error: 'Session not found', code: 'session_not_found' }, 404);
-          if (!args) {
-            return c.json({ ok: true, result: { kind: 'text', content: `Current title: ${session.title ?? '(untitled)'}\n\nUsage: /name <title>` } });
-          }
-          if (args.length > 200) {
-            return c.json({ error: 'Title too long (max 200 chars)', code: 'title_too_long' }, 400);
-          }
-          await renameSession(id, args);
-          return c.json({ ok: true, result: { kind: 'text', content: `Session renamed to \`${args}\`` } });
-        }
-        case 'hotkeys': {
-          const content = [
-            '**Keyboard shortcuts**',
-            '- `Enter` — send message',
-            '- `Shift+Enter` — newline',
-            '- `/` — open slash command menu',
-            '- `@` — reference a file',
-            '- `Esc` — close menu',
-          ].join('\n');
-          return c.json({ ok: true, result: { kind: 'text', content } });
-        }
-        case 'model': {
-          const slashIdx = args.indexOf('/');
-          if (slashIdx <= 0 || !args.slice(slashIdx + 1)) {
-            return c.json({ ok: true, result: { kind: 'text', content: 'Usage: /model <provider>/<modelId>' } });
-          }
-          const provider = args.slice(0, slashIdx);
-          const modelId = args.slice(slashIdx + 1);
-          await workerPool.call(id, 'setModel', [provider, modelId]);
-          sessionRepo.update(id, { model: args });
-          return c.json({ ok: true, result: { kind: 'text', content: `Model set to \`${args}\`` } });
-        }
-        case 'thinking': {
-          const VALID = ['off', 'low', 'medium', 'high'];
-          if (!VALID.includes(args)) {
-            return c.json({ ok: true, result: { kind: 'text', content: 'Usage: /thinking <off|low|medium|high>' } });
-          }
-          await workerPool.call(id, 'setThinkingLevel', [args]);
-          return c.json({ ok: true, result: { kind: 'text', content: `Thinking level set to \`${args}\`` } });
-        }
-        case 'compact': {
-          await workerPool.call(id, 'compact', []);
-          return c.json({ ok: true, result: { kind: 'text', content: 'Session context compacted.' } });
-        }
+        const status = outcome.code === 'session_not_found' ? 404 : 400;
+        return c.json({ error: outcome.error, code: outcome.code }, status);
       }
+      // handled:false (defensive — all listed builtins are implemented):
+      // fall through to worker dispatch below.
     }
 
     // Non-builtin (extension / prompt / skill): needs a live worker
@@ -809,8 +767,8 @@ const PLACEHOLDER_BUILTIN_COMMANDS = [
 
 /** Compute the current model for /:id/context.
  *  Priority:
- *    1. worker entry's cached model (works for placeholder AND active — entry.model is set
- *       by spawnPlaceholder / spawnAndCreate / POST /:id/model)
+ *    1. Session object's cached model (works for placeholder AND active —
+ *       session.model is set by spawnPlaceholder / spawnAndCreate / POST /:id/model)
  *    2. parse session.model (`provider/modelId` format) when there's a DB row
  *    3. null when neither is available */
 function computeCurrentModel(

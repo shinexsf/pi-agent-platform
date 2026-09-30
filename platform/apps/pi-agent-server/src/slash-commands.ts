@@ -1,6 +1,10 @@
 /**
  * Builtin slash commands for IM gateway + HTTP command endpoint.
  *
+ * Core-layer module (core-session-refactor Phase A): lives at src/ root — NOT
+ * under im-gateway/ — because prompt-resolver (core) and the IM gateway both
+ * call it. Zero channel-types / ChannelHost dependencies.
+ *
  * 8 commands: /help /new /session /model /think /compact /name /hotkeys
  * Each returns either a string response (sent back to user via adapter.sendText)
  * or null if the command requires routing to the worker (e.g. /compact → worker).
@@ -9,9 +13,13 @@
  * MVP has no per-route commands, so this is just builtin → fallthrough.
  */
 
-import type { BuiltinCommand } from './types.js';
-import type { SessionId } from '@pi-agent-platform/channel-types';
-import { logger } from './logger.js';
+import { childLogger } from './logger.js';
+import { sessionRegistry } from './services/session.js';
+
+const logger = childLogger('slash-commands');
+
+/** Command name union (moved here from im-gateway/types.ts — only consumer). */
+export type BuiltinCommand = 'help' | 'new' | 'session' | 'model' | 'think' | 'compact' | 'name' | 'hotkeys';
 
 export const BUILTIN_COMMAND_NAMES: BuiltinCommand[] = [
   'help',
@@ -37,7 +45,7 @@ const HELP_TEXT = `可用命令:
 任何其他文字将作为 prompt 发送给 agent。`;
 
 interface BuiltinContext {
-  sessionId: SessionId;
+  sessionId: string;
   args: string;
   /** Channel-aware helpers passed in by routing layer. */
   ctx: {
@@ -55,7 +63,7 @@ interface BuiltinContext {
     /** Request worker to compact history. */
     compact?: () => Promise<void>;
     /** Start a brand-new session for the same chat (old session row preserved). */
-    startNewSession: () => Promise<{ sessionId: SessionId }>;
+    startNewSession: () => Promise<{ sessionId: string }>;
     /** Rename the current session (1-200 chars). */
     setTitle?: (title: string) => Promise<void>;
   };
@@ -83,13 +91,29 @@ export async function runBuiltinCommand(name: string, ctx: BuiltinContext): Prom
     case 'session':
       return await handleSession(ctx);
     case 'model':
-      return await handleModel(ctx);
     case 'think':
-      return await handleThink(ctx);
     case 'compact':
-      return await handleCompact(ctx);
-    case 'name':
-      return await handleName(ctx);
+    case 'name': {
+      // Session-level ops go through Session.executeCommand (task 2.7, 'zh'
+      // surface texts). Fallback to the ctx callbacks when no tracked object
+      // exists (e.g. runBuiltin invoked without ensureSession).
+      const session = sessionRegistry().get(ctx.sessionId);
+      if (session) {
+        const outcome = await session.executeCommand(aliased, ctx.args, 'zh');
+        if (outcome.handled) return outcome.ok ? outcome.text : outcome.error;
+      }
+      switch (aliased) {
+        case 'model':
+          return await handleModel(ctx);
+        case 'think':
+          return await handleThink(ctx);
+        case 'compact':
+          return await handleCompact(ctx);
+        case 'name':
+          return await handleName(ctx);
+      }
+      return null;
+    }
     case 'hotkeys':
       return HOTKEYS_TEXT;
     default:

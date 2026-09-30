@@ -22,6 +22,7 @@ import {
 import { authorizeCapability, CapabilityDeniedError, DEFAULT_POLICY } from './authorize.js';
 import { auditCapability } from './audit.js';
 import { childLogger } from '../logger.js';
+import { sessionRegistry } from '../services/session.js';
 import type { AgentRepo as AgentRepoT } from '../repos/agent.repo.js';
 import type { SessionRepo as SessionRepoT } from '../repos/session.repo.js';
 import type { WorkerPool as WorkerPoolT } from '../worker-pool.js';
@@ -35,13 +36,13 @@ const logger = childLogger('capability');
 export interface ControlPlaneDeps {
   agentRepo: AgentRepo;
   sessionRepo: SessionRepo;
-  /** Used to resolve agentId for rowless placeholder sessions (WorkerEntry.agentId). */
+  /** Used to resolve agentId for rowless placeholder sessions (Session.agentId). */
   workerPool: WorkerPoolT;
 }
 
-/** sessions row first; fallback to the live WorkerEntry (placeholder, no row yet). */
+/** sessions row first; fallback to the tracked Session (placeholder, no row yet). */
 function resolveSessionAgentId(deps: ControlPlaneDeps, sessionId: string): string | undefined {
-  return deps.sessionRepo.get(sessionId)?.agentId ?? deps.workerPool.get(sessionId)?.agentId;
+  return deps.sessionRepo.get(sessionId)?.agentId ?? sessionRegistry().get(sessionId)?.agentId;
 }
 
 /** Unknown method error MUST include the (authorization-scoped) available method
@@ -116,7 +117,7 @@ export async function dispatchWithCtx(
   // （数组或显式 null）→ 用 session 的；key 缺失（存量 row，未快照过）→ fallback agent 行。
   // null（显式默认策略）与 undefined（没快照过）的语义差正是这条 fallback 的依据。
   const rowConfig = ctx.sessionId ? deps.sessionRepo.get(ctx.sessionId)?.config : undefined;
-  // Shared resolver (registry) — the SAME function session-bridge uses when
+  // Shared resolver (registry) — the SAME function services/session uses when
   // pushing the description index, so visibility can never drift from enforcement.
   const effectiveConfig = resolveEffectiveCapabilities(rowConfig, agentConfig) as AgentConfig;
   const allow = resolveAllowedCapabilityMethods(effectiveConfig);

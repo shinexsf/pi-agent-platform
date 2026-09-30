@@ -4,8 +4,13 @@
  * Lifecycle (per session):
  * 1. spawn(sessionId) → child process (running tsx for .ts support) + 200ms ready detection
  * 2. send(call) → returns Promise resolved by CallResponse
- * 3. worker emits WorkerEvent → forwarded to subscribers (SSE)
+ * 3. worker emits WorkerEvent → pool EMITS `session_event` (sessionId, event);
+ *    SessionRegistry (services/session.ts) fans out to per-session subscribers
  * 4. kill(sessionId) → SIGTERM → 5s → SIGKILL
+ *
+ * Process domain ONLY (core-session-refactor 2.3): domain state (hasRow /
+ * model / …) lives on Session; the pool asks via the injected hasRowQuery
+ * for LRU eviction / list() semantics.
  *
  * Invariants enforced:
  * - 200ms startup detection (kill if no 'ready' event)
@@ -82,39 +87,10 @@ export interface WorkerEntry {
   spawnTime: number;
   readyTimer: NodeJS.Timeout | null;
   pendingCalls: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
-  eventListeners: Array<(event: WorkerEvent) => void>;
-  /** True once the session has been persisted to the DB (first prompt written the row).
-   *  Active sessions are not auto-killed; placeholder workers (`hasRow=false`) participate in
-   *  the 5-minute placeholder timeout and LRU eviction. */
-  hasRow: boolean;
-  /** Path to the pi session file (set after createSession IPC returns). Available for both
-   *  placeholder and active workers — needed so the first prompt on a placeholder worker can
-   *  persist the row without re-creating the underlying session. */
-  piSessionPath?: string;
-  /** Cached system prompt (set after createSession IPC returns). Avoids re-fetching the
-   *  full system prompt string over IPC for every `GET /:id/context` call. */
-  systemPrompt?: { text: string; length: number; source: 'override' | 'default' };
-  /** Actual model the worker is using (from pi SDK AgentSession.model).
-   *  Set by spawnPlaceholder / spawnAndCreate / POST /:id/model route.
-   *  Drives /:id/context's `currentModel` field for placeholder sessions
-   *  that don't yet have a DB row. */
-  model?: { provider: string; modelId: string } | null;
-  /** Active thinking level on the worker (pi SDK AgentSession.thinkingLevel).
-   *  Set by spawnPlaceholder / spawnAndCreate / POST /:id/think route.
-   *  Drives /:id/context's `currentThinkingLevel` field for placeholder sessions
-   *  that don't yet have a DB row. */
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
-  /** pi-native session display name cached from createSession's result — used by
-   *  spawnAndCreate's heal comparison when reusing an alive placeholder worker. */
-  sessionName?: string;
-  /** Agent this session belongs to — set at spawn time by session-bridge (agent
-   *  context is known there). Needed by the capability control plane: placeholder
-   *  sessions have NO sessions row, so ctx.agentId would otherwise be unresolved
-   *  (own-mode + allowlist would fail closed on placeholders). */
-  agentId?: string;
+  // Phase B (core-session-refactor 2.3): domain state (hasRow / model /
+  // thinkingLevel / sessionName / systemPrompt / piSessionPath / agentId)
+  // moved to Session (services/session.ts). WorkerEntry keeps PROCESS facts only.
 }
-
-type PendingListener = { listener: (event: WorkerEvent) => void; attached: boolean };
 
 export type ReverseCallHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
 
@@ -122,10 +98,11 @@ export class WorkerPool extends EventEmitter {
   private workers = new Map<string, WorkerEntry>();
   /** Max concurrent workers. Spawn will LRU-evict a placeholder worker when full. */
   private maxWorkers: number;
-  /** Listeners that subscribed before the worker existed; flushed on spawn ready. */
-  private pendingListeners = new Map<string, PendingListener[]>();
   /** Handlers for reverse-call messages from workers (worker → master RPC). */
   private reverseHandlers = new Map<string, ReverseCallHandler>();
+  /** Is this session a placeholder (no DB row)? Domain knowledge injected at
+   *  composition time (initSessionRegistry) — pool must not import Session. */
+  private hasRowQuery: (sessionId: string) => boolean = () => false;
   private nextCallId = 1;
 
   constructor(maxWorkers: number = config.maxWorkers) {
@@ -181,8 +158,6 @@ export class WorkerPool extends EventEmitter {
       spawnTime: Date.now(),
       readyTimer: null,
       pendingCalls: new Map(),
-      eventListeners: [],
-      hasRow: false,
     };
 
     this.wireUpHandlers(sessionId, entry);
@@ -191,8 +166,6 @@ export class WorkerPool extends EventEmitter {
     return new Promise((resolve, reject) => {
       const checkReady = () => {
         if (entry.ready) {
-          // Worker ready — flush any listeners that subscribed before spawn.
-          this.flushPendingListeners(sessionId, entry);
           resolve(entry);
         } else if (!this.workers.has(sessionId)) {
           reject(new Error(`worker startup failed for session ${sessionId}`));
@@ -273,9 +246,9 @@ export class WorkerPool extends EventEmitter {
           }
           entry.ready = true;
         }
-        for (const listener of entry.eventListeners) {
-          listener(event);
-        }
+        // Phase B: pool only FORWARDS — Session (services/session.ts) owns
+        // per-session listener sets and subscribes to this emitter once.
+        this.emit('session_event', sessionId, event);
         // Master-internal consumption: pi-native renames (any source) sync into
         // sessions.title — wired in index.ts; the pool itself never touches the DB.
         if (event.event === 'session_info_changed') {
@@ -306,37 +279,12 @@ export class WorkerPool extends EventEmitter {
 
     // Crash detection
     entry.child.on('exit', (code, signal) => {
-      const w = this.workers.get(sessionId);
       this.workers.delete(sessionId);
 
-      // Preserve event listeners across worker death so SSE clients can resume
-      // receiving events when the session is reactivated. This covers:
-      //   - placeholder worker killed by `session-timeout-scanner` (5 min idle)
-      //   - placeholder worker LRU-evicted when worker pool is full
-      //   - active worker that crashes (model error, OOM, unhandled exception)
-      //   - active worker killed by startup-timeout
-      // Without this transfer, `this.workers.delete(sessionId)` drops all
-      // references to `entry.eventListeners`, so when the IDE/IM client later
-      // sends a prompt and `spawnAndCreate` rebuilds the worker, the new worker's
-      // `flushPendingListeners` (which only sees listeners buffered BEFORE spawn)
-      // has no way to recover them. Symptom: worker processes the prompt
-      // correctly and emits message_update events, but the SSE stream is silently
-      // disconnected and the UI hangs on "sending" forever.
-      //
-      // Transfer to `pendingListeners` (attached:false) so the next `spawn()`
-      // for this sessionId will attach them to the new entry via
-      // `flushPendingListeners`.
-      if (entry.eventListeners.length > 0) {
-        let arr = this.pendingListeners.get(sessionId);
-        if (!arr) {
-          arr = [];
-          this.pendingListeners.set(sessionId, arr);
-        }
-        for (const listener of entry.eventListeners) {
-          arr.push({ listener, attached: false });
-        }
-        entry.eventListeners = [];
-      }
+      // Phase B (core-session-refactor 2.4/2.5): listener buffering/transfer
+      // across worker death moved to Session — the registry disposes the Session
+      // object on this 'crash' event (notified + cleared); clients reconnect
+      // (EventSource auto-reconnect) and re-subscribe to the next object.
 
       if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGKILL') {
         process.stderr.write(
@@ -373,109 +321,10 @@ export class WorkerPool extends EventEmitter {
   }
 
   /**
-   * Subscribe to WorkerEvent for a session.
-   * If no worker exists yet, buffer the listener and attach when spawn completes.
-   * Returns an unsubscribe function.
-   *
-   * The returned unsubscribe closure is safe to call at any time — including
-   * AFTER the worker has died (in which case the listener may have been
-   * transferred to `pendingListeners` by `wireUpHandlers`' exit block).
-   * `cleanupListener` handles both locations.
+   * Phase B (core-session-refactor 2.4): per-session event subscription moved
+   * to Session (services/session.ts). Pool only EMITS `session_event`
+   * (sessionId, event) — Session attaches one filtered listener at a time.
    */
-  subscribe(sessionId: string, listener: (event: WorkerEvent) => void): () => void {
-    const entry = this.workers.get(sessionId);
-    if (entry) {
-      entry.eventListeners.push(listener);
-      return () => this.cleanupListener(sessionId, listener);
-    }
-    // No worker yet — buffer at class level so spawn() can flush on ready.
-    let arr = this.pendingListeners.get(sessionId);
-    if (!arr) {
-      arr = [];
-      this.pendingListeners.set(sessionId, arr);
-    }
-    const pending: PendingListener = { listener, attached: false };
-    arr.push(pending);
-
-    // Try attaching on growing delays (covers fast spawn before setTimeout resolves).
-    const tryAttach = () => {
-      if (pending.attached) return;
-      const e = this.workers.get(sessionId);
-      if (e) {
-        e.eventListeners.push(pending.listener);
-        pending.attached = true;
-        // Once attached, no longer needed in pendingListeners buffer.
-        const a = this.pendingListeners.get(sessionId);
-        if (a) {
-          const idx = a.indexOf(pending);
-          if (idx >= 0) a.splice(idx, 1);
-        }
-      }
-    };
-    setTimeout(tryAttach, 10);
-    setTimeout(tryAttach, 100);
-    setTimeout(tryAttach, 500);
-    setTimeout(tryAttach, 2000);
-    setTimeout(tryAttach, 6000);
-    setTimeout(tryAttach, 12000);
-
-    // Closure captures `pending` so tryAttach is disabled after unsubscribe.
-    return () => this.cleanupListener(sessionId, listener, pending);
-  }
-
-  /**
-   * Remove a listener from wherever it currently lives (entry.eventListeners,
-   * pendingListeners buffer, or both). Safe to call multiple times.
-   *
-   * The `pending` arg, if provided, also marks the listener as unsubscribed so
-   * pending-path tryAttach timers won't re-attach it. Required for the
-   * pre-spawn subscribe path (no worker exists yet → wrapped in PendingListener
-   * for tryAttach tracking). The post-spawn subscribe path doesn't need it
-   * because there's no tryAttach to disable.
-   *
-   * The pendingListeners match is by listener function reference — this works
-   * for both the original PendingListener objects (pre-spawn subscribe path)
-   * AND the PendingListener wrappers created by `wireUpHandlers`' exit block
-   * when transferring listeners from a dead worker back to the buffer.
-   */
-  private cleanupListener(
-    sessionId: string,
-    listener: (event: WorkerEvent) => void,
-    pending?: PendingListener,
-  ): void {
-    // 1) Disable any pending tryAttach retries for this listener.
-    if (pending) pending.attached = true;
-    // 2) Remove from live entry (if worker still exists).
-    const e = this.workers.get(sessionId);
-    if (e) {
-      const i = e.eventListeners.indexOf(listener);
-      if (i >= 0) e.eventListeners.splice(i, 1);
-    }
-    // 3) Remove from pendingListeners buffer (matches both pre-spawn
-    //    PendingListener objects and post-exit transfers).
-    const a = this.pendingListeners.get(sessionId);
-    if (a) {
-      const idx = a.findIndex((p) => p.listener === listener);
-      if (idx >= 0) a.splice(idx, 1);
-    }
-  }
-
-  /**
-   * Move all pending listeners for this session onto the entry's eventListeners.
-   * Called when worker becomes ready so SSE clients don't miss events that fire
-   * between worker spawn and the next setTimeout retry.
-   */
-  private flushPendingListeners(sessionId: string, entry: WorkerEntry): void {
-    const arr = this.pendingListeners.get(sessionId);
-    if (!arr || arr.length === 0) return;
-    for (const pending of arr) {
-      if (!pending.attached) {
-        entry.eventListeners.push(pending.listener);
-        pending.attached = true;
-      }
-    }
-    this.pendingListeners.delete(sessionId);
-  }
 
   async kill(sessionId: string, reason = 'manual'): Promise<void> {
     const entry = this.workers.get(sessionId);
@@ -550,66 +399,17 @@ export class WorkerPool extends EventEmitter {
       stderrTail: [...w.stderrTail],
       pendingCalls: w.pendingCalls.size,
       spawnTime: w.spawnTime,
-      hasRow: w.hasRow,
+      hasRow: this.hasRowQuery(w.sessionId),
     }));
   }
 
   /**
-   * Mark the worker's session as having a persisted DB row. Called from
-   * `spawnAndCreate` after the row is created/updated. After this, the worker
-   * is excluded from LRU eviction and the placeholder timeout scanner.
+   * Inject the domain question "does this session have a DB row?" (placeholder
+   * vs active). Wired by initSessionRegistry — worker-pool stays domain-free
+   * (process facts only) while LRU eviction / list() keep their semantics.
    */
-  markRowWritten(sessionId: string): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.hasRow = true;
-  }
-
-  /** Record the agent owning this session (see WorkerEntry.agentId). Called from
-   *  session-bridge right after spawn — placeholder and active paths alike. */
-  setAgentId(sessionId: string, agentId: string): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.agentId = agentId;
-  }
-
-  /** Cache the pi session file path returned by worker's createSession IPC.
-   *  Called by spawnPlaceholder (placeholder worker) and spawnAndCreate (active worker)
-   *  so subsequent spawnAndCreate calls on a still-alive worker can reuse it
-   *  without re-creating the underlying session. */
-  setSessionPath(sessionId: string, piSessionPath: string): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.piSessionPath = piSessionPath;
-  }
-
-  /** Cache the worker's actual model so /:id/context can report currentModel
-   *  without an extra IPC round-trip. Called from spawnPlaceholder / spawnAndCreate
-   *  (after createSession) and from POST /:id/model route (after worker.setModel). */
-  setModel(sessionId: string, model: { provider: string; modelId: string } | null): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.model = model;
-  }
-
-  /** Cache the worker's active thinking level so /:id/context can report
-   *  currentThinkingLevel without an extra IPC round-trip. */
-  setThinkingLevel(sessionId: string, level: 'off' | 'low' | 'medium' | 'high' | null): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.thinkingLevel = level;
-  }
-
-  /** Cache the pi-native session display name returned by createSession so
-   *  spawnAndCreate's heal can compare it against sessions.title. */
-  setSessionName(sessionId: string, name: string | undefined): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.sessionName = name;
-  }
-
-  /** Cache the worker's system prompt (text + length + source) so /:id/context
-   *  can report the full systemPrompt without re-fetching ~10K+ chars per call. */
-  setSystemPrompt(
-    sessionId: string,
-    systemPrompt: { text: string; length: number; source: 'override' | 'default' },
-  ): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.systemPrompt = systemPrompt;
+  setHasRowQuery(fn: (sessionId: string) => boolean): void {
+    this.hasRowQuery = fn;
   }
 
   // ── Reverse IPC: Worker → Master ────────────────────────────────────────
@@ -652,12 +452,12 @@ export class WorkerPool extends EventEmitter {
     }
   }
 
-  /** Find the oldest placeholder worker (`hasRow=false`) and kill it. Returns the killed sessionId, or null if none available. */
+  /** Find the oldest placeholder worker (no DB row, per hasRowQuery) and kill it. Returns the killed sessionId, or null if none available. */
   private async evictOldestPlaceholder(): Promise<string | null> {
     let oldestId: string | null = null;
     let oldestTime = Infinity;
     for (const [id, e] of this.workers) {
-      if (!e.hasRow && e.spawnTime < oldestTime) {
+      if (!this.hasRowQuery(id) && e.spawnTime < oldestTime) {
         oldestTime = e.spawnTime;
         oldestId = id;
       }

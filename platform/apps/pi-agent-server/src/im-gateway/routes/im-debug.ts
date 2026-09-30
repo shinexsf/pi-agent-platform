@@ -73,7 +73,7 @@ export function createImDebugRouter(deps: Deps): Hono {
   });
 
   // POST /api/im/debug/inject — push an InboundMessage through the real
-  // pipeline (handleInbound → routeAndSpawn → session-bridge → worker).
+  // pipeline (handleInbound → routeAndSpawn → services/session → worker).
   // Same shape the adapters produce, so behavior matches a real IM message.
   // NOTE: replies still go out through the channel's adapter (real QQ/wechat
   // send) — the injected chat WILL receive them.

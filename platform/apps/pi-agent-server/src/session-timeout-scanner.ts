@@ -5,8 +5,10 @@
  * Active sessions (has DB row) are NEVER auto-killed — they're terminated
  * explicitly when the user closes the IDE tab or via a future Web management API.
  *
- * The DB row itself is never modified by the scanner; worker pool is the source
- * of truth for whether a session is alive.
+ * The DB row itself is never modified by the scanner. `list().hasRow` is served
+ * by the pool's injected hasRowQuery (backed by Session.hasRow — wired in
+ * initSessionRegistry), so this scanner stays policy-free: decision input from
+ * the domain, execution (kill) in the pool layer.
  */
 
 import type { WorkerPool } from './worker-pool.js';

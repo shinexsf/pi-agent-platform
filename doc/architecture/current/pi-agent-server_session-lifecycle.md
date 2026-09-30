@@ -2,34 +2,120 @@
 
 > Session 生命周期。定义 session 何时创建、销毁、配置管理。
 > v2：placeholder 即 spawn + 统一 context 端点 + worker pool 上限 20 + LRU + 删 active 自动超时。
+> **服务层**：spawn/复活唯一入口 = `services/session.ts` 的 `SessionRegistry`（getOrCreate / createFromAgent）；领域状态归 `Session` 对象。
 
 ## 状态机
 
+```mermaid
+stateDiagram-v2
+    state "占位 placeholder（有 worker 无 row）" as PH
+    state "活跃 active（有 row 有 worker）" as AC
+    [*] --> PH : getOrCreate 查无行 新会话 spawnPlaceholder
+    [*] --> AC : getOrCreate 查到行 复活直落
+    PH --> AC : 首条 prompt 落行 Session.hasRow = true
+    PH --> [*] : 5 分钟无活动 scanner 杀 / LRU / 崩溃（id 作废 无数据可丢）
+    AC --> [*] : worker 死 / close / archive（对象终态 行留在图外 DB）
+    AC --> [*] : delete（删行 + unlink 文件 + 级联附件）
 ```
-[不存在]              ← 客户端无 sessionId
-  ↓ 客户端调 POST /api/sessions/agents/:agentId
-  ↓ master: 生成 sessionId + spawn placeholder worker + 调 listCommands/listAvailableModels
-  ↓ 返 { sessionId, commands[], models[] }（**sessions 表未写**）
-[占位 + 有 worker]    ← sessionId 已颁发 + worker 已起 + DB 无 row
-  ↓ 5 分钟内未发第一条消息 → scanner: kill placeholder worker（hasRow=false）
-  ↓ placeholder sessionId 自动作废（client 持有）
-  ↓
-  ↓ 客户端发 POST /api/sessions/:id/prompt
-  ↓ master: spawnAndCreate → INSERT sessions + 调 markRowWritten
-[active]              ← DB 有 row + worker alive（hasRow=true）
-  ↓ 用户/IDE 关 tab → POST /:id/close → kill worker（sessions row 保留，DB 不改 status）
-  ↓ worker 崩溃 → master: worker.on('exit') → 清理 Map（DB 不改 status）
-  ↓ 注意：**active session 不会自动超时**（scanner 只杀 hasRow=false）
-  ↓
-  ↓ 用户消息到达（worker 可能已被 close 或 crash）
-  ↓ master: spawnAndCreate → worker 不存在时重建（复用 piSessionPath）
-[active]              ← 重建后回到 active
-```
+
+事件注解：
+
+- `POST /api/sessions/agents/:agentId` → 生成 sessionId + spawn worker + `listCommands`/`listAvailableModels`（**sessions 表未写**）；客户端拿到 `{ sessionId, commands[], models[] }`
+- `POST /api/sessions/:id/prompt` → `sessionRegistry().getOrCreate` → INSERT sessions + `Session.hasRow = true`
+- `POST /:id/close` → kill worker，**row 保留、DB 不改 status**；`active` **不会自动超时**（scanner 只杀无行者）
+- 重建：用户消息到达 → `getOrCreate` 从 `[*]` 重进有行分支（复用 `piSessionPath` 读盘）
 
 **关键变化**（vs v1）：
 - **占位不是无状态过渡**——worker 已经 spawn，可以即时提供 commands/models
 - **`status='archived'` 字段不再被自动写**——worker pool 是 session alive 的 source of truth
 - **active session 不自动超时**——生命周期完全由调用方管理（IDE 关 tab / Web 手动接口）
+
+## Session 领域对象（services/session.ts）
+
+`Session` 是一个 session id 的**领域对象**，拥有全部领域状态：
+
+```typescript
+class Session {
+  id: string;
+  hasRow: boolean;          // placeholder vs active（LRU / 超时扫描的判据）
+  model / thinkingLevel;    // worker 实时值缓存（/:id/context 读）
+  sessionName;              // pi 原生名（heal 输入）
+  systemPrompt;             // createSession 后缓存（免 10K 字符 IPC 重取）
+  piSessionPath;            // 复活时读历史
+  agentId;                  // 无 row 的 placeholder 归属（授权 ctx 解析）
+  subscribe(listener, onDispose);  // 事件订阅（pool session_event 转发）
+  executeCommand(name, args, lang); // 会话级斜杠命令（model/think/compact/name/session/hotkeys）
+}
+```
+
+`SessionRegistry`（同文件，module singleton，`initSessionRegistry()` 在 main() 装配）：
+
+- **`getOrCreate(id, agent)`**—— spawn/复活唯一入口。内存命中（对象活 + 有 row）直接返回；否则行感知调私有 `spawnAndCreate`。并发首次调用共享同一 inflight promise（幂等），失败不缓存
+- **`createFromAgent(agentId)`** —— 新 id + placeholder spawn，**不写 row**（HTTP 两阶段第 1 阶段；失败自清 partial worker）
+- **`track(id)`** —— 拿一个**无 worker** 的对象锚点（SSE 订阅 / 只读 repo 命令用；绝不 spawn，最后一个订阅者离开时自动释放）
+- **`dispose(id, reason)`** —— 终态：通知并清空订阅者 + 移出 registry。pool 的 `'crash'` 事件（任何 exit）自动触发
+
+**对象生命周期 = worker 生命周期**：对象在 spawn 前创建、worker 死时 dispose；对象从不跨 worker 死亡（持久身份在 DB 行）。`spawnPlaceholder` / `spawnAndCreate` 是本文件模块私有实现——**外部代码不得绕过 registry 直接 spawn**。
+
+依赖方向（四层单向；详细铁律见 [invariants](pi-agent-server_invariants.md)）：
+
+```mermaid
+classDiagram
+    direction TB
+    namespace consumers {
+        class RoutesSessions
+        class ImGateway
+        class CapHandlers
+    }
+    namespace core {
+        class SessionRegistry {
+            +getOrCreate(id, agent)
+            +createFromAgent(agentId)
+            +track(id)
+            +dispose(id, reason)
+            +list()
+        }
+        class Session {
+            +hasRow
+            +model
+            +thinkingLevel
+            +systemPrompt
+            +piSessionPath
+            +agentId
+            +subscribe(listener, onDispose)
+            +executeCommand(name, args, lang)
+        }
+    }
+    namespace support {
+        class PromptResolver
+        class SlashCommands
+        class AttachmentStore
+        class SessionRepo
+        class AgentRepo
+    }
+    namespace process {
+        class WorkerPool {
+            +spawn(id, workspacePath)
+            +call(id, method, args)
+            +kill(id, reason)
+            +setHasRowQuery(fn)
+            +emit(event)
+        }
+    }
+    RoutesSessions --> SessionRegistry : getOrCreate
+    ImGateway --> SessionRegistry : ensureSessionShared
+    CapHandlers --> SessionRegistry : restart
+    SessionRegistry *-- Session : owns
+    Session --> PromptResolver : prompt 管道
+    Session --> SlashCommands : builtin 文案
+    Session --> SessionRepo : row-wins / heal
+    Session --> WorkerPool : IPC
+    RoutesSessions --> WorkerPool : prompt / abort
+    WorkerPool ..> SessionRegistry : session_event / crash（回调注入）
+```
+
+- **消费层只碰 `Session` + `SessionRegistry`**；prompt-resolver / slash-commands / attachment-store 是 Session 背后的支撑细节
+- `session-channel-map`（渠道↔会话绑定）**留在 im-gateway**——Registry 不长渠道知识，消费方持 sessionId 值不持对象
 
 ## 创建：两阶段
 
@@ -41,13 +127,12 @@ async function createPlaceholder(agentId: string): Promise<PlaceholderSessionRes
   const agent = agentRepo.getOrThrow(agentId);
   if (!existsSync(agent.workspacePath)) throw 400;
 
-  const sessionId = sessionRepo.newSessionId();  // UUID
-  await spawnPlaceholder(sessionId, agent, workerPool);  // spawn worker + createSession
+  const session = await sessionRegistry().createFromAgent(agentId);  // 生成 id + spawn，不写表
   const [commands, models] = await Promise.all([
-    workerPool.call<SlashCommandDTO[]>(sessionId, 'listCommands', []),
-    workerPool.call<ModelInfo[]>(sessionId, 'listAvailableModels', []),
+    workerPool.call<SlashCommandDTO[]>(session.id, 'listCommands', []),
+    workerPool.call<ModelInfo[]>(session.id, 'listAvailableModels', []),
   ]);
-  return { sessionId, agentId, commands, models };
+  return { sessionId: session.id, agentId, commands, models };
 }
 ```
 
@@ -65,14 +150,12 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
   const existing = sessionRepo.get(sessionId);
 
   if (existing) {
-    // archived 复活 / 重启后回到 active
-    if (!workerPool.has(sessionId)) {
-      await spawnAndCreate(sessionId, agent, sessionRepo, workerPool, existing.piSessionPath);
-    }
+    // archived 复活 / 重启后回到 active（内部：内存命中检查 + 并发 inflight 去重）
+    await sessionRegistry().getOrCreate(sessionId, agent);
     sessionRepo.update(sessionId, {});  // bump lastActiveAt
   } else {
     // 占位 + worker 已存在（被 POST /agents/:agentId 创建）→ 复用 worker + 写 row
-    await spawnAndCreate(sessionId, agent, sessionRepo, workerPool);
+    await sessionRegistry().getOrCreate(sessionId, agent);
   }
 
   await workerPool.call(sessionId, 'prompt', [message, body.images, body.streamingBehavior]);
@@ -82,19 +165,19 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 }
 ```
 
-**`spawnAndCreate` 关键职责**：
+**私有 `spawnAndCreate` 关键职责**（registry.getOrCreate 内部）：
 - `workerPool.spawn(sessionId, workspacePath)`（LRU 可能在 spawn 内部触发）
 - `workerPool.call(sessionId, 'createSession', [runtimeConfig, sessionId, existingSessionPath])`
 - 写/更新 `sessions` 表（`createFromAgent` or `update({model})`）
-- **`workerPool.markRowWritten(sessionId)`**——`hasRow` 设为 true，从 placeholder 变 active
-- **`cacheSystemPrompt(sessionId, workerPool)`**（见下）—— fetch `getSystemPrompt` IPC、缓存到 WorkerEntry，让 `GET /:id/context` 能返回完整 systemPrompt 文本
-- **`healPiSessionName(...)`（title 同步）** —— 比对 `createSession` 返回的 `sessionName` 与 `row.title`：相等（含双方空）跳过、不等 DB 优先调 `setSessionName` 收敛 pi 侧（冲突记 info 日志）；`spawnPlaceholder`（无 row）不比对。见下方“Session title 双向同步”。
+- **`session.hasRow = true`**——从 placeholder 变 active（`hasRow` 是 Session 字段，不再是 WorkerEntry / markRowWritten）
+- **`cacheSystemPrompt(session, workerPool)`**—— fetch `getSystemPrompt` IPC、缓存到 **Session 对象**，让 `GET /:id/context` 能返回完整 systemPrompt 文本
+- **`healPiSessionName(...)`（title 同步）** —— 比对 `createSession` 返回的 `sessionName` 与 `row.title`：相等（含双方空）跳过、不等 DB 优先调 `setSessionName` 收敛 pi 侧（冲突记 info 日志）；placeholder 路径（无 row）不比对。见下方“Session title 双向同步”。
 
-**`spawnPlaceholder` 关键职责**（同路径独立调）：
+**私有 `spawnPlaceholder` 关键职责**（`createFromAgent` 内部，同路径独立调）：
 - `workerPool.spawn(sessionId, workspacePath)`
 - `workerPool.call(sessionId, 'createSession', [...])`
-- 缓存 `piSessionPath` / `model` / `thinkingLevel` / `systemPrompt` 到 WorkerEntry
-- **不调** `markRowWritten`（保持 `hasRow=false`）
+- 缓存 `piSessionPath` / `model` / `thinkingLevel` / `sessionName` / `systemPrompt` 到 **Session 对象**
+- **不写** `hasRow`（保持 false）
 
 ### systemPrompt 拼接职责（2026-08-30+）
 
@@ -117,12 +200,12 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 
 - customPrompt 路径：保留 Available tools / "In addition to..." / tool promptGuidelines（避免 model 乱调用工具）
 - default 路径：走 pi SDK 原 default prompt（含 Pi doc / Role def / 硬编码 Guidelines），不动
-- 详细规格见 [`worker-system-prompt-customization` spec](../specs/worker-system-prompt-customization/spec.md)
+- 详细规格见 [changelog 013：worker 接管 systemPrompt](../changelog/2026-08-30_013-worker-system-prompt-takeover.md)
 
-**两套 spawnPlaceholder/spawnAndCreate 实现的注意**：worker 当前架构下 `im-gateway/session-bridge.ts` 和 `routes/sessions.ts` **各自有本地实现**（IM 渠道 / IDE+web 端分别走）。改 systemPrompt 拼接或加 cacheSystemPrompt 时，**两处都要改**——否则一边的 session 不缓存 systemPrompt，`GET /:id/context` 返回 null。
+**单实现（2026-09-30 起）**：`spawnPlaceholder` / `spawnAndCreate` 只有 `services/session.ts` 一份实现，且为**模块私有**——routes / capabilities / IM 网关一律经 `sessionRegistry()` 调用。改 systemPrompt 拼接或 cacheSystemPrompt 只改这一处，全部渠道（HTTP/IM）同时生效。依赖铁律：**核心代码不得 import im-gateway**（session-bridge 时代的反向依赖已清零）。
 
 **两种场景走同一路径**：
-- 占位 sessionId + 第一条 prompt → INSERT + markRowWritten
+- 占位 sessionId + 第一条 prompt → INSERT + `session.hasRow = true`
 - archived session + 用户消息 → 已存在 + worker 死 → 重建（复用 piSessionPath）
 
 ## 销毁：调用方管理
@@ -146,6 +229,7 @@ async function archiveSession(sessionId: string) {
 async function scanPlaceholderTimeouts() {
   const now = Date.now();
   for (const entry of workerPool.list()) {  // snapshot 避免迭代中修改
+    // list().hasRow 由注入的 hasRowQuery 提供（回源 Session.hasRow）
     if (!entry.hasRow && (now - entry.spawnTime) > config.placeholderTimeoutMs) {
       await workerPool.kill(entry.sessionId, 'placeholder-timeout');
     }
@@ -195,7 +279,7 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 | 空 | `X` | `setSessionName(X)` 回填 pi（worker-dead 改名）|
 | `X` | `Y` / 空 | DB 赢 `setSessionName(DB)` + info 冲突日志（清空同理）|
 
-三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）与 callServer 控制面的 `session.update` title 分支共用 `services/session-ops.ts` 的 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 的 `setTitle` 回调尚未 wiring**（现状两处 `runBuiltinCommand` 均未提供 → 返回“当前 channel 不支持重命名”），待补后复用同款策略。
+三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）与 callServer 控制面的 `session.update` title 分支共用 `services/session-ops.ts` 的 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 已 wiring**：`slash-commands` 将会话级命令委派给 `Session.executeCommand(..., 'zh')`，同样走 `renameSession()`（此前因 ctx 未提供 `setTitle` 恒返“不支持重命名”）；IM `/model` 同路径修复了单参误传 + 落行。
 
 ## sessionId 由 master 生成
 
@@ -232,21 +316,25 @@ worker 失败 → 错误事件 → IPC → master SSE → 前端 chat 消息气�
 
 ## 与 Worker Pool 关系
 
-| session 状态 | Worker Pool entry | hasRow |
+| session 状态 | Worker Pool entry | Session.hasRow |
 |---|---|---|
 | 占位（开 tab 后）| ✅ alive | `false` |
 | Active（发过第一条消息）| ✅ alive | `true` |
-| Placeholder 超时被 scanner 杀 | ❌ removed | n/a |
-| IDE 关 tab | ❌ removed | `true`（row 保留，DB 不改）|
-| Active 被 LRU 回收（容量满）| ❌ removed | `true`（row 保留）|
+| Placeholder 超时被 scanner 杀 | ❌ removed | 对象已 dispose |
+| IDE 关 tab | ❌ removed | 对象已 dispose（row 保留，DB 不改）|
+| Active 被 LRU 回收（容量满）| ❌ removed | 对象已 dispose（row 保留）|
+
+WorkerEntry **只有进程事实**（child/pid/stderrTail/ready/spawnTime/pendingCalls）；pool 需要“是否 placeholder”时通过注入的 `hasRowQuery` 回调问 SessionRegistry（LRU / list() / scanner 同源）。
+
+**SSE 终态通知**：worker 死（close / 崩溃 / 超时 / LRU / delete）→ pool `'crash'` → `registry.dispose` → 已订阅 listener 收到终止 → `GET /:id/events` 写 `session_disposed` 事件并**关流** → 浏览器 EventSource 自动重连，经 `track()` 挂到新对象。
 
 ## 与 IM 网关关系
 
 IM 网关创建的 session **不污染 `sessions` 表** — sessions 表本身不区分 web / IDE / IM 来源。IM 网关**自己维护** `Map<sessionId, SessionMeta>` 用于 idle timeout 跟踪。
 
 IM 网关与本 session-lifecycle 的交互点：
-- 共享 `session-bridge.ts` 抽象（routes/sessions.ts 和 IM 网关都调用，避免重复）
-- IM 网关的 `routeAndSpawn` 直接调 `workerPool.spawn()` / `spawnAndCreate()`，不走本文件描述的 HTTP API
+- 共享 `services/session.ts` 的 `SessionRegistry`（routes/sessions.ts 和 IM 网关都经 `sessionRegistry()` 调用，单入口避免重复）
+- IM 网关的 `routeAndSpawn` / `host.ensureSession` 都委托 `im-gateway/ensure-session.ts` 的共享实现（A/B/B2/C 四态单一代码路径），不走本文件描述的 HTTP API
 - IM 网关**不**写 `status='archived'`（即使 worker 被 kill）— sessions 表保持 status='active'，IM 网关自己跟踪会话生命周期
 - IM session idle timeout（30 分钟）由 IM 网关自己的扫描器处理，不修改 server 现有的 placeholder scanner
 
@@ -254,7 +342,7 @@ IM 网关的细节详见 [`pi-agent-server_im-gateway.md`](pi-agent-server_im-ga
 
 ## 相关文档
 
-- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— WorkerEntry metadata + LRU + markRowWritten
+- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 进程模型 + LRU + hasRowQuery 注入
 - [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) —— sessions 表字段
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— 端点定义
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— setModel 等调用的实现

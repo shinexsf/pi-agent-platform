@@ -16,7 +16,7 @@ import type { AgentRepo } from '../../repos/agent.repo.js';
 import type { SessionRepo } from '../../repos/session.repo.js';
 import type { WorkerPool } from '../../worker-pool.js';
 import { renameSession } from '../../services/session-ops.js';
-import { spawnAndCreate } from '../../im-gateway/session-bridge.js';
+import { sessionRegistry } from '../../services/session.js';
 
 function notFound(id: string): Error {
   const e = new Error(`Session not found: ${id}`);
@@ -132,7 +132,8 @@ export function sessionCapabilities(
           const provider = patch.model.slice(0, slashIdx);
           const modelId = patch.model.slice(slashIdx + 1);
           await workerPool.call(params.id, 'setModel', [provider, modelId]);
-          workerPool.setModel(params.id, { provider, modelId });
+          const live = sessionRegistry().get(params.id);
+          if (live) live.model = { provider, modelId };
         }
         sessionRepo.update(params.id, { model: patch.model });
       }
@@ -145,7 +146,8 @@ export function sessionCapabilities(
         }
         if (workerPool.has(params.id)) {
           await workerPool.call(params.id, 'setThinkingLevel', [patch.thinkingLevel]);
-          workerPool.setThinkingLevel(params.id, patch.thinkingLevel as 'off' | 'low' | 'medium' | 'high');
+          const live = sessionRegistry().get(params.id);
+          if (live) live.thinkingLevel = patch.thinkingLevel as 'off' | 'low' | 'medium' | 'high';
         }
         sessionRepo.update(params.id, { thinkingLevel: patch.thinkingLevel || undefined });
       }
@@ -192,7 +194,8 @@ export function sessionCapabilities(
       }
       // Respawn reusing the pi session file — history restored, config re-snapshotted
       // from the sessions row. Row itself and channel map are NOT touched here.
-      await spawnAndCreate(params.id, agent, sessionRepo, workerPool, existing.piSessionPath);
+      // (registry re-reads the row itself → same piSessionPath as `existing` above)
+      await sessionRegistry().getOrCreate(params.id, agent);
       const newEntry = workerPool.get(params.id);
       return {
         restarted: true,

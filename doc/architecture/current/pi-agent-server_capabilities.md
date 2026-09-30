@@ -19,7 +19,7 @@
 │                                                                          │
 │  dispatch（统一入口，dev-only /debug/capabilities/invoke 也走这条路径）  │
 │   1. 解析 ctx（sessionId → agentId：sessions 行优先，placeholder          │
-│      无 row → WorkerEntry.agentId）                                      │
+│      无 row → Session.agentId）                                          │
 │   2. 内置方法 list / detail → 内容按授权过滤（detail 未授权拒绝）        │
 │   3. 业务方法：方法存在？ → 授权（双道闸）→ handler → pino 审计          │
 │   4. 未知方法错误附「授权范围内」可用方法列表                             │
@@ -29,6 +29,25 @@
 │  audit.ts      每次调用一条结构化审计（ok/denied/unknown/error 四态）    │
 │  handlers/     server.ts | agent.ts | session.ts                         │
 └──────────────────────────────────────────────────────────────────────────┘
+```
+
+### dispatch 决策流程
+
+```mermaid
+flowchart TD
+    W["worker: callServer 方法 + params"] -->|"reverse-call invokeCapability（30s）"| D["dispatch 统一入口<br/>解析 ctx：sessions 行优先 → 无 row 用 Session.agentId"]
+    D --> B{"内置 list / detail？"}
+    B -->|"是"| F["内容按有效授权过滤<br/>与 dispatch 共享同一 resolve 函数（可见性=强制性）"]
+    B -->|"否"| E{"方法在注册表？"}
+    E -->|"否"| U["未知方法错误<br/>附授权范围内可用方法列表"]
+    E -->|"是"| A{"授权双道闸<br/>显式 allowlist + 固定 own 安全网"}
+    A -->|"拒绝"| DENY["Capability denied"]
+    A -->|"通过"| H["handler 执行（薄封装 repo / workerPool）"]
+    H --> OK["结果返回 worker"]
+    F --> OK
+    U --> AUD["pino 审计：ok / denied / unknown / error 四态"]
+    DENY --> AUD
+    OK --> AUD
 ```
 
 ## 三道配置（互不混淆）
@@ -101,7 +120,7 @@
 ## 相关文档
 
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— `invokeCapability` 反向调用协议
-- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 反向调用分发 + `WorkerEntry.agentId`
+- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 反向调用分发 + 注入式 hasRowQuery（`Session.agentId` 见 session-lifecycle）
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— respawn 配置读取（session 行优先）+ 完全快照语义
 - [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) —— `AgentConfig` 字段
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— `GET /api/capabilities`

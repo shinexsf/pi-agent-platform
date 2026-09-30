@@ -60,7 +60,7 @@ pnpm pack:cli
 
 最后跑 `pnpm pack` 在 `packages/cli/` 下产 `pi-server-X.Y.Z.tgz`。
 
-构建脚本：[`scripts/build-cli.mjs`](../../../scripts/build-cli.mjs)（~250 行 plain Node.js + ESM）
+构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（~250 行 plain Node.js + ESM）
 
 ## 部署与启动
 
@@ -173,7 +173,7 @@ IM channels（wechat + qq）在 dev 态直接 `import('channels/<name>/src/index
 - 没编译工具链 → 装 VS Build Tools（Windows）或 `build-essential`（Linux）
 - 都走不通 → 手动下载 prebuilt binary 解压到 `<global>/node_modules/better-sqlite3/`
 
-详细 workaround 见 [`packages/cli/README.md`](../../../packages/cli/README.md) 的 Troubleshooting 段。
+详细 workaround 见 [`packages/cli/README.md`](../../../platform/packages/cli/README.md) 的 Troubleshooting 段。
 
 ## 进程守护
 
@@ -206,7 +206,7 @@ CLI `stop` 命令：
 
 ## 与 OpenSpec / dev-journal 的关系
 
-- **OpenSpec change `cli-packaging`**（`openspec/changes/cli-packaging/`，gitignored）：本架构变更的 proposal / design / specs / tasks 文档，49/49 tasks done
+- **OpenSpec change `cli-packaging`**（本地工作流产物，gitignored，不引用路径）：本架构变更的 proposal / design / specs / tasks 文档，49/49 tasks done
 - **dev-journal**（`doc/dev-journal/`，gitignored）：开发过程记录 + 踩坑实录
 - **architecture changelog**（私域，gitignored）：架构变更轨迹
 - **本文档**：公开的"打包架构是什么"，不含决策过程

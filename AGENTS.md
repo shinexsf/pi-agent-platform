@@ -25,6 +25,7 @@
 - **pi 知识库双挂钩**（规则详见 [`.pi/skills/pi-knowledge/SKILL.md`](.pi/skills/pi-knowledge/SKILL.md)）：**翻之前**——任何任务只要即将打开 pi 官方 docs / 源码 / dist，先读 `reference/pi-knowledge/README.md` 索引（命中可能免翻，未命中带着“已有什么”去翻）；**翻之后**——获得了有价值信息（官方 docs 没写的、反直觉的、实证过的坑/契约/坐标）**直接沉淀**进知识库，不需用户点名“沉淀”
 - **提议**（不主动做）：changelog 条目、AGENTS.md 修订、新增子项目
 - **日志统一走 pino logger**（JSON 结构化，单时间线）：server 用 `apps/pi-agent-server/src/logger.ts` 的 `childLogger('<module>')`，worker 用 `workers/session-worker/src/logger.ts`（stderr 输出，自动 tee 进主日志并带 sessionId/workerPid，同时保留 `stderrTail` 供 `/debug/sessions/:id`）。级别约定：运行事件 info/warn/error，诊断信息用 debug（`LOG_LEVEL=debug` 才可见）
+- **mermaid 图校验**：写/改文档里的 mermaid 代码块后，跑 `cd platform && node scripts/check-mermaid.mjs`（真实 `mermaid.parse`，全量扫 `doc/`；坏块报 `文件:行号` 并退出 1；也可传路径只验指定文件）。mermaid + jsdom 是 workspace devDependencies；`update-arch-docs` skill 已内置这一步，更新架构文档带图变更时必须过
 
 ### agent 不做（红线）
 

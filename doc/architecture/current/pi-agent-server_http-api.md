@@ -40,7 +40,7 @@
 | `/api/sessions/:id/close` | POST | 杀 worker（IDE 关 tab） | URL |
 | `/api/sessions/:id/model` | POST | 切模型 | URL |
 | `/api/sessions/:id/think` | POST | 切 thinking | URL |
-| `/api/sessions/:id/command` | POST | dispatch slash command | URL |
+| `/api/sessions/:id/command` | POST | dispatch slash command（builtin 经 `Session.executeCommand` 短路 → 未知 fallthrough worker 二级分发）| URL |
 | `/api/sessions/:id/rename` | POST | 重命名 session（title 1-200 字符，空/undefined → 清空）；**同步 pi 原生命名**，见下“改名端点语义” | URL |
 | `/api/sessions/:id/attachments` | POST | 上传图片（base64，magic-byte sniff；上限 25 MB；PNG/JPEG/GIF/WebP） | URL |
 | `/api/sessions/:id/attachments` | GET | 列出 session 附件元数据（不含文件路径，新→旧） | URL |
@@ -50,7 +50,7 @@
 
 **两阶段流程**（v2）：
 1. 客户端打开新对话 → `POST /api/sessions/agents/:agentId` → **master 生成 sessionId + spawn placeholder worker + 调 listCommands/listAvailableModels** → 返回 `{ sessionId, agentId, commands[], models[] }`（**sessions 表未写**）
-2. 客户端发 prompt → `POST /api/sessions/:sessionId/prompt` → master `spawnAndCreate`（INSERT sessions + `markRowWritten`）+ 发消息
+2. 客户端发 prompt → `POST /api/sessions/:sessionId/prompt` → master `sessionRegistry().getOrCreate`（INSERT sessions + `Session.hasRow = true`）+ 发消息
 
 ### 改名端点语义（title ↔ pi 原生命名同步）
 
@@ -98,7 +98,7 @@ interface SessionContextDTO {
 - `length` — 字符数
 - `null` — 缓存未命中（worker 还没走完 createSession）
 
-详细规格见 [`worker-system-prompt-customization` spec](../specs/worker-system-prompt-customization/spec.md)。
+详细规格见 [changelog 013：worker 接管 systemPrompt](../changelog/2026-08-30_013-worker-system-prompt-takeover.md)。
 
 **已删除的端点**（合并到 context）：
 - ❌ `GET /api/sessions/:id/commands`
@@ -166,9 +166,32 @@ data: {"type":"tool_result","output":"..."}
 
 event: agent_end
 data: {"type":"agent_end"}
+
+event: session_disposed
+data: {"reason":"worker-death"}   ← session 对象终态（close/崩溃/超时/LRU/delete），随后**服务端关流**
 ```
 
 > `session_info_changed` **不出现在此流**——它是 master 内部消费事件（写 `sessions.title` 后过滤，见 `routes/events.ts`），客户端契约不变。
+>
+> **订阅与终态**（core-session-refactor）：订阅经 `Session.subscribe`（`track()` 锚定无 worker 对象，绝不因开流而 spawn）。worker 死 → registry dispose → 下发 `session_disposed` 后关流；客户端（原生 EventSource）**自动重连**并经 `track()` 挂到下一个 Session 对象，消息流恢复。
+
+```mermaid
+sequenceDiagram
+    participant C as Client EventSource
+    participant R as routes events.ts
+    participant S as Session
+    participant P as WorkerPool
+    C->>R: GET /api/sessions/:id/events
+    R->>S: track(id) 锚定无 worker 对象 + subscribe(listener, onDispose)
+    R-->>C: event connected
+    P-->>S: session_event（转发）
+    S-->>C: event message_update / message_end / agent_end ...
+    Note over P,S: worker 死（close / 崩溃 / 超时 / LRU）→ emit crash → registry.dispose
+    S-->>C: event session_disposed
+    R->>R: 关流
+    C->>R: EventSource 自动重连
+    R->>S: track（可能新对象）+ subscribe → 消息流恢复
+```
 
 ## Request / Response 示例
 
@@ -227,5 +250,5 @@ data: {"type":"agent_end"}
 ## 相关文档
 
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— session 两阶段创建 + 占位 spawn worker
-- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— WorkerEntry hasRow + LRU
+- [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 进程域边界 + LRU + hasRowQuery 注入
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— SSE event 来源

@@ -28,8 +28,9 @@ import {
   setSessionMeta,
   touchSession,
 } from './session-channel-map.js';
-import { spawnAndCreate, spawnPlaceholder, type AgentLike } from './session-bridge.js';
-import { runBuiltinCommand } from './slash-commands.js';
+import { sessionRegistry, type AgentLike } from '../services/session.js';
+import { runBuiltinCommand } from '../slash-commands.js';
+import { ensureSessionShared } from './ensure-session.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
@@ -86,7 +87,7 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
     const space = trimmed.indexOf(' ');
     const cmdName = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).toLowerCase();
     const args = space === -1 ? '' : trimmed.slice(space + 1).trim();
-    const ensured = await ensureSession(msg, channel, agent, ctx);
+    const ensured = await ensureSession(msg, agent, ctx);
     if (!ensured) return { handled: 'no-agent' };
     touchSession(ensured);
     const reply = await runBuiltinCommand(cmdName, {
@@ -113,13 +114,13 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
         startNewSession: async () => {
           // /new — same flow as a brand-new session (ensureSession State C):
           // spawn the worker FIRST so createSession returns the real piSessionPath,
-          // then persist the row via spawnAndCreate → createFromAgent(path).
+          // then persist the row via registry.getOrCreate.
           // NEVER pre-create the row with piSessionPath '' — history
           // (GET /:id/messages) reads that file directly and would return empty.
           const oldSessionId = ensured;
           const newSessionId = ctx.sessionRepo.newSessionId();
           await ctx.workerPool.kill(oldSessionId, 'new-command');
-          const result = await spawnAndCreate(newSessionId, agent, ctx.sessionRepo, ctx.workerPool);
+          const result = await sessionRegistry().getOrCreate(newSessionId, agent);
           if (!result) {
             throw new Error('failed to create new session worker');
           }
@@ -142,7 +143,7 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
   }
 
   // ── 4. Three-state session lifecycle ─────────────────────────────────────────
-  const ensured = await ensureSession(msg, channel, agent, ctx);
+  const ensured = await ensureSession(msg, agent, ctx);
   if (!ensured) return { handled: 'no-agent' };
   touchSession(ensured);
   subscribeReplySender(ensured, ctx);
@@ -190,83 +191,21 @@ export async function routeAndSpawn(msg: InboundMessage, ctx: RouteContext): Pro
 
 async function ensureSession(
   msg: InboundMessage,
-  channel: ChannelConfig,
   agent: AgentLike,
   ctx: RouteContext,
 ): Promise<SessionId | null> {
-  const existingId = getSessionIdByChat(msg.channelId, msg.chatId);
-
-  // State A — alive worker, reuse
-  if (existingId && ctx.workerPool.has(existingId)) {
-    return existingId;
-  }
-
-  // State B — session row exists, worker dead → respawn
-  if (existingId) {
-    const existing = ctx.sessionRepo.get(existingId);
-    if (existing) {
-      const result = await spawnAndCreate(
-        existingId,
-        agent,
-        ctx.sessionRepo,
-        ctx.workerPool,
-        existing.piSessionPath,
-      );
-      if (!result) return null;
-      setSessionMeta(existingId, {
-        agentId: agent.id,
-        channelId: msg.channelId,
-        chatId: msg.chatId,
-        lastActiveAt: Date.now(),
-      });
-      return existingId;
-    }
-  }
-
-  // State B2 — post-restart fallback: map empty but channel config has currentSessionId
-  // (private chat only: one bot → one user, so currentSessionId is unambiguous)
-  if (channel.currentSessionId) {
-    const saved = ctx.sessionRepo.get(channel.currentSessionId);
-    if (saved) {
-      const result = await spawnAndCreate(
-        channel.currentSessionId,
-        agent,
-        ctx.sessionRepo,
-        ctx.workerPool,
-        saved.piSessionPath,
-      );
-      if (result) {
-        setSessionMeta(channel.currentSessionId, {
-          agentId: agent.id,
-          channelId: msg.channelId,
-          chatId: msg.chatId,
-          lastActiveAt: Date.now(),
-        });
-        logger.info({ channelId: msg.channelId, chatId: msg.chatId, sessionId: channel.currentSessionId }, 'ensureSession: restored from channel config');
-        return channel.currentSessionId;
-      }
-    }
-  }
-
-  // State C — new session
-  const newSessionId = ctx.sessionRepo.newSessionId();
-  // Step 1: spawn placeholder (so worker is alive and pi_session_path is ready)
-  await spawnPlaceholder(newSessionId, agent, ctx.workerPool);
-  // Step 2: persist session row
-  const result = await spawnAndCreate(newSessionId, agent, ctx.sessionRepo, ctx.workerPool);
-  if (!result) {
-    // spawnAndCreate already killed the worker; nothing more to do
-    return null;
-  }
-  // Step 3: write current_session_id to channel config
-  ctx.setChannelCurrentSession(channel.id, msg.chatId, newSessionId);
-  setSessionMeta(newSessionId, {
-    agentId: agent.id,
-    channelId: msg.channelId,
-    chatId: msg.chatId,
-    lastActiveAt: Date.now(),
+  // Thin wrapper over the merged A/B/B2/C flow (task 2.6) — failure style here
+  // is null (routing returns 'no-agent' upstream); channel-config persistence
+  // goes through RouteContext.setChannelCurrentSession (memory + DB).
+  const outcome = await ensureSessionShared(msg.channelId, msg.chatId, agent, {
+    agentRepo: ctx.agentRepo,
+    sessionRepo: ctx.sessionRepo,
+    workerPool: ctx.workerPool,
+    getChannelCurrentSessionId: (channelId) => ctx.getChannelConfig(channelId)?.currentSessionId,
+    persistCurrentSession: (channelId, chatId, sessionId) =>
+      ctx.setChannelCurrentSession(channelId, chatId, sessionId),
   });
-  return newSessionId;
+  return outcome.ok ? outcome.sessionId : null;
 }
 
 /** Per-session unsubscribe functions for our reply-sender subscription.
@@ -290,15 +229,15 @@ function subscribeReplySender(sessionId: SessionId, ctx: RouteContext): void {
     setTimeout(() => subscribeReplySender(sessionId, ctx), 50);
     return;
   }
-  // Drop any previous subscription: when the worker died, the old listener is
-  // gone with it, but if a new worker reused the same sessionId before the
-  // worker entry fully cleared, we still want to bind to the live worker entry.
+  // Drop any previous subscription: when the worker died, dispose cleared the
+  // old Session's listeners; if a new worker reused the same sessionId we
+  // still want to bind to the live object (prev unsub is idempotent no-op).
   const prev = replySenders.get(sessionId);
   if (prev) {
     prev();
     replySenders.delete(sessionId);
   }
-  const unsubscribe = ctx.workerPool.subscribe(sessionId, (event) => {
+  const unsubscribe = sessionRegistry().track(sessionId).subscribe((event) => {
     if (event.kind !== 'event') return;
     const inner = (event as { event?: string }).event;
     const dto = (event as { data?: { messageId?: string; parentId?: string; content?: string; role?: string } }).data;

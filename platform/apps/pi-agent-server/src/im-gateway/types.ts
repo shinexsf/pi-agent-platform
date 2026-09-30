@@ -42,8 +42,8 @@ export interface ChatKey {
   chatId: ExternalChatId;
 }
 
-/** Builtin slash command identifiers (kept server-side, not channel-specific). */
-export type BuiltinCommand = 'help' | 'new' | 'session' | 'model' | 'think' | 'compact' | 'name' | 'hotkeys';
+/** Builtin slash command identifiers — moved to src/slash-commands.ts (core layer). */
+export type { BuiltinCommand } from '../slash-commands.js';
 
 /** A slash command declared by a channel package (extensible). */
 export interface ChannelCommand {

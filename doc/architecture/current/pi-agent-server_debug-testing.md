@@ -55,7 +55,7 @@ mount 在 `apps/pi-agent-server/src/im-gateway/routes/im-gateway.ts`：
 | `GET /api/sessions/:id/context` | http-api | 含 `systemPrompt: {text, length, source}` 字段（016+）—— **直接看 model 看到的 system prompt** |
 | `GET /api/sessions/:id/messages` | http-api | master 直接读 jsonl 文件（不走 IPC），**看 history 持久化** |
 | `GET /api/sessions/:id/events` | events router | SSE 流，**看实时事件** |
-| `POST /api/sessions/:id/prompt` | http-api | 触发 prompt + spawnAndCreate |
+| `POST /api/sessions/:id/prompt` | http-api | 触发 prompt + `sessionRegistry().getOrCreate` |
 
 ### Worker IPC（已加的 debug 能力）
 
@@ -106,21 +106,20 @@ if (config.isDev) {
 
 ### 4. 不影响主路径性能
 
-016 经验：systemPrompt 是 10K+ 字符，每次 `GET /:id/context` 都 IPC 拉一遍会拖慢上下文加载。**约定**：大字段必须在 worker spawn 完成后立即 `cacheXxx()` 缓存到 `WorkerEntry`，`/:id/context` 从 entry 读，不走 IPC。
+016 经验：systemPrompt 是 10K+ 字符，每次 `GET /:id/context` 都 IPC 拉一遍会拖慢上下文加载。**约定**：大字段必须在 worker spawn 完成后立即 `cacheXxx()` 缓存到 **Session 对象**（`services/session.ts`），`/:id/context` 从 Session 读，不走 IPC。
 
 ```ts
-// apps/pi-agent-server/src/worker-pool.ts:60-65 + 425-444
-export interface WorkerEntry {
+// apps/pi-agent-server/src/services/session.ts — Session 拥有领域缓存字段
+export class Session {
   // ...
-  /** Cached system prompt (set after createSession IPC returns). Avoids re-fetching the
-   *  full system prompt string over IPC for every `GET /:id/context` call. */
-  systemPrompt?: { text: string; length: number; source: 'override' | 'default' };
+  /** Cached system prompt (set after createSession IPC returns). */
+  systemPrompt: { text: string; length: number; source: 'override' | 'default' } | null = null;
 }
 
-setSystemPrompt(sessionId, systemPrompt): void { /* cache on entry */ }
+// spawn 后：const sp = await pool.call(id, 'getSystemPrompt', []); if (sp) session.systemPrompt = sp;
 ```
 
-**模式**：worker `createSession` 之后 → 调 `cacheXxx()` → entry.xxx 字段立即可用 → debug / 业务端点直接读 entry。
+**模式**：worker `createSession` 之后 → 调 `cacheXxx()` → Session 字段立即可用 → debug / 业务端点直接经 `sessionRegistry().get(id)` 读，不走 IPC（WorkerEntry 不再持领域字段）。
 
 ### 5. debug 端点不写 unit tests
 
@@ -258,8 +257,8 @@ curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 
 ## 相关 dev-journal
 
-- [dev-journal 010: IM Gateway 调通](../dev-journal/2026-08-28_im-gateway-debug-and-real-flow.md) —— "debug 接口是开发期必备 — 比每次手动改 server 状态验证快很多"
-- [dev-journal 015: worker 不加载 AGENTS.md](../dev-journal/2026-08-29_worker-agents-md-reload.md) —— "debug 接口盲区" 引出 016
-- [dev-journal 016: worker 接管 systemPrompt + debug 接口](../dev-journal/2026-08-30_custom-systemprompt-takeover.md) —— `/:id/context.systemPrompt` debug 接口设计
+- [dev-journal 010: IM Gateway 调通](../../dev-journal/2026-08-28_im-gateway-debug-and-real-flow.md) —— "debug 接口是开发期必备 — 比每次手动改 server 状态验证快很多"
+- [dev-journal 015: worker 不加载 AGENTS.md](../../dev-journal/2026-08-29_worker-agents-md-reload.md) —— "debug 接口盲区" 引出 016
+- [dev-journal 016: worker 接管 systemPrompt + debug 接口](../../dev-journal/2026-08-30_custom-systemprompt-takeover.md) —— `/:id/context.systemPrompt` debug 接口设计
 
 ## 关联决策

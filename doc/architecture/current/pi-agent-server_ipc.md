@@ -28,6 +28,21 @@
 
 **master→worker method** 直接是 pi SDK API（`prompt` / `setModel` / `abort` / `setSessionName` / 等）。
 
+三通道总览（一个 worker 的完整双向通信）：
+
+```mermaid
+sequenceDiagram
+    participant M as master WorkerPool
+    participant W as worker AgentSession
+    M->>W: call createSession / prompt / setModel（pendingCalls 挂起）
+    W-->>M: response ok 或 error（30s 超时）
+    W->>M: event message_update / agent_end / session_info_changed
+    Note over M: emit session_event → Session 分发 → SSE 订阅者<br/>session_info_changed 单独回流写 sessions.title 不进 SSE
+    W->>M: reverse-call sendFileToUser / invokeCapability
+    M->>M: registerReverseCallHandler 查表分发（未注册返错误）
+    M->>W: reverse-response ok 或 error
+```
+
 **worker→master method** 是自定义的 `ReverseMethod`（`'sendFileToUser'` + `'invokeCapability'`——后者的 args 契约 `[method, params?]`，是 agent 管理 server 能力的统一入口，全部业务方法从这一个反向方法过，见 [`capabilities`](pi-agent-server_capabilities.md)）。
 
 ## Master 端：AgentSessionProxy

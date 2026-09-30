@@ -1,7 +1,7 @@
 # pi-agent-server im-gateway
 
 > IM 网关模块架构。允许用户通过 QQ / 微信等 IM 平台跟 agent 对话。
-> 状态:**架构设计定稿,实施中**(openspec change `im-gateway`)。
+> 状态:**已实施**（QQ + 微信真实收发 / 23 条 API / 重启恢复与附件实测通过）。
 
 ## 系统全景图
 
@@ -18,9 +18,10 @@ flowchart TB
         HostImpl["channel-host-impl.ts<br/>ChannelHost 实现"]
         Map["session-channel-map.ts<br/>Map&lt;sessionId, ChannelCtx&gt;"]
         Routing["routing.ts<br/>3 态决策 + /new"]
-        Bridge["session-bridge.ts<br/>调 worker pool IPC"]
+        EnsSess["ensure-session.ts<br/>A/B/B2/C 四态共享绑定流"]
+        SessReg["services/session.ts<br/>SessionRegistry 单入口（跨模块）"]
         Reply["reply-sender.ts<br/>订阅 message_end"]
-        Slash["slash-commands/<br/>/help /new /session /model /think /compact"]
+        Slash["slash-commands.ts（src/ 根）<br/>门级 /help /new /session /hotkeys"]
         Routes["routes/im-gateway.ts<br/>/api/im/{manifest,health,channels}"]
     end
 
@@ -57,13 +58,15 @@ flowchart TB
     Loader --> HostImpl
     HostImpl --> Map
     HostImpl --> Routing
-    Routing --> Bridge
-    Bridge --> Worker
+    HostImpl --> EnsSess
+    Routing --> EnsSess
+    EnsSess --> SessReg
+    SessReg --> Worker
     SendFileTool -->|IPC| SendFile
     Worker -->|message_end| Reply
     Reply --> HostImpl
     Reply --> HostImpl
-    Slash --> Bridge
+    Slash --> SessReg
     Routes --> HostImpl
 
     Glob --> AdminUI
@@ -151,7 +154,7 @@ QQ 渠道(9 条,与微信同模板,渠道包自挂 /api/im/qq/*):
 
 > **MVP 简化**:**bindings 4 条路由 MVP 不暴露**(群聊 / per-chat binding 推迟到下个 change)。QQ 渠道 MVP 只走"单 channel 单 agent"模式(用 `defaultAgentId`),不暴露 bindings 子表路由。完整 11+ 条在群聊支持时再加。
 
-> **斜杠命令变更**(2026-09-16):`POST /:id/command` 现在调 `runBuiltinCommand()`(统一入口),命令名对齐 IM 端(`think` 替代 `thinking`,保留 alias)。新增 `name`、`hotkeys` 命令。
+> **斜杠命令分层**(2026-09-30):会话级命令（`/model` `/think` `/compact` `/name`）经 `Session.executeCommand(name, args, 'zh')` 单实现（IPC + Session 缓存 + 必要时落行；文本中文）；门级命令（`/new` `/session` `/help` `/hotkeys`——决定“用哪个会话”或纯展示）留本层 `slash-commands.ts`；非 builtin 仍 fallthrough 给 agent prompt。`POST /:id/command`（HTTP 面）同一 `executeCommand`（en 文案）→ worker 二级分发。
 
 ## sendFileToWorker 工具（已实施）
 
@@ -224,13 +227,13 @@ IM session 不再有独立的空闲超时机制（已删除 im-idle-scanner）�
 
 `session-channel-map` 是内存 Map，重启即丢失。`channels_qq.current_session_id` 存了 sessionId 但没存 chatId，`seedSessionFromConfig` 传 chatId=undefined 导致 map key 不匹配（`channelId+''` vs `channelId+openId`）。
 
-**解决方案**：`ensureSession`（routing.ts 版本）加 State B2 fallback：
+**解决方案**：`ensureSession` 四态（A/B/B2/C）收进 **`im-gateway/ensure-session.ts` 共享实现**，routing.ts 与 channel-host-impl.ts 两个薄壳委托（前者失败返 null，后者 throw；State C 统一 memory+DB 持久化——旧 host 版只写内存，附件流会话重启后 B2 会丢绑定）：
 ```
-ensureSession(channelId, chatId):
+ensureSessionShared(channelId, chatId, agent, deps):
   A. map 命中 + worker 活着 → 复用
-  B. map 命中 + worker 死了 → respawn
-  B2. map 没命中 + cfg.currentSessionId 有值 + session 存在 → respawn + 绑定当前 chatId  ← 新增
-  C. 都不满足 → 创建新 session
+  B. map 命中 + worker 死了 → respawn（registry.getOrCreate）
+  B2. map 没命中 + cfg.currentSessionId 有值 + session 存在 → respawn + 绑定当前 chatId
+  C. 都不满足 → 创建新 session（createFromAgent + getOrCreate）+ 持久化绑定
 ```
 
 **假设**：一个 bot 对一个用户（私聊场景）。多用户场景需重新设计（加 chatId 列或独立映射表）。
@@ -256,7 +259,7 @@ ensureSession(channelId, chatId):
 | D15 | web 加载机制 | `import.meta.glob`(不用模板字符串 import) |
 | D16 | IM session timeout | 30 分钟,内存 Map,kill worker 留 row |
 | D17 | web 顶部菜单 | Agents / Sessions / QQ / WeChat Channel,数据驱动(meta.navLabel) |
-| D18 | prompt-resolver 位置 | 独立文件,不塞 session-bridge |
+| D18 | prompt-resolver 位置 | 独立文件（`src/prompt-resolver.ts`） |
 | D19 | adapter 附件处理 | adapter 下载 + host.uploadAttachment + 占位符 |
 | D20 | attachment MIME | 移除白名单,支持所有类型 |
 | D21 | 非图片附件呈现 | `<file path>` 标签,agent 主动 read |
@@ -265,25 +268,23 @@ ensureSession(channelId, chatId):
 | D24 | 重启会话恢复 | ensureSession B2 fallback: cfg.currentSessionId → respawn |
 | D25 | QQ 原始文件名 | 用 QQ API 的 `att.filename` 字段 |
 
-完整决策见 `openspec/changes/im-gateway/design.md`(955 行,16 个 D)。
+## 子模块架构索引
 
-## 子模块架构索引(指向 openspec specs/)
-
-IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
+IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护(工作流产物已归档,不引用路径):
 
 | Capability | Spec |
 |---|---|
-| 整体框架 + manifest 加载 | [`specs/im-gateway-overview/`](../../openspec/changes/im-gateway/specs/im-gateway-overview/spec.md) |
-| 5 个共享接口 | [`specs/channel-types-package/`](../../openspec/changes/im-gateway/specs/channel-types-package/spec.md) |
-| ChannelAdapter 实现规范 | [`specs/im-gateway-channel-adapter/`](../../openspec/changes/im-gateway/specs/im-gateway-channel-adapter/spec.md) |
-| worker pool 桥接 | [`specs/im-gateway-session-bridge/`](../../openspec/changes/im-gateway/specs/im-gateway-session-bridge/spec.md) |
-| 路由 + 三态 + /new | [`specs/im-gateway-routing-policy/`](../../openspec/changes/im-gateway/specs/im-gateway-routing-policy/spec.md) |
-| 微信渠道实现 | [`specs/wechat-channel/`](../../openspec/changes/im-gateway/specs/wechat-channel/spec.md) |
-| QQ 渠道实现 | [`specs/qq-channel/`](../../openspec/changes/im-gateway/specs/qq-channel/spec.md) |
+| 整体框架 + manifest 加载 | `im-gateway-overview` |
+| 5 个共享接口 | `channel-types-package` |
+| ChannelAdapter 实现规范 | `im-gateway-channel-adapter` |
+| worker pool 桥接 | `im-gateway-session-bridge` |
+| 路由 + 三态 + /new | `im-gateway-routing-policy` |
+| 微信渠道实现 | `wechat-channel` |
+| QQ 渠道实现 | `qq-channel` |
 | sendFileToWorker 工具 | **已实施**（反向 IPC + customTools 注入 + QQ/WeChat 真实发送） |
-| 渠道指令注入 | [`specs/channel-system-prompt-injection/`](../../openspec/changes/im-gateway/specs/channel-system-prompt-injection/spec.md) |
-| 斜杠命令 | [`specs/chat-slash-commands/`](../../openspec/changes/im-gateway/specs/chat-slash-commands/spec.md) |
-| Web 管理 UI | [`specs/im-gateway-admin-ui/`](../../openspec/changes/im-gateway/specs/im-gateway-admin-ui/spec.md) |
+| 渠道指令注入 | `channel-system-prompt-injection` |
+| 斜杠命令 | `chat-slash-commands` |
+| Web 管理 UI | `im-gateway-admin-ui` |
 
 ## 待决项
 
@@ -304,12 +305,9 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护:
 
 ## 相关决策
 
-- [`doc/architecture/current/pi-agent-server_overview.md`](pi-agent-server_overview.md) — IM 渠道从"⏸️ 待实现"升级为"✅ 已设计,实施中"
+- [`doc/architecture/current/pi-agent-server_overview.md`](pi-agent-server_overview.md) — 系统全景（IM 渠道已实施）
 - [`doc/architecture/current/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度
 - [`doc/architecture/current/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机
 - [`doc/architecture/current/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
-- [`doc/architecture/current/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 待补充"主包零渠道知识"硬约束
-- [`openspec/changes/im-gateway/proposal.md`](../../openspec/changes/im-gateway/proposal.md) — 提案(163 行)
-- [`openspec/changes/im-gateway/design.md`](../../openspec/changes/im-gateway/design.md) — 设计(955 行,16 个 D)
-- [`openspec/changes/im-gateway/tasks.md`](../../openspec/changes/im-gateway/tasks.md) — 实施任务(65 个)
-- [`openspec/changes/im-gateway/notes/im-gateway-research.md`](../../openspec/changes/im-gateway/notes/im-gateway-research.md) — 调研笔记
+- [`doc/architecture/current/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 架构 hard rules（含“主包零渠道知识”硬约束，见 `## IM 网关主包零渠道知识`）
+- OpenSpec change `im-gateway`（工作流产物已归档，不引用路径）— 提案 163 行 / 设计 955 行 16 个 D / 实施任务 65 个 / 调研笔记

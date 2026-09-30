@@ -2,6 +2,46 @@
 
 > DB Schema。SQLite + drizzle ORM。
 
+```mermaid
+erDiagram
+    AGENTS ||--o{ SESSIONS : creates
+    SESSIONS ||--o{ ATTACHMENTS : owns
+    AGENTS {
+        string id PK
+        string name
+        string workspace_path
+        string model
+        string thinking_level
+        string config
+        integer created_at
+        integer updated_at
+    }
+    SESSIONS {
+        string id PK
+        string agent_id FK
+        string model
+        string thinking_level
+        string config
+        string pi_session_path
+        string status
+        string title
+        integer created_at
+        integer last_active_at
+    }
+    ATTACHMENTS {
+        string session_id FK
+        string sha PK
+        string id
+        string mime_type
+        string filename
+        integer size_bytes
+    }
+```
+
+- `sessions.config` 是 `agents.config` 的**完全快照**（创建时复制，生命周期不回读 agent——唯一例外：capabilities 缺 key 回落）
+- `pi_session_path` 指向 pi jsonl 历史文件（master 直读，worker 死了也能查）
+- IM 渠道表（`channels_wechat` / `channels_qq`）由渠道包自管 DDL，主包零渠道 SQL（见下）
+
 ## agents 表
 
 ```sql

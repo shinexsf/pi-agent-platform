@@ -261,4 +261,4 @@ function useTheme() {
 - [`pi-agent-server_overview.md`](pi-agent-server_overview.md) —— server 端架构
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— HTTP API 路由
 - [`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md) —— IM 渠道包（后端+前端一体化）
-- `openspec/changes/responsive-web-layout/` —— 本次重构的完整设计文档（proposal/design/tasks/specs）
+- OpenSpec change `responsive-web-layout`（本地工作流产物，不引用路径）—— 本次重构的完整设计文档（proposal/design/tasks/specs）

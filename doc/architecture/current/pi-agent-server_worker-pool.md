@@ -1,7 +1,7 @@
 # pi-agent-server worker-pool
 
 > Worker Pool 架构。master 通过 `child_process.spawn` 管理 N 个 worker 子进程。
-> v2：hasRow + LRU + MAX_WORKERS。
+> v2：LRU + MAX_WORKERS。**进程域 only**：领域状态（hasRow/model/…）归 Session；pool 只管 spawn/kill/IPC/事件转发，placeholder 判据经注入回调。
 
 ## 进程模型
 
@@ -37,19 +37,20 @@ scanner: kill placeholder worker（hasRow=false）
   ↓
 [客户端发 POST /api/sessions/:id/prompt]
   ↓
-master: spawnAndCreate → INSERT sessions + markRowWritten
+master: sessionRegistry().getOrCreate → INSERT sessions + Session.hasRow = true
   ↓
 [继续 prompt / steer / followUp]
   ↓
-[事件流] session.subscribe → worker → IPC → master → SSE → 客户端
-         （`session_info_changed` 由 master 内部消费写 sessions.title，不进 SSE）
+[事件流] Session.subscribe → pool emit('session_event') → Session 分发 → SSE → 客户端
+         （`session_info_changed` 由 master 内部消费写 sessions.title，不进 SSE；
+          worker 死 → registry.dispose → SSE 收 `session_disposed` 关流重连）
 
 [用户/IDE 关 tab 或 master 退出]
   ↓
 master: worker.dispose() → worker 进程退出（**sessions row 保留**，status 字段不变）
 ```
 
-## WorkerEntry metadata（v2 新增）
+## WorkerEntry（只含进程事实）
 
 ```typescript
 export interface WorkerEntry {
@@ -61,22 +62,16 @@ export interface WorkerEntry {
   spawnTime: number;
   readyTimer: NodeJS.Timeout | null;
   pendingCalls: Map<...>;
-  eventListeners: Array<...>;
-  /** True once the session has been persisted to the DB (first prompt wrote the row).
-   *  Active sessions are never auto-killed; placeholder workers (`hasRow=false`)
-   *  participate in the 5-minute placeholder timeout and LRU eviction. */
-  hasRow: boolean;
-  /** Agent this session belongs to — set at spawn time by session-bridge. Needed by
-   *  the capability control plane: placeholder sessions have NO sessions row, so
-   *  ctx.agentId would otherwise be unresolved (allowlist / own checks fail closed). */
-  agentId?: string;
+  // 领域状态（hasRow / model / thinkingLevel / sessionName /
+  // systemPrompt / piSessionPath / agentId）已迁移到 Session
+  // （services/session.ts）——WorkerEntry 不再持有任何领域字段
 }
 ```
 
 **关键不变量**：
 - `spawnTime` 在 `spawn()` 设一次（用于 placeholder timeout + LRU）
-- `hasRow` 默认 `false`，由 `markRowWritten(sessionId)` 在 `spawnAndCreate` 末尾设 `true`
-- `hasRow=false` 的 worker：
+- **是否 placeholder 由注入回调回答**：`workerPool.setHasRowQuery(fn)` 在 `initSessionRegistry` 接线，回源 `Session.hasRow`——pool 不 import Session（依赖方向保持 Session → pool）
+- `hasRow=false`（placeholder）的 worker：
   - 走 `placeholderTimeoutMs`（默认 5 分钟）超时被 scanner 杀
   - 可被 LRU 回收（worker pool 满时）
 - `hasRow=true` 的 worker：
@@ -108,7 +103,7 @@ class WorkerPool {
     let oldestId: string | null = null;
     let oldestTime = Infinity;
     for (const [id, e] of this.workers) {
-      if (!e.hasRow && e.spawnTime < oldestTime) {
+      if (!this.hasRowQuery(id) && e.spawnTime < oldestTime) {  // 注入回调，回源 Session.hasRow
         oldestTime = e.spawnTime;
         oldestId = id;
       }
@@ -118,9 +113,8 @@ class WorkerPool {
     return oldestId;
   }
 
-  markRowWritten(sessionId: string): void {
-    const entry = this.workers.get(sessionId);
-    if (entry) entry.hasRow = true;
+  setHasRowQuery(fn: (sessionId: string) => boolean): void {
+    this.hasRowQuery = fn;   // initSessionRegistry 接线：id => Session.hasRow
   }
 }
 ```
@@ -176,13 +170,45 @@ workerPool.registerReverseCallHandler('sendFileToUser', async (sessionId, args) 
 
 Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（30s 超时）。
 
+## 事件转发与订阅（2026-09-30 反转）
+
+pool **不再持 listener**（旧的 `subscribe()` / `pendingListeners` 缓冲 / tryAttach 定时器 / 死亡转移机制已删除）：
+
+```typescript
+// wireUpHandlers 的 message 分支：只转发
+this.emit('session_event', sessionId, event);   // SessionRegistry 单监听 → 分发给 Session.deliver
+
+// exit 分支：emit('crash') → registry.dispose(sessionId, 'worker-death')
+//            → 通知并清空订阅者 → SSE 写 session_disposed 并关流（客户端自动重连）
+```
+
+- Session 对象在 spawn **前**创建（对象保证覆盖 worker 存活期），listener 住对象上——预订阅事件无需缓冲
+- registry 只挂**一个** `session_event` 监听（避免 EventEmitter maxListeners 告警）
+
+```mermaid
+flowchart LR
+    subgraph REG["SessionRegistry（services/session.ts）"]
+        GO["getOrCreate / createFromAgent<br/>spawn 前先建 Session 对象"]
+        DISP["dispose(id, reason)<br/>通知并清空订阅者"]
+    end
+    GO --> POOL["WorkerPool.spawn<br/>容量满 → evict 最老无行者（hasRowQuery 判据）"]
+    POOL --> WRK["worker 子进程<br/>IPC call ↔ response（pendingCalls）"]
+    WRK -->|"event 消息"| EMIT["pool emit session_event（只转发 不持 listener）"]
+    EMIT --> FAN["registry 单监听 → Session.deliver"]
+    FAN --> SUB["订阅者：SSE / IM reply-sender"]
+    WRK -->|"exit（close / 崩溃 / 超时 / LRU）"| CRASH["emit crash"]
+    CRASH --> DISP
+    DISP --> SSEC["SSE 收 session_disposed → 关流<br/>→ 客户端 EventSource 自动重连挂新对象"]
+```
+
 ## 关键边界
 
 | 谁负责 | |
 |---|---|
-| **master** | spawn / IPC / 路由 / DB 持久化 / 超时扫描 / 反向调用分发 |
-| **worker** | pi SDK 调用 / 事件订阅 / 历史管理 / 默认工具（sendFileToUser 等） |
-| **不存在的边界** | "worker 状态"持久化到 DB |
+| **master** | spawn / IPC / 路由 / 超时扫描 / 反向调用分发（进程域）|
+| **Session（services/session）** | 领域状态 / 事件订阅分发 / dispose 终态通知 / 领域命令执行 |
+| **worker** | pi SDK 调用 / 事件产生 / 历史管理 / 默认工具（sendFileToUser 等） |
+| **不存在的边界** | "worker 状态"持久化到 DB；pool 持领域字段或 listener |
 
 ## 崩溃处理
 
@@ -194,6 +220,8 @@ worker 崩溃后**不自动重启**。处理流程：
 master: worker.on('exit', code) 事件触发
   ↓
 master: 从 Map 删除 workerId / sessionId
+  ↓
+registry.dispose(sessionId, 'worker-death')（事件经 'crash' 触发：通知并清空订阅者，SSE 关流重连）
   ↓
 master: sessions.status = 'archived'（不区分超时 / 崩溃）
   ↓
@@ -228,7 +256,7 @@ const child = spawn(process.execPath, nodeArgs, {
 });
 ```
 
-**调用方**：`spawnAndCreate` 传 `agent.workspacePath`。
+**调用方**：`services/session.ts` 的私有 spawn 实现（经 `sessionRegistry()`）传 `agent.workspacePath`。
 
 **为什么不影响模块解析**：
 - 入口文件 `WORKER_ENTRY` 是绝对路径（master 解析时用 `path.resolve`）

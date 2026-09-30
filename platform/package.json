@@ -20,5 +20,9 @@
     "node": ">=22.0.0",
     "pnpm": ">=11.0.0"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@11.22.0",
+  "devDependencies": {
+    "jsdom": "^30.1.1",
+    "mermaid": "^12.0.0"
+  }
 }

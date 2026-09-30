@@ -29,8 +29,8 @@ import {
 } from './session-channel-map.js';
 import { routeAndSpawn, type RouteContext } from './routing.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
-import { runBuiltinCommand } from './slash-commands.js';
-import { spawnAndCreate } from './session-bridge.js';
+import { runBuiltinCommand } from '../slash-commands.js';
+import { sessionRegistry } from '../services/session.js';
 import type { ChannelHost } from '@pi-agent-platform/channel-types';
 
 // onMessageEnd/onMessageUpdate are imported but used only transitively (via routing.ts).
@@ -113,7 +113,7 @@ export async function startImGateway(deps: ImGatewayDeps): Promise<ImGatewayHand
 
             const newSessionId = deps.sessionRepo.newSessionId();
             await deps.workerPool.kill(oldSessionId, 'new-command');
-            const result = await spawnAndCreate(newSessionId, agent, deps.sessionRepo, deps.workerPool);
+            const result = await sessionRegistry().getOrCreate(newSessionId, agent);
             if (!result) throw new Error('failed to create new session worker');
 
             // Rebind chat → new session (memory + DB), mirroring routing.ts.

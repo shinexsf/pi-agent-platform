@@ -27,6 +27,52 @@
   - **不引入** `crashed` / `broken` 等额外状态
   - 区别超时 vs 崩溃：靠日志，不靠 schema
 
+## Session 服务层（2026-09-30 新增）
+
+- **spawn/复活唯一入口 = `SessionRegistry`**（`services/session.ts` 的 `getOrCreate` / `createFromAgent`）
+  - `spawnPlaceholder` / `spawnAndCreate` 是模块私有实现，routes / capabilities / im-gateway **不得绕过 registry 直接 spawn**
+  - 并发首次调用共享同一 inflight promise；失败不缓存
+- **领域状态归 `Session` 对象**（hasRow / model / thinkingLevel / sessionName / systemPrompt / piSessionPath / agentId）
+  - `WorkerEntry` 只剩进程事实（child / pid / stderrTail / ready / spawnTime / pendingCalls）
+  - worker-pool **不得 import `services/session`**——“是否 placeholder” 用注入回调（`setHasRowQuery`）回答
+  - WorkerPool 不再导出领域 setter（setModel / markRowWritten 等已删除）
+- **事件订阅归 `Session`；pool 只转发**
+  - pool 只 `emit('session_event', sessionId, event)`；registry 单监听分发（不 per-session 挂 pool 监听）
+  - listener 不得搬回 pool（pendingListeners / 死亡转移机制已废除）
+- **Session 对象生命周期 = worker 生命周期**
+  - 对象在 spawn 前创建；任何 worker exit（'crash' 事件）→ `dispose` → **通知并清空订阅者**（SSE 发 `session_disposed` 关流，客户端重连）
+  - 对象从不跨 worker 死亡；持久身份只在 DB 行
+- **核心代码不得 import `im-gateway/`**
+  - session-bridge 时代 3 处反向依赖（routes / capabilities / prompt-resolver → im-gateway）的教训；`slash-commands` 已上移 `src/` 根且零 channel-types 依赖
+
+依赖方向全景（实线 = import；虚线 = 回调/事件注入，不构成 import 反向）：
+
+```mermaid
+flowchart TB
+    subgraph L1["消费层（只准向下）"]
+        R1["routes/sessions · events"]
+        R2["im-gateway（routing / host / ensure-session）"]
+        R3["capabilities/handlers"]
+    end
+    subgraph L2["核心服务层"]
+        SR["SessionRegistry + Session<br/>services/session.ts"]
+        SUP["支撑：prompt-resolver / slash-commands /<br/>attachment-store / session-ops / repos"]
+    end
+    subgraph L3["进程域"]
+        WP["worker-pool<br/>spawn / kill / IPC / session_event 转发"]
+    end
+    R1 --> SR
+    R2 --> SR
+    R3 --> SR
+    R1 --> WP
+    SR --> SUP
+    SR --> WP
+    WP -.->|"hasRowQuery 回调注入<br/>（pool 不 import Session）"| SR
+    style R2 fill:#1a3a1a
+```
+
+禁止方向（违者 = 动架构）：L2/L3 → L1（核心 import im-gateway）；worker-pool → support；支撑服务 → 消费层。
+
 ## Worker 进程管理
 
 - **worker 崩溃 → 直接退出，不自动重启**

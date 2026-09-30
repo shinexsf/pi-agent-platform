@@ -15,8 +15,7 @@ import path from 'node:path';
 import type { SessionRepo } from './repos/session.repo.js';
 import type { AgentRepo } from './repos/agent.repo.js';
 import type { AttachmentStore } from './services/attachment-store.js';
-import { runBuiltinCommand } from './im-gateway/slash-commands.js';
-import type { SessionId } from '@pi-agent-platform/channel-types';
+import { runBuiltinCommand } from './slash-commands.js';
 import { childLogger } from './logger.js';
 
 const logger = childLogger('prompt-resolver');
@@ -39,7 +38,7 @@ export interface ResolvePromptOpts {
     setModel?: (model: string) => Promise<void>;
     setThinkingLevel?: (level: 'off' | 'low' | 'medium' | 'high') => Promise<void>;
     compact?: () => Promise<void>;
-    startNewSession: () => Promise<{ sessionId: SessionId }>;
+    startNewSession: () => Promise<{ sessionId: string }>;
     setTitle?: (title: string) => Promise<void>;
   };
 }
@@ -82,7 +81,7 @@ export async function resolvePrompt(
     const args = space === -1 ? '' : trimmed.slice(space + 1).trim();
 
     const reply = await runBuiltinCommand(cmdName, {
-      sessionId: sessionId as SessionId,
+      sessionId,
       args,
       ctx: opts.slashCtx,
     });

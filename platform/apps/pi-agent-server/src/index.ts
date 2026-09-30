@@ -12,6 +12,7 @@ import { logger } from './logger.js';
 import { initDb } from './db/init.js';
 import { createAgentRepo } from './repos/agent.repo.js';
 import { createSessionRepo } from './repos/session.repo.js';
+import { initSessionRegistry } from './services/session.js';
 import { workerPool } from './worker-pool.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createSessionsRouter } from './routes/sessions.js';
@@ -57,6 +58,10 @@ async function main() {
   const sessionRepo = createSessionRepo(db);
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
+  // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
+  // Must init BEFORE any consumer (routes / im-gateway / capabilities) handles a request.
+  initSessionRegistry({ sessionRepo, agentRepo, workerPool });
+
   const app = new Hono();
 
   // Static dirs (mounted before API routes so /api/* still takes precedence by exact match).
@@ -73,7 +78,7 @@ async function main() {
   app.get('/api/models', async (c) => c.json(await listAvailableModels()));
   app.route('/api/agents', createAgentsRouter(agentRepo, sessionRepo, workerPool, attachmentStore));
   app.route('/api/sessions', createSessionsRouter(agentRepo, sessionRepo, workerPool, attachmentStore));
-  app.route('/api/sessions', createEventsRouter(workerPool));
+  app.route('/api/sessions', createEventsRouter());
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
   app.route('/api/config', createConfigRouter(config));
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）

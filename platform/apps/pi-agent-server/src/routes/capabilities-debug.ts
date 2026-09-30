@@ -17,6 +17,7 @@ import type { WorkerPool } from '../worker-pool.js';
 import { CAPABILITY_MODULES, listCapabilities, availableMethods } from '../capabilities/registry.js';
 import { DEFAULT_POLICY } from '../capabilities/authorize.js';
 import { dispatchWithCtx } from '../capabilities/index.js';
+import { sessionRegistry } from '../services/session.js';
 
 export function createCapabilityDebugRouter(agentRepo: AgentRepo, sessionRepo: SessionRepo, workerPool: WorkerPool) {
   const router = new Hono();
@@ -67,7 +68,7 @@ export function createCapabilityDebugRouter(agentRepo: AgentRepo, sessionRepo: S
     const session = body.sessionId ? sessionRepo.get(body.sessionId) : undefined;
     const ctx = {
       sessionId: body.sessionId ?? `debug:${body.agentId ?? 'anonymous'}`,
-      agentId: session?.agentId ?? (body.sessionId ? workerPool.get(body.sessionId)?.agentId : undefined) ?? body.agentId,
+      agentId: session?.agentId ?? (body.sessionId ? sessionRegistry().get(body.sessionId)?.agentId : undefined) ?? body.agentId,
     };
 
     try {

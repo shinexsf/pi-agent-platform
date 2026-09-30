@@ -27,7 +27,7 @@ export interface SessionOpsDeps {
  *   synchronously BEFORE the IPC response, so the DB row is already updated
  *   by the master event回流 (index.ts) when this await returns — single write path:
  *   title present ⟺ the event bridge works.
- * - worker dead or IPC failure → direct DB write; heal on next load (session-bridge)
+ * - worker dead or IPC failure → direct DB write; heal on next load (services/session)
  *   converges the pi side (DB wins).
  *
  * `title === undefined` clears the title.

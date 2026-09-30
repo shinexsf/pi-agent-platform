@@ -38,6 +38,8 @@ import {
 } from './session-channel-map.js';
 import type { InboundMessage } from '@pi-agent-platform/channel-types';
 import type { RouteContext } from './routing.js';
+import { sessionRegistry } from '../services/session.js';
+import { ensureSessionShared } from './ensure-session.js';
 
 interface Deps {
   /** Resolve agent by id (channel package needs this to validate defaultAgentId). */
@@ -222,7 +224,8 @@ export function createChannelHostImpl(deps: Deps) {
       logger.debug({ channelId, chatId }, '[SESSION-DIAG] ensureSession called');
       const existingId = mapGetSessionIdByChat(channelId, chatId);
 
-      // State A — alive worker, reuse
+      // State A — alive worker, reuse. Checked BEFORE cfg/agent resolution so a
+      // live binding survives config edits (preserves the original ordering).
       if (existingId && deps.workerPool.has(existingId)) {
         return existingId;
       }
@@ -236,70 +239,30 @@ export function createChannelHostImpl(deps: Deps) {
         throw new Error(`ensureSession: agent ${cfg.defaultAgentId} not found`);
       }
 
-      // State B — session row exists, worker dead → respawn
-      if (existingId) {
-        const existing = deps.sessionRepo.get(existingId);
-        if (existing) {
-          const { spawnAndCreate } = await import('./session-bridge.js');
-          const result = await spawnAndCreate(
-            existingId,
-            agent,
-            deps.sessionRepo,
-            deps.workerPool,
-            existing.piSessionPath,
+      // States B/B2/C — merged flow (task 2.6); failure style here: throw.
+      // State C persists memory + DB (routing's semantics) so B2 revival after
+      // restart works for attachment-flow sessions too — the former version only
+      // updated memory, losing the binding on restart.
+      const outcome = await ensureSessionShared(channelId, chatId, agent, {
+        agentRepo: deps.agentRepo,
+        sessionRepo: deps.sessionRepo,
+        workerPool: deps.workerPool,
+        getChannelCurrentSessionId: (cid) => this.getChannelConfig(cid)?.currentSessionId,
+        persistCurrentSession: (cid, chat, sid) => {
+          this.setCurrentSession(cid, chat, sid);
+          deps.db.exec(
+            `UPDATE channels_${cfg.type} SET current_session_id = '${sid}', updated_at = ${Date.now()} WHERE id = '${cid}'`,
           );
-          if (!result) throw new Error(`ensureSession: respawn failed for ${existingId}`);
-          setSessionMeta(existingId, {
-            agentId: agent.id,
-            channelId,
-            chatId,
-            lastActiveAt: Date.now(),
-          });
-          return existingId;
-        }
-      }
-
-      // State B2 — post-restart fallback: map empty but channel config has currentSessionId
-      // (private chat only: one bot → one user, so currentSessionId is unambiguous)
-      logger.debug({ currentSessionId: cfg.currentSessionId }, '[SESSION-DIAG] B2 check');
-      if (cfg.currentSessionId) {
-        const savedSession = deps.sessionRepo.get(cfg.currentSessionId);
-        if (savedSession) {
-          const { spawnAndCreate } = await import('./session-bridge.js');
-          const result = await spawnAndCreate(
-            cfg.currentSessionId,
-            agent,
-            deps.sessionRepo,
-            deps.workerPool,
-            savedSession.piSessionPath,
-          );
-          if (result) {
-            setSessionMeta(cfg.currentSessionId, {
-              agentId: agent.id,
-              channelId,
-              chatId,
-              lastActiveAt: Date.now(),
-            });
-            logger.info({ channelId, chatId, sessionId: cfg.currentSessionId }, 'ensureSession: restored from channel config');
-            return cfg.currentSessionId;
-          }
-        }
-      }
-
-      // State C — new session
-      const { spawnPlaceholder, spawnAndCreate } = await import('./session-bridge.js');
-      const newSessionId = deps.sessionRepo.newSessionId();
-      await spawnPlaceholder(newSessionId, agent, deps.workerPool);
-      const result = await spawnAndCreate(newSessionId, agent, deps.sessionRepo, deps.workerPool);
-      if (!result) throw new Error(`ensureSession: create failed for ${newSessionId}`);
-      this.setCurrentSession(channelId, chatId, newSessionId);
-      setSessionMeta(newSessionId, {
-        agentId: agent.id,
-        channelId,
-        chatId,
-        lastActiveAt: Date.now(),
+        },
       });
-      return newSessionId;
+      if (!outcome.ok) {
+        throw new Error(
+          outcome.stage === 'respawn'
+            ? `ensureSession: respawn failed for ${outcome.sessionId}`
+            : `ensureSession: create failed for ${outcome.sessionId}`,
+        );
+      }
+      return outcome.sessionId;
     },
 
     async uploadAttachment(

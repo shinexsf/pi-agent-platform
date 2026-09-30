@@ -1,5 +1,5 @@
 /**
- * Synchronous settings reader for use in session-bridge and other sync contexts.
+ * Synchronous settings reader for use in services/session and other sync contexts.
  * Reads server-specific config from ~/.pi/server/config.json.
  */
 

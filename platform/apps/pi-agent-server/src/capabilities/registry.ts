@@ -88,7 +88,7 @@ export function allowedMethodsUnder(allow: AllowResolution): AnyCapabilityDef[] 
  *  row config HAS the key (array or explicit null) → row wins; key absent
  *  (legacy row, never snapshotted) → fall back to the agent config.
  *  Shared by dispatch (capabilities/index.ts) and spawn-time index push
- *  (session-bridge buildRuntimeConfig) so visibility == enforcement. */
+ *  (services/session buildRuntimeConfig) so visibility == enforcement. */
 export function resolveEffectiveCapabilities(
   rowConfig: { capabilities?: string[] | null } | null | undefined,
   agentConfig: { capabilities?: string[] | null } | null | undefined,
