@@ -453,6 +453,28 @@ export async function createSession(
   // and thinkingLevel is silently ignored.
   const realSession = result.session;
 
+  // ─── Extension lifecycle bind (REQUIRED when using extensions) ───
+  // `session_start` / `session_shutdown` are emitted ONLY from AgentSession.bindExtensions()
+  // (agent-session.js bindExtensions() → runner.emit(_sessionStartEvent)) — createAgentSession
+  // does NOT call it; only TUI/print/rpc modes do. Without this call, extensions that
+  // initialize in a session_start handler never run — e.g. pi-mcp-adapter stays state=null
+  // and every mcp tool returns "MCP not initialized". Official contract: docs/sdk.md
+  // ("if you use extensions, call runtime.session.bindExtensions(...) again for the new
+  // session") + examples/sdk/13-session-runtime.ts (`await session.bindExtensions({})`).
+  //
+  // Bindings rationale:
+  // - mode "rpc": ExtensionMode = "tui" | "rpc" | "json" | "print" (no "sdk" value);
+  //   worker is headless + request/response, "rpc" is the closest deterministic value.
+  // - shutdownHandler noop: session.reload() only re-emits session_start when hasBindings
+  //   is truthy (requires uiContext || commandContextActions || shutdownHandler || onError);
+  //   keep one binding set so a future reload re-initializes extensions.
+  // - Placed BEFORE setActiveToolsByName filtering and the systemPrompt takeover below so
+  //   resources_discover injections (extendResourcesFromExtensions) are visible to both.
+  await realSession.bindExtensions({
+    mode: 'rpc',
+    shutdownHandler: () => {},
+  });
+
   // Apply builtinTools filtering after session creation if configured
   // This doesn't set allowedToolNames, just deactivates specific tools.
   if (agentConfig?.builtinTools !== undefined && agentConfig.builtinTools !== null) {
