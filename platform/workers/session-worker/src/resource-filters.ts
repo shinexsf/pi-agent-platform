@@ -22,6 +22,12 @@ function buildProjectExtDirPrefix(cwd: string): string {
  *
  * Project-local extensions (under <cwd>/.pi/extensions/) are always loaded
  * regardless of the whitelist — they belong to the project, not the server.
+ *
+ * Inline extensions (`<inline:...>` — worker 注入的 systemPrompt takeover 等，经
+ * DefaultResourceLoader `extensionFactories` 装载) are ALWAYS kept: pi loads inline
+ * factories inside `loadFinalExtensionSet` BEFORE `extensionsOverride` runs (verified
+ * on pi 1.1.0 dist resource-loader.js), so without this exemption the agent's
+ * extension whitelist would kill the worker's own takeover handler.
  */
 export function createExtensionsFilter(
   allowedExtensions?: string[],
@@ -33,17 +39,22 @@ export function createExtensionsFilter(
       return base;
     }
 
-    // Empty array — no extensions allowed (but project-local still kept)
+    // Empty array — no extensions allowed (but project-local + inline still kept)
     if (allowedExtensions.length === 0) {
-      if (!cwd) return { ...base, extensions: [] };
+      if (!cwd) return { ...base, extensions: base.extensions.filter((ext) => isInlineExtension(ext.path)) };
       const projectPrefix = buildProjectExtDirPrefix(cwd);
-      return { ...base, extensions: base.extensions.filter((ext) => isProjectLocal(ext.resolvedPath, projectPrefix)) };
+      return {
+        ...base,
+        extensions: base.extensions.filter((ext) => isInlineExtension(ext.path) || isProjectLocal(ext.resolvedPath, projectPrefix)),
+      };
     }
 
     const allowedSet = new Set(allowedExtensions.map((n) => n.toLowerCase()));
     const projectPrefix = cwd ? buildProjectExtDirPrefix(cwd) : null;
 
     const filtered = base.extensions.filter((ext) => {
+      // Worker-injected inline extensions: always keep (see doc comment)
+      if (isInlineExtension(ext.path)) return true;
       // Project-local extensions: always keep
       if (projectPrefix && isProjectLocal(ext.resolvedPath, projectPrefix)) return true;
       // Global / other extensions: whitelist filter
@@ -54,6 +65,12 @@ export function createExtensionsFilter(
 
     return { ...base, extensions: filtered };
   };
+}
+
+/** Whether an extension path is a pi inline extension (`<inline:...>`),
+ *  e.g. worker 注入的 systemPrompt takeover（经 extensionFactories 装载）。 */
+function isInlineExtension(extPath: string): boolean {
+  return extPath.startsWith('<inline:');
 }
 
 /** Check if a resolved extension path is under the project-local .pi/extensions/ dir. */

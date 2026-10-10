@@ -19,7 +19,8 @@ import {
   ModelRegistry,
   ModelRuntime,
   SessionManager,
-  type Skill,
+  type InlineExtension,
+  type NormalizedBuildSystemPromptOptions,
 } from '@earendil-works/pi-coding-agent';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync } from 'node:fs';
@@ -340,6 +341,74 @@ function toDelta(event: Record<string, unknown>, stableMessageId: string | null)
 }
 
 /**
+ * Shared takeover state: seeded eagerly at session creation (so getSystemPrompt is
+ * complete before turn 1) and refreshed by the before_agent_start handler every turn.
+ */
+interface SystemPromptTakeoverState {
+  active: boolean;
+  lastPrompt: string | null;
+}
+
+/**
+ * Build the full custom systemPrompt (change: custom-systemprompt-takeover).
+ *
+ * Input = pi's public `NormalizedBuildSystemPromptOptions` — fed from the
+ * `before_agent_start` event payload each turn (handler path) or from the session's
+ * current base options once at creation (eager seed for the getSystemPrompt debug path).
+ *
+ * Segment order is fixed by spec (worker-system-prompt-customization):
+ *   userPrompt → Available tools → "In addition to..." → Guidelines → append →
+ *   <project_context> → <available_skills> → cwd
+ * and MUST exclude pi's Role definition / hardcoded Guidelines / Pi documentation
+ * (that is the entire point of the takeover: pi's customPrompt branch drops the
+ * tools/rules sections, we rebuild them here).
+ */
+function buildTakeoverPrompt(opts: NormalizedBuildSystemPromptOptions): string {
+  const userPrompt = (opts.customPrompt ?? '').trim();
+  const hidden = new Set(opts.hiddenTools);
+  // Visible = active ∧ not prepareLoadout-hidden ∧ has a one-line snippet.
+  const visible = opts.selectedTools.filter((n) => !hidden.has(n) && !!opts.toolSnippets[n]);
+
+  let suffix = '';
+
+  // Available tools 列表
+  const toolLines = visible.map((n) => `- ${n}: ${opts.toolSnippets[n]}`).join('\n');
+  if (toolLines) suffix += `\n\nAvailable tools:\n${toolLines}`;
+
+  // "In addition to..." 提示（字面量，spec 要求恒存在）
+  suffix += `\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
+
+  // tool promptGuidelines（仅当前激活工具的）
+  const guidelines = visible.flatMap((n) => opts.toolGuidelines[n] ?? []);
+  if (guidelines.length > 0) {
+    suffix += `\n\nGuidelines:\n${guidelines.map((g) => `- ${g.trim()}`).join('\n')}`;
+  }
+
+  // appendSystemPrompt
+  const append = opts.appendSystemPrompt.trim();
+  if (append) suffix += `\n\n${append}`;
+
+  // <project_context> (AGENTS.md 等) — whitespace byte-compatible with the 0.84 takeover
+  if (opts.contextFiles.length > 0) {
+    suffix += '\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n';
+    for (const cf of opts.contextFiles) {
+      suffix += `<project_instructions path="${cf.path}">\n${cf.content}\n</project_instructions>\n\n`;
+    }
+    suffix += '</project_context>\n';
+  }
+
+  // <available_skills> (复用 SDK 公开 API formatSkillsForPrompt；需 read 处于激活态)
+  if (opts.skills.length > 0 && visible.includes('read')) {
+    suffix += '\n\n' + formatSkillsForPrompt(opts.skills);
+  }
+
+  // Current working directory（最后一段）
+  suffix += `\nCurrent working directory: ${opts.cwd}`;
+
+  return userPrompt + suffix;
+}
+
+/**
  * Create a real pi SDK session and wire up event emission.
  */
 export async function createSession(
@@ -380,11 +449,44 @@ export async function createSession(
   // to its DefaultResourceLoader which only knows about settings.json / discovery.
   // Empty/undefined systemPrompt means "use pi default" — we omit it from options so
   // pi's discoverSystemPromptFile() runs.
+  //
+  // Takeover wiring (change: custom-systemprompt-takeover, pi >= 1.1.0): when
+  // agent.systemPrompt is set we also register an inline extension whose
+  // before_agent_start handler rebuilds the full prompt from the event payload and
+  // returns it as `{ systemPrompt }` (forced prompt projection). Replaces the removed
+  // `_systemPromptOverride` private-field hack — see buildTakeoverPrompt() below.
+  const takeoverState: SystemPromptTakeoverState = {
+    active: !!agentConfig?.systemPrompt?.trim(),
+    lastPrompt: null,
+  };
+  const takeoverExtension: InlineExtension | undefined = takeoverState.active
+    ? {
+        name: 'worker-system-prompt-takeover',
+        hidden: true,
+        factory: (pi) => {
+          pi.on('before_agent_start', (event) => {
+            try {
+              const built = buildTakeoverPrompt(event.systemPromptOptions);
+              takeoverState.lastPrompt = built;
+              return { systemPrompt: built };
+            } catch (err) {
+              // Never break the turn: fall through to pi's own prompt assembly.
+              logger.error({ err }, 'takeover handler failed; using pi default prompt for this turn');
+              return undefined;
+            }
+          });
+        },
+      }
+    : undefined;
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspacePath,
     agentDir,
     systemPrompt: agentConfig?.systemPrompt?.trim() ? agentConfig.systemPrompt : undefined,
     appendSystemPrompt: agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : undefined,
+    // Inline takeover extension — loaded BEFORE extensionsOverride runs, hence the
+    // `<inline:` exemption inside createExtensionsFilter (resource-filters.ts).
+    extensionFactories: takeoverExtension ? [takeoverExtension] : undefined,
     // Resource filters based on agent config
     extensionsOverride: agentConfig?.extensions ? (base) => {
       logger.debug({ count: base.extensions.length }, 'extensionsOverride: before');
@@ -479,94 +581,48 @@ export async function createSession(
   // This doesn't set allowedToolNames, just deactivates specific tools.
   if (agentConfig?.builtinTools !== undefined && agentConfig.builtinTools !== null) {
     const allTools = realSession.getAllTools();
-    const builtinToolNames = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
-    const activeBuiltinTools = builtinToolNames.filter(t => agentConfig.builtinTools!.includes(t));
-    // Also keep extension tools active
-    const extensionTools = allTools.filter(t => !builtinToolNames.includes(t.name)).map(t => t.name);
-    realSession.setActiveToolsByName([...activeBuiltinTools, ...extensionTools]);
+    // Classify by pi's own marker `sourceInfo.source === 'builtin'` instead of a hardcoded
+    // name list: the old 0.84-era list missed `powershell` (added in pi 0.86), which got
+    // misclassified as an "extension tool" and force-activated — C2 of upgrade-pi-sdk-1-1-0.
+    // Config gates builtin tools only; non-builtins (sdk custom tools + extension tools)
+    // stay active, same as before.
+    const activeBuiltinTools = allTools
+      .filter((t) => t.sourceInfo?.source === 'builtin' && agentConfig.builtinTools!.includes(t.name))
+      .map((t) => t.name);
+    const nonBuiltinTools = allTools
+      .filter((t) => t.sourceInfo?.source !== 'builtin')
+      .map((t) => t.name);
+    realSession.setActiveToolsByName([...activeBuiltinTools, ...nonBuiltinTools]);
   }
 
-  // ─── Custom systemPrompt takeover ───
+  // ─── Custom systemPrompt takeover (pi >= 1.1.0) ───
   // Per change: custom-systemprompt-takeover. When agent.systemPrompt is configured,
   // pi SDK's customPrompt branch silently drops Available tools / "In addition to..." /
   // tool promptGuidelines — all of which are required for the model to use tools correctly.
-  // Worker patches the systemPrompt here so the configured systemPrompt serves as
-  // the role/identity, but the runtime meta segments (tools, guidelines, project context,
-  // skills) are still appended. Pi documentation segment is excluded (普通项目不需要).
   //
-  // Per design: one-shot set on _systemPromptOverride. agent-session.js:286 reads
-  // override with `?? _baseSystemPrompt`, so once set this persists across every LLM
-  // call without monkey-patching _rebuildSystemPrompt.
+  // The live mechanism is the inline extension registered above: its before_agent_start
+  // handler rebuilds the prompt from the public event payload EVERY turn and returns
+  // `{ systemPrompt }` (forced prompt projection) — so tool-set changes are picked up
+  // automatically (the old one-shot `_systemPromptOverride` hack could not).
   //
-  // Caveat: runtime tool-set changes (setActiveToolsByName) won't auto-update the
-  // override. Acceptable for the current worker architecture where tool-set is fixed
-  // at session-creation time.
-  //
-  // SDK dependency: _toolPromptSnippets / _toolPromptGuidelines / _systemPromptOverride
-  // are `_`-prefixed (private) fields on AgentSession. Tracked for breakage across
-  // pi-coding-agent upgrades.
-  if (agentConfig?.systemPrompt?.trim()) {
-    type SessionWithInternalState = {
-      _toolPromptSnippets: Map<string, string>;
-      _toolPromptGuidelines: Map<string, string[]>;
-      _systemPromptOverride?: string;
-      agent: { state: { systemPrompt: string } };
-      _resourceLoader: {
-        getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
-        getSkills(): { skills: Array<{ name: string; description: string; filePath: string; baseDir: string }> };
-      };
+  // This block only SEEDS takeoverState.lastPrompt before the first turn, because the
+  // server calls getSystemPrompt right after session creation (cacheSystemPrompt for
+  // /:id/context). It reads the session's private `_baseSystemPromptOptions` — the same
+  // normalized options the handler receives — wrapped in try/catch; on failure we degrade
+  // to the public `session.systemPrompt` getter inside getSystemPrompt() and warn.
+  if (takeoverState.active) {
+    type SessionWithBaseOptions = {
+      _baseSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
     };
-    const ses = realSession as unknown as SessionWithInternalState;
-
-    const userPrompt = agentConfig.systemPrompt.trim();
-    const toolSnippets = [...ses._toolPromptSnippets.entries()];
-    const promptGuidelines = [...ses._toolPromptGuidelines.values()].flat();
-
-    let suffix = '';
-
-    // Available tools 列表
-    const toolLines = toolSnippets
-      .filter(([_, s]) => s)
-      .map(([n, s]) => `- ${n}: ${s}`)
-      .join('\n');
-    if (toolLines) suffix += `\n\nAvailable tools:\n${toolLines}`;
-
-    // "In addition to..." 提示
-    suffix += `\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
-
-    // tool promptGuidelines
-    if (promptGuidelines.length > 0) {
-      suffix += `\n\nGuidelines:\n${promptGuidelines.map((g) => `- ${g.trim()}`).join('\n')}`;
+    try {
+      const base = (realSession as unknown as SessionWithBaseOptions)._baseSystemPromptOptions;
+      if (!base) throw new Error('_baseSystemPromptOptions not available');
+      takeoverState.lastPrompt = buildTakeoverPrompt(base);
+      logger.debug({ length: takeoverState.lastPrompt.length }, 'takeover prompt seeded (pre-first-turn)');
+    } catch (err) {
+      // Spec: degrade to public getter + warn; IPC must not throw.
+      logger.warn({ err }, 'takeover eager seed failed; getSystemPrompt will fall back to session.systemPrompt');
     }
-
-    // appendSystemPrompt
-    if (agentConfig?.appendSystemPrompt?.trim()) {
-      suffix += `\n\n${agentConfig.appendSystemPrompt.trim()}`;
-    }
-
-    // <project_context> (AGENTS.md 等)
-    const agentsFiles = ses._resourceLoader.getAgentsFiles().agentsFiles;
-    if (agentsFiles.length > 0) {
-      suffix += '\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n';
-      for (const af of agentsFiles) {
-        suffix += `<project_instructions path="${af.path}">\n${af.content}\n</project_instructions>\n\n`;
-      }
-      suffix += '</project_context>\n';
-    }
-
-    // <available_skills> (复用 SDK 公开 API formatSkillsForPrompt)
-    const skills = ses._resourceLoader.getSkills().skills as Skill[];
-    const hasRead = toolSnippets.some(([n]) => n === 'read');
-    if (skills.length > 0 && hasRead) {
-      suffix += '\n\n' + formatSkillsForPrompt(skills);
-    }
-
-    // Current working directory
-    suffix += `\nCurrent working directory: ${config.workspacePath}`;
-
-    const finalPrompt = userPrompt + suffix;
-    ses._systemPromptOverride = finalPrompt;
-    ses.agent.state.systemPrompt = finalPrompt;
   }
 
   type SessionLike = { model?: { reasoning?: boolean }; thinkingLevel?: ThinkingLevel }
@@ -630,7 +686,7 @@ export async function createSession(
     emit({ event: mapped, data: dto.delta });
   });
 
-  const adapter = new PiSessionAdapter(realSession as unknown as AgentSessionLike, unsubscribe, runtime);
+  const adapter = new PiSessionAdapter(realSession as unknown as AgentSessionLike, unsubscribe, runtime, takeoverState);
   const piPath = realSession.sessionManager.getSessionFile();
   if (!piPath) {
     throw new Error('pi SDK returned no session file path');
@@ -658,6 +714,8 @@ export async function createSession(
 interface AgentSessionLike {
   prompt(text: string, options?: { streamingBehavior?: 'steer' | 'followUp' }): Promise<void>;
   abort(): Promise<void>;
+  /** pi >= 1.1.0: public getter — current effective system prompt (forced prompt while a run holds one). */
+  readonly systemPrompt?: string;
   setModel(model: Model<any>): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
   setActiveToolsByName(toolNames: string[]): void;
@@ -715,6 +773,8 @@ export class PiSessionAdapter {
     private readonly real: AgentSessionLike,
     private readonly unsubscribe: () => void,
     private readonly modelRuntime: ModelRuntime,
+    /** Shared with the takeover inline extension (seed at creation + refreshed per turn). */
+    private readonly takeover: SystemPromptTakeoverState,
   ) {}
 
   async prompt(
@@ -976,26 +1036,36 @@ export class PiSessionAdapter {
    * Returns the current system prompt that will be sent to the LLM on the next turn.
    * - `text`: full system prompt string
    * - `length`: character count
-   * - `source`: "override" if worker set `_systemPromptOverride` (per change:
-   *   custom-systemprompt-takeover), "default" if pi SDK's default prompt branch.
+   * - `source`: "override" when the worker takeover is active (agent.systemPrompt configured,
+   *   per change custom-systemprompt-takeover), "default" for pi's own prompt branch.
    *
-   * Read from internal AgentSession state. `agent.state.systemPrompt` is updated
-   * every turn by `_rebuildSystemPrompt`; we prefer `_systemPromptOverride` (the
-   * one-shot override the worker may have set) to reflect what is actually used.
+   * pi 1.1.0: `_systemPromptOverride` was removed and `agent.state.systemPrompt` became a
+   * read-only getter, so we read the shared takeover state (seeded at creation, refreshed
+   * by the before_agent_start handler every turn). Fallback: the public `session.systemPrompt`
+   * getter + warn — the IPC call MUST NOT throw (server /:id/context only omits the field).
    */
   getSystemPrompt(): { text: string; length: number; source: 'override' | 'default' } {
-    type SessionWithInternal = {
-      _systemPromptOverride?: string;
-      agent: { state: { systemPrompt: string } };
-    };
-    const real = this.real as unknown as SessionWithInternal;
-    const override = real._systemPromptOverride;
-    const text = override ?? real.agent.state.systemPrompt ?? '';
-    return {
-      text,
-      length: text.length,
-      source: override ? 'override' : 'default',
-    };
+    if (this.takeover.active) {
+      const cached = this.takeover.lastPrompt;
+      if (cached !== null) {
+        return { text: cached, length: cached.length, source: 'override' };
+      }
+      // Eager seed failed — degrade to the public getter (may lack takeover segments until the first turn).
+      const text = this.readPublicSystemPrompt();
+      return { text, length: text.length, source: 'override' };
+    }
+    const text = this.readPublicSystemPrompt();
+    return { text, length: text.length, source: 'default' };
+  }
+
+  /** Public `session.systemPrompt` getter (pi >= 1.1.0); never throws. */
+  private readPublicSystemPrompt(): string {
+    try {
+      return this.real.systemPrompt ?? '';
+    } catch (err) {
+      logger.warn({ err }, 'session.systemPrompt getter failed');
+      return '';
+    }
   }
 
   cleanup(): void {

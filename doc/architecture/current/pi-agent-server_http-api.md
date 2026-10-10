@@ -91,14 +91,14 @@ interface SessionContextDTO {
 | ❌ | 有 | 同步 respawn worker → 返回同 case 1 |
 | ❌ | 无（placeholder 已被 scanner 杀）| `commands: []`、`models: [...全局]`、`session: null`（不主动重建，`systemPrompt: null`）|
 
-**`systemPrompt` 字段说明**（2026-08-30+）：
+**`systemPrompt` 字段说明**（2026-08-30+，机制 2026-10-09 起为 pi 1.1.0 `before_agent_start` 接管）：
 - `source: "override"` — worker 接管拼接（agent 配置了 `config.systemPrompt`），拼接 user prompt + Available tools + tool promptGuidelines + `<project_context>` + `<available_skills>` + cwd
 - `source: "default"` — pi SDK 默认 prompt 分支（agent.systemPrompt 为空），含 Role def / 硬编码 Guidelines / Pi documentation
 - `text` — 完整 system prompt 字符串
 - `length` — 字符数
 - `null` — 缓存未命中（worker 还没走完 createSession）
 
-详细规格见 [changelog 013：worker 接管 systemPrompt](../changelog/2026-08-30_013-worker-system-prompt-takeover.md)。
+接管拼接的完整机制见 [Session 生命周期 · systemPrompt 拼接职责](pi-agent-server_session-lifecycle.md)。
 
 **已删除的端点**（合并到 context）：
 - ❌ `GET /api/sessions/:id/commands`
@@ -115,7 +115,7 @@ interface SessionContextDTO {
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/config/builtin-providers` | GET | 获取内置 provider 列表（22 个）|
+| `/api/config/builtin-providers` | GET | 获取内置 provider 列表（**动态**：从 pi runtime `getProviders()` 取、按 apiKey 可配能力过滤、显示名 override；失败降级静态清单）|
 | `/api/config/models` | GET | 获取模型配置（providers + auth）|
 | `/api/config/models` | PUT | 更新模型配置 |
 | `/api/config/models/test` | POST | 测试模型连接 |

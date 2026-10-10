@@ -54,7 +54,7 @@ flowchart TD
 
 | 字段（`AgentConfig`） | 管什么 | 生效层 |
 |---|---|---|
-| `builtinTools` | 7 个 pi 内置工具白名单（read/write/edit/bash/grep/find/ls），null=全开 | worker `setActiveToolsByName` |
+| `builtinTools` | pi 内置工具白名单（按 pi `sourceInfo.source==='builtin'` 判定；Web UI 提供 7 项勾选），null=用 pi 默认集 | worker `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
 | `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer`），**未配置 = `['sendFileToUser']`（callServer 默认关）**，[]=全关 | worker customTools 注入 = prompt 可见性 |
 | `capabilities` | `callServer` 方法级授权：**未配置 = opt-in 无任何方法权限**，[]=全禁，数组=精确白名单 | master 控制面 dispatch 强制校验 |
 

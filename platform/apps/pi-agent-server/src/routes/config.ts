@@ -16,6 +16,62 @@ import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
 import { uploadSingleExtension, extractExtensionNames, readSettings } from '../services/extension-utils.js';
+import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
+import { childLogger } from '../logger.js';
+
+const logger = childLogger('config');
+
+/** 显示名润色（pi 的 provider.name 未必是想要的展示名）；未命中 fallback 到 p.name。 */
+const BUILTIN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  deepseek: 'DeepSeek',
+  google: 'Google Gemini',
+  'google-vertex': 'Google Vertex',
+  xai: 'xAI (Grok)',
+  mistral: 'Mistral',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  'amazon-bedrock': 'Amazon Bedrock',
+  azure: 'Azure OpenAI',
+  minimax: 'MiniMax',
+  'minimax-cn': 'MiniMax (China)',
+  moonshotai: 'Moonshot AI',
+  nvidia: 'NVIDIA NIM',
+  together: 'Together AI',
+  fireworks: 'Fireworks',
+  cerebras: 'Cerebras',
+  huggingface: 'Hugging Face',
+  xiaomi: 'Xiaomi MiMo',
+  'xiaomi-token-plan-cn': 'Xiaomi Token Plan (China)',
+  zai: 'ZAI',
+};
+
+/** 动态取数失败时的降级列表（原硬编码清单，保留不动）。 */
+const FALLBACK_BUILTIN_PROVIDERS = [
+  { id: 'anthropic', name: 'Anthropic', api: 'anthropic-messages' },
+  { id: 'openai', name: 'OpenAI', api: 'openai-completions' },
+  { id: 'deepseek', name: 'DeepSeek', api: 'openai-completions' },
+  { id: 'google', name: 'Google Gemini', api: 'google-generative-ai' },
+  { id: 'google-vertex', name: 'Google Vertex', api: 'google-vertex' },
+  { id: 'xai', name: 'xAI (Grok)', api: 'openai-completions' },
+  { id: 'mistral', name: 'Mistral', api: 'mistral-conversations' },
+  { id: 'groq', name: 'Groq', api: 'openai-completions' },
+  { id: 'openrouter', name: 'OpenRouter', api: 'openai-completions' },
+  { id: 'amazon-bedrock', name: 'Amazon Bedrock', api: 'bedrock-converse-stream' },
+  { id: 'azure', name: 'Azure OpenAI', api: 'azure-openai-responses' },
+  { id: 'minimax', name: 'MiniMax', api: 'openai-completions' },
+  { id: 'minimax-cn', name: 'MiniMax (China)', api: 'openai-completions' },
+  { id: 'moonshotai', name: 'Moonshot AI', api: 'openai-completions' },
+  { id: 'nvidia', name: 'NVIDIA NIM', api: 'openai-completions' },
+  { id: 'together', name: 'Together AI', api: 'openai-completions' },
+  { id: 'fireworks', name: 'Fireworks', api: 'openai-completions' },
+  { id: 'cerebras', name: 'Cerebras', api: 'openai-completions' },
+  { id: 'huggingface', name: 'Hugging Face', api: 'openai-completions' },
+  { id: 'xiaomi', name: 'Xiaomi MiMo', api: 'openai-completions' },
+  { id: 'xiaomi-token-plan-cn', name: 'Xiaomi Token Plan (China)', api: 'openai-completions' },
+  { id: 'zai', name: 'ZAI', api: 'openai-completions' },
+];
 
 // Types
 interface ProviderConfig {
@@ -164,33 +220,34 @@ export function createConfigRouter(config: ServerConfig) {
   // ========== Models ==========
 
   // GET /api/config/builtin-providers
+  // Dynamic: provider catalog comes from the pi runtime (ModelRuntime.getProviders()),
+  // so ids always match the installed pi version (e.g. 1.0.3 renamed
+  // azure-openai-responses → azure). Only providers with interactive apiKey setup
+  // (auth.apiKey.login) are listed — the web form is a plain API-key form, so
+  // OAuth-only providers (github-copilot, radius, openai-codex) and ambient-only
+  // local providers are excluded. Fallback: the legacy static list below.
   router.get('/builtin-providers', async (c) => {
-    // 返回内置 provider 列表（静态配置）
-    const builtinProviders = [
-      { id: 'anthropic', name: 'Anthropic', api: 'anthropic-messages' },
-      { id: 'openai', name: 'OpenAI', api: 'openai-completions' },
-      { id: 'deepseek', name: 'DeepSeek', api: 'openai-completions' },
-      { id: 'google', name: 'Google Gemini', api: 'google-generative-ai' },
-      { id: 'google-vertex', name: 'Google Vertex', api: 'google-vertex' },
-      { id: 'xai', name: 'xAI (Grok)', api: 'openai-completions' },
-      { id: 'mistral', name: 'Mistral', api: 'mistral-conversations' },
-      { id: 'groq', name: 'Groq', api: 'openai-completions' },
-      { id: 'openrouter', name: 'OpenRouter', api: 'openai-completions' },
-      { id: 'amazon-bedrock', name: 'Amazon Bedrock', api: 'bedrock-converse-stream' },
-      { id: 'azure-openai-responses', name: 'Azure OpenAI', api: 'azure-openai-responses' },
-      { id: 'minimax', name: 'MiniMax', api: 'openai-completions' },
-      { id: 'minimax-cn', name: 'MiniMax (China)', api: 'openai-completions' },
-      { id: 'moonshotai', name: 'Moonshot AI', api: 'openai-completions' },
-      { id: 'nvidia', name: 'NVIDIA NIM', api: 'openai-completions' },
-      { id: 'together', name: 'Together AI', api: 'openai-completions' },
-      { id: 'fireworks', name: 'Fireworks', api: 'openai-completions' },
-      { id: 'cerebras', name: 'Cerebras', api: 'openai-completions' },
-      { id: 'huggingface', name: 'Hugging Face', api: 'openai-completions' },
-      { id: 'xiaomi', name: 'Xiaomi MiMo', api: 'openai-completions' },
-      { id: 'xiaomi-token-plan-cn', name: 'Xiaomi Token Plan (China)', api: 'openai-completions' },
-      { id: 'zai', name: 'ZAI', api: 'openai-completions' },
-    ];
-    return c.json(builtinProviders);
+    try {
+      await initModelRegistry();
+      const runtime = getInitializedRuntime();
+      if (!runtime) throw new Error('ModelRuntime unavailable');
+
+      const providers = runtime
+        .getProviders()
+        .filter((p) => p.auth?.apiKey?.login)
+        .map((p) => ({
+          id: p.id,
+          name: BUILTIN_PROVIDER_DISPLAY_NAMES[p.id] ?? p.name,
+          api: p.getModels()[0]?.api ?? '',
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      if (providers.length === 0) throw new Error('empty provider list');
+      return c.json(providers);
+    } catch (err) {
+      logger.warn({ err }, 'dynamic builtin-providers failed; serving static fallback');
+      return c.json(FALLBACK_BUILTIN_PROVIDERS);
+    }
   });
 
   // GET /api/config/models

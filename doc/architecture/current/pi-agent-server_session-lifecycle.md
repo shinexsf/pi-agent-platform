@@ -179,28 +179,30 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 - 缓存 `piSessionPath` / `model` / `thinkingLevel` / `sessionName` / `systemPrompt` 到 **Session 对象**
 - **不写** `hasRow`（保持 false）
 
-### systemPrompt 拼接职责（2026-08-30+）
+### systemPrompt 拼接职责（2026-10-09 起：pi 1.1.0）
 
-**Worker 不再 100% 依赖 pi SDK 拼接 systemPrompt**。createSession 之后，如果 `config.systemPrompt` 非空，worker 用 `_systemPromptOverride` 接管拼接：
+**Worker 不再 100% 依赖 pi SDK 拼接 systemPrompt**。pi 1.1.0 起，接管机制为 **`before_agent_start` inline extension**（0.84 时代的私有字段 `_systemPromptOverride` 已被上游删除，机制已废弃）：
 
 ```
-[worker createSession]
-  ↓
-[pi SDK buildSystemPrompt({ customPrompt: agent.systemPrompt })]
-  ↓ customPrompt 分支返回 prompt_A (default-build)
-[worker 检查 config.systemPrompt?.trim()]
-  ↓ 非空
-[拼接 prompt_B = userPrompt + suffix]
+[worker 构造 DefaultResourceLoader]
+  ↓ agentConfig.systemPrompt 非空时注册 extensionFactories:
+    { name: 'worker-system-prompt-takeover', hidden: true }
+  ↓ factory: pi.on('before_agent_start', handler)
+[每轮 prompt() 触发 handler]
+  ↓ 事件载荷 systemPromptOptions（公开类型：customPrompt/toolSnippets/
+    toolGuidelines/contextFiles/skills/cwd/selectedTools/hiddenTools）
+[buildTakeoverPrompt(opts) 重建 prompt_B]
   suffix 顺序: Available tools → "In addition to..." → tool promptGuidelines
              → appendSection → <project_context> → <available_skills> → cwd
-[realSession._systemPromptOverride = prompt_B]
-  ↓
-[每次 LLM 调用: this._systemPromptOverride ?? this._baseSystemPrompt → prompt_B]
+  ↓ return { systemPrompt: prompt_B }
+[pi forced prompt projection 钉到请求头；transcript 结构化 sections 照常 diff 持久化]
 ```
 
-- customPrompt 路径：保留 Available tools / "In addition to..." / tool promptGuidelines（避免 model 乱调用工具）
-- default 路径：走 pi SDK 原 default prompt（含 Pi doc / Role def / 硬编码 Guidelines），不动
-- 详细规格见 [changelog 013：worker 接管 systemPrompt](../changelog/2026-08-30_013-worker-system-prompt-takeover.md)
+- customPrompt 路径：保留 Available tools / "In addition to..." / tool promptGuidelines（避免 model 乱调用工具）；**每轮重建 → 工具集变化自动跟随**（旧一次性 set 的限制已消除）
+- default 路径（未配 systemPrompt）：不注册 handler，走 pi SDK 原 default prompt（含 Pi doc / Role def / 硬编码 Guidelines），不动
+- **注入豁免**：pi 1.1.0 的 inline 扩展装载**先于** `extensionsOverride`，`createExtensionsFilter` 对 `<inline:` 前缀无条件放行——agent 的 extensions 白名单不会误杀接管 handler
+- **getSystemPrompt debug 读路径**：闭包 takeover state（创建时从 session base options eager seed + handler 每轮刷新）；seed 失败降级读公开 `session.systemPrompt` getter + warn；IPC 契约 `{text,length,source}` 不变，source 由 worker 本地配置判定
+- worker 同时经该 loader 注入 appendSystemPrompt / 资源过滤（extensions/skills/prompts override），自有 loader 必须手动 `await resourceLoader.reload()`（pi 契约：仅自建 loader 才自动 reload）
 
 **单实现（2026-09-30 起）**：`spawnPlaceholder` / `spawnAndCreate` 只有 `services/session.ts` 一份实现，且为**模块私有**——routes / capabilities / IM 网关一律经 `sessionRegistry()` 调用。改 systemPrompt 拼接或 cacheSystemPrompt 只改这一处，全部渠道（HTTP/IM）同时生效。依赖铁律：**核心代码不得 import im-gateway**（session-bridge 时代的反向依赖已清零）。
 

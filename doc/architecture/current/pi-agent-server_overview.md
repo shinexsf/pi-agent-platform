@@ -37,7 +37,8 @@ flowchart TB
     HTTPAPI -->|prompt / abort IPC| WPM
     IMGateway -->|prompt / kill| WPM
     WPM -->|session_event / crash| SES
-    WPM -->|IPC| Proxy
+    WPM -->|正向 call/response IPC| Proxy
+    Proxy -->|反向 RPC + 事件回流（invokeCapability / sendFile / 标题 / worker 事件）| WPM
     Proxy -->|method dispatch| SDK
     WPM <--> DB
     SDK -.->|历史文件| PiHist[(~/.pi/agent/<br/>sessions/<id>/)]

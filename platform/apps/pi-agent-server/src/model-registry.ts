@@ -25,6 +25,7 @@ export interface ModelInfo {
 }
 
 let cachedRegistry: ModelRegistry | null = null;
+let cachedRuntime: ModelRuntime | null = null;
 let cachedModels: ModelInfo[] | null = null;
 let initFailed = false;
 
@@ -39,9 +40,18 @@ export async function initModelRegistry(): Promise<ModelRegistry> {
   }
   const runtime = await ModelRuntime.create({});
   const registry = new ModelRegistry(runtime);
+  cachedRuntime = runtime;
   cachedRegistry = registry;
   cachedModels = null; // invalidate cache
   return registry;
+}
+
+/**
+ * The cached ModelRuntime (for provider catalog queries, e.g. dynamic
+ * builtin-providers endpoint). null until initModelRegistry() succeeds.
+ */
+export function getInitializedRuntime(): ModelRuntime | null {
+  return cachedRuntime;
 }
 
 /**
@@ -72,6 +82,7 @@ export async function listAvailableModels(): Promise<ModelInfo[]> {
  */
 export function resetModelRegistry(): void {
   cachedRegistry = null;
+  cachedRuntime = null;
   cachedModels = null;
   initFailed = false;
 }
