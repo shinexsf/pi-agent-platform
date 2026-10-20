@@ -103,25 +103,46 @@ function isProjectLocal(resolvedPath: string, projectPrefix: string): boolean {
  * Project-local skills (sourceInfo.scope === "project") are always loaded
  * regardless of the whitelist — they belong to the project, not the server.
  */
+/**
+ * Filter skills based on agent config.skills whitelist.
+ * If skills is null/undefined, all skills are allowed.
+ * If skills is empty array, no skills are allowed.
+ *
+ * Always-kept regardless of the whitelist:
+ * - Project-local skills (`sourceInfo.scope === "project"`) — they belong to the project, not the server.
+ * - Extension-injected skills (`sourceInfo.scope === "temporary"`) — contributed at runtime via an
+ *   extension's `resources_discover` handler (e.g. @amaster.ai/pi-lark returns its bundled
+ *   `skills/` dir). The whitelist governs the user's own skill directories; a skill whose only
+ *   source is an extension the user explicitly enabled would otherwise be unreachable. Mirrors
+ *   the `<inline:` exemption in createExtensionsFilter.
+ *
+ * Note: pi re-applies this override from `resourceLoader.extendResources()` → `updateSkillsFromPaths()`,
+ * so extension-injected skills pass through here a second time — the temporary-scope exemption is
+ * what makes them survive.
+ */
 export function createSkillsFilter(
   allowedSkills?: string[],
 ): (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
+  const isAlwaysKept = (skill: Skill): boolean => {
+    const scope = skill.sourceInfo?.scope;
+    return scope === 'project' || scope === 'temporary';
+  };
+
   return (base) => {
     // No filter configured — allow all
     if (allowedSkills === null || allowedSkills === undefined) {
       return base;
     }
 
-    // Empty array — no skills allowed (but project-local still kept)
+    // Empty array — no skills allowed (but project-local and extension-injected still kept)
     if (allowedSkills.length === 0) {
-      return { ...base, skills: base.skills.filter((s) => s.sourceInfo?.scope === 'project') };
+      return { ...base, skills: base.skills.filter(isAlwaysKept) };
     }
 
     const allowedSet = new Set(allowedSkills.map((n) => n.toLowerCase()));
 
     const filtered = base.skills.filter((skill) => {
-      // Project-local skills: always keep
-      if (skill.sourceInfo?.scope === 'project') return true;
+      if (isAlwaysKept(skill)) return true;
       // Global / other skills: whitelist filter
       return allowedSet.has(skill.name.toLowerCase());
     });
@@ -137,26 +158,32 @@ export function createSkillsFilter(
  *
  * Project-local prompts (sourceInfo.scope === "project") are always loaded
  * regardless of the whitelist — they belong to the project, not the server.
+ * Extension-injected prompts (sourceInfo.scope === "temporary", contributed via an extension's
+ * `resources_discover` handler) are always kept as well — same reasoning as createSkillsFilter.
  */
 export function createPromptsFilter(
   allowedPrompts?: string[],
 ): (base: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] }) => { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
+  const isAlwaysKept = (prompt: PromptTemplate): boolean => {
+    const scope = prompt.sourceInfo?.scope;
+    return scope === 'project' || scope === 'temporary';
+  };
+
   return (base) => {
     // No filter configured — allow all
     if (allowedPrompts === null || allowedPrompts === undefined) {
       return base;
     }
 
-    // Empty array — no prompts allowed (but project-local still kept)
+    // Empty array — no prompts allowed (but project-local / extension-injected still kept)
     if (allowedPrompts.length === 0) {
-      return { ...base, prompts: base.prompts.filter((p) => p.sourceInfo?.scope === 'project') };
+      return { ...base, prompts: base.prompts.filter(isAlwaysKept) };
     }
 
     const allowedSet = new Set(allowedPrompts.map((n) => n.toLowerCase()));
 
     const filtered = base.prompts.filter((prompt) => {
-      // Project-local prompts: always keep
-      if (prompt.sourceInfo?.scope === 'project') return true;
+      if (isAlwaysKept(prompt)) return true;
       // Global / other prompts: whitelist filter
       return allowedSet.has(prompt.name.toLowerCase());
     });

@@ -35,6 +35,18 @@
 - ❌ **写测试除非明确要求** —— 不主动加（**debug 接口 + curl 端到端验证是首选**——见 `doc/architecture/current/pi-agent-server_debug-testing.md`）
 - ❌ **用 `console.*` 打日志** —— 统一用 pino logger（见上）；console 已被桥接进 logger，只留给第三方 SDK 输出与启动横幅
 
+### 测试产物一律放 `test-workspace/`（硬约定）
+
+**任何**测试用 agent / 探针会话，`workspacePath` 必须指向仓库根的 `<仓库根>/test-workspace/<子目录>`：
+
+- 子目录名与 agent 名一致，便于识别与清理；探针类用 `*-probe`，自检类用 `selfcheck-*`
+- ❌ 不得指向业务项目（如 `Jieyou/*`）、用户真实工作区、或平台自身目录（平台自身仅允许只读排查）
+- 测试要特定 cwd 下的配置（如 `<cwd>/.pi/settings.json`）就在该子目录里自建，不要改用户已有配置
+- 测试结束**在报告里标注产物**（agent 名 / session id / 目录），清理用 `POST /api/agents/:id/delete`
+- 理由：`test-workspace/` 已 gitignore；避免污染业务仓库、避免把真实配置/密钥写到错误目录、避免留下指向真实项目的僵尸 agent
+
+细节（自检 agent 的 skill/fixture 布局、断言流程）见 [`.pi/skills/llm-integration-testing/SKILL.md`](.pi/skills/llm-integration-testing/SKILL.md)。
+
 ### 修 bug 流程
 
 修 bug 后**默认**走以下流程：

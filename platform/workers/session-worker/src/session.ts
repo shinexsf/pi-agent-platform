@@ -599,6 +599,40 @@ export async function createSession(
     shutdownHandler: () => {},
   });
 
+  // Diagnostic: what actually made it into the resource set. Run with LOG_LEVEL=debug.
+  // Matters because two whitelists apply to resources and BOTH have "always keep" exemptions:
+  // - extensions: agentConfig.extensions filters package extensions (list is resolved in
+  //   `mergeWithGlobalDefaults` from `~/.pi/server/config.json` defaultExtensions).
+  // - skills: agentConfig.skills filters skills, but project (`scope: project`) and
+  //   extension-injected (`scope: temporary`) skills are always kept (resource-filters.ts).
+  // An extension that contributes skills via `resources_discover` (e.g. @amaster.ai/pi-lark)
+  // only shows up in the skills list when the extension itself was loaded.
+  {
+    const extensions = resourceLoader.getExtensions();
+    const skills = resourceLoader.getSkills();
+    const byScope = skills.skills.reduce<Record<string, number>>((acc, skill) => {
+      const scope = skill.sourceInfo?.scope ?? 'unknown';
+      acc[scope] = (acc[scope] ?? 0) + 1;
+      return acc;
+    }, {});
+    logger.debug(
+      {
+        agentDir,
+        cwd: config.workspacePath,
+        extensions: extensions.extensions.map((ext) => ({
+          path: ext.path,
+          tools: ext.tools ? [...ext.tools.keys()] : [],
+        })),
+        extensionErrors: extensions.errors,
+        extensionWarnings: extensions.warnings,
+        skillsByScope: byScope,
+        skills: skills.skills.map((skill) => `${skill.name}@${skill.sourceInfo?.scope ?? '?'}`),
+        skillDiagnostics: skills.diagnostics,
+      },
+      'resources after bindExtensions',
+    );
+  }
+
   // Apply builtinTools filtering after session creation if configured
   // This doesn't set allowedToolNames, just deactivates specific tools.
   if (agentConfig?.builtinTools !== undefined && agentConfig.builtinTools !== null) {

@@ -116,11 +116,16 @@ export function createAgentsRouter(
   // POST /api/agents/:id/delete — cascade: kills every session worker,
   // unlinks every pi session file, removes every session row, then deletes
   // the agent row itself. Also cascades user-attachment storage.
+  //
+  // ORDER MATTERS: `sessions.agent_id` has a FK to `agents.id`, so the agent row must be
+  // deleted LAST — deleting it first throws `FOREIGN KEY constraint failed` for any agent
+  // that still owns sessions. Pre-check existence instead of relying on the delete's changes.
   router.post('/:id/delete', async (c) => {
     const id = c.req.param('id');
+    if (!agentRepo.get(id)) return c.json({ error: 'Agent not found' }, 404);
+    const cascade = await deleteAgentCascade(id, sessionRepo, workerPool, attachmentStore);
     const ok = agentRepo.delete(id);
     if (!ok) return c.json({ error: 'Agent not found' }, 404);
-    const cascade = await deleteAgentCascade(id, sessionRepo, workerPool, attachmentStore);
     return c.json({ ok: true, cascade });
   });
 
