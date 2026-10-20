@@ -33,6 +33,7 @@ import type {
   AgentConfig,
 } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
+import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
 import { logger } from './logger.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
 import { createServerTools, type CallMasterFn } from './tools.js';
@@ -479,6 +480,18 @@ export async function createSession(
       }
     : undefined;
 
+  // ─── Built-in extension injection (change: builtin-tools-unified-management) ───
+  // `builtinTools` doubles as the source of truth for pi's built-in extensions:
+  //   codemode / tool_search / mcp are extension-provided tools, so naming them in the
+  //   whitelist also loads the matching `builtin:<ext>` ($ee builtin-extensions.ts).
+  // Injection and activation share ONE list, so "injected but not whitelisted" cannot happen.
+  // null/empty → nothing injected (mcp must never connect unless explicitly selected).
+  const builtinInjection = await resolveBuiltinExtensionInjection(agentConfig?.builtinTools);
+  const extensionFactories: InlineExtension[] = [
+    ...(takeoverExtension ? [takeoverExtension] : []),
+    ...(builtinInjection?.factories ?? []),
+  ];
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspacePath,
     agentDir,
@@ -486,7 +499,12 @@ export async function createSession(
     appendSystemPrompt: agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : undefined,
     // Inline takeover extension — loaded BEFORE extensionsOverride runs, hence the
     // `<inline:` exemption inside createExtensionsFilter (resource-filters.ts).
-    extensionFactories: takeoverExtension ? [takeoverExtension] : undefined,
+    // Built-in extension factories (codemode/tool-search/mcp) ride along here; the matching
+    // `builtin:<ext>` load paths go into additionalExtensionPaths below (both are required).
+    extensionFactories: extensionFactories.length > 0 ? extensionFactories : undefined,
+    // Triggers loading of pi's built-in extensions (resource-loader merges these into the
+    // extension path list and looks the factory up in the table built from extensionFactories).
+    additionalExtensionPaths: builtinInjection?.extensionPaths,
     // Resource filters based on agent config
     extensionsOverride: agentConfig?.extensions ? (base) => {
       logger.debug({ count: base.extensions.length }, 'extensionsOverride: before');
@@ -498,7 +516,11 @@ export async function createSession(
           'extensionsOverride: ext',
         );
       });
-      const result = createExtensionsFilter(agentConfig.extensions, config.workspacePath)(base);
+      const result = createExtensionsFilter(
+        agentConfig.extensions,
+        config.workspacePath,
+        builtinInjection?.extensionPaths,
+      )(base);
       logger.debug({ count: result.extensions.length }, 'extensionsOverride: after');
       return result;
     } : undefined,
@@ -586,8 +608,18 @@ export async function createSession(
     // misclassified as an "extension tool" and force-activated — C2 of upgrade-pi-sdk-1-1-0.
     // Config gates builtin tools only; non-builtins (sdk custom tools + extension tools)
     // stay active, same as before.
+    //
+    // Built-in EXTENSIONS (codemode / tool_search / mcp) register their tools with
+    // sourceInfo.source === 'builtin' too (their extension path is `builtin:<ext>`), so this
+    // single filter governs both kinds — no extra branch needed (P0-E3 of
+    // builtin-tools-unified-management). They are only injected when named here, so
+    // "loaded but not activated" cannot happen.
     const activeBuiltinTools = allTools
-      .filter((t) => t.sourceInfo?.source === 'builtin' && agentConfig.builtinTools!.includes(t.name))
+      .filter(
+        (t) =>
+          t.sourceInfo?.source === 'builtin' &&
+          (builtinInjection?.toolNames ?? agentConfig.builtinTools!).includes(t.name),
+      )
       .map((t) => t.name);
     const nonBuiltinTools = allTools
       .filter((t) => t.sourceInfo?.source !== 'builtin')

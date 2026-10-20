@@ -28,11 +28,18 @@ function buildProjectExtDirPrefix(cwd: string): string {
  * factories inside `loadFinalExtensionSet` BEFORE `extensionsOverride` runs (verified
  * on pi 1.1.0 dist resource-loader.js), so without this exemption the agent's
  * extension whitelist would kill the worker's own takeover handler.
+ *
+ * Worker-injected pi built-in extensions (`builtin:codemode` / `builtin:tool-search` /
+ * `builtin:mcp`, driven by `AgentConfig.builtinTools`) are kept too, but only the exact
+ * paths we injected (`injectedExtensions`) — a `builtin:*` entry that merely comes from
+ * settings.json stays subject to the whitelist.
  */
 export function createExtensionsFilter(
   allowedExtensions?: string[],
   cwd?: string,
+  injectedExtensions?: readonly string[],
 ): (base: LoadExtensionsResult) => LoadExtensionsResult {
+  const injectedSet = new Set(injectedExtensions ?? []);
   return (base) => {
     // No filter configured — allow all
     if (allowedExtensions === null || allowedExtensions === undefined) {
@@ -41,11 +48,14 @@ export function createExtensionsFilter(
 
     // Empty array — no extensions allowed (but project-local + inline still kept)
     if (allowedExtensions.length === 0) {
-      if (!cwd) return { ...base, extensions: base.extensions.filter((ext) => isInlineExtension(ext.path)) };
+      if (!cwd) return { ...base, extensions: base.extensions.filter((ext) => isKeptExtension(ext.path, injectedSet)) };
       const projectPrefix = buildProjectExtDirPrefix(cwd);
       return {
         ...base,
-        extensions: base.extensions.filter((ext) => isInlineExtension(ext.path) || isProjectLocal(ext.resolvedPath, projectPrefix)),
+        extensions: base.extensions.filter(
+          (ext) =>
+            isKeptExtension(ext.path, injectedSet) || isProjectLocal(ext.resolvedPath, projectPrefix),
+        ),
       };
     }
 
@@ -53,8 +63,8 @@ export function createExtensionsFilter(
     const projectPrefix = cwd ? buildProjectExtDirPrefix(cwd) : null;
 
     const filtered = base.extensions.filter((ext) => {
-      // Worker-injected inline extensions: always keep (see doc comment)
-      if (isInlineExtension(ext.path)) return true;
+      // Worker-injected inline/builtin extensions: always keep (see doc comment)
+      if (isKeptExtension(ext.path, injectedSet)) return true;
       // Project-local extensions: always keep
       if (projectPrefix && isProjectLocal(ext.resolvedPath, projectPrefix)) return true;
       // Global / other extensions: whitelist filter
@@ -65,6 +75,13 @@ export function createExtensionsFilter(
 
     return { ...base, extensions: filtered };
   };
+}
+
+/** Extensions the worker injected itself: always kept regardless of the whitelist.
+ *  - `<inline:...>`: systemPrompt takeover factory (extensionFactories)
+ *  - exact `builtin:<name>` paths we passed via additionalExtensionPaths */
+function isKeptExtension(extPath: string, injectedSet: ReadonlySet<string>): boolean {
+  return isInlineExtension(extPath) || injectedSet.has(extPath);
 }
 
 /** Whether an extension path is a pi inline extension (`<inline:...>`),

@@ -54,11 +54,30 @@ flowchart TD
 
 | 字段（`AgentConfig`） | 管什么 | 生效层 |
 |---|---|---|
-| `builtinTools` | pi 内置工具白名单（按 pi `sourceInfo.source==='builtin'` 判定；Web UI 提供 7 项勾选），null=用 pi 默认集 | worker `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
+| `builtinTools` | 工具启用清单，**一份清单管两类**：① pi 内置工具（`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `powershell`，按 `sourceInfo.source==='builtin'` 判定）；② pi 内置**扩展**工具（`codemode` / `tool_search` / `mcp`）——名字在清单里时 worker 装载 `builtin:<ext>` 并激活对应工具。未配置 = 全局默认（`~/.pi/server/config.json` 的 `defaultBuiltinTools`，再兜底平台默认 10 项不含 `mcp`） | worker：`additionalExtensionPaths` + `extensionFactories` 注入 + `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
 | `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer`），**未配置 = `['sendFileToUser']`（callServer 默认关）**，[]=全关 | worker customTools 注入 = prompt 可见性 |
 | `capabilities` | `callServer` 方法级授权：**未配置 = opt-in 无任何方法权限**，[]=全禁，数组=精确白名单 | master 控制面 dispatch 强制校验 |
 
 三字段都在 `AgentConfig` JSON 列（agents / sessions 共用），加字段零迁移。全局 `~/.pi/server/config.json` **只含默认工具开关**（`defaultServerBuiltinTools` 等 default* 字段），**不存任何 capabilities 策略**。
+
+### `builtinTools` 清单与内置扩展装载
+
+`builtinTools` 是工具名的唯一来源，worker 按名分派到两条路径（见 `workers/session-worker/src/builtin-extensions.ts`）：
+
+| 名字 | 扩展名 | 装载后果 |
+|---|---|---|
+| `codemode` | `codemode` | 注入 `codemode` 扩展：模型写 JS 在一次调用里编排多个工具（沙箱内可调所有已启用工具，中间结果不进上下文） |
+| `tool_search` | `tool-search` | 注入 `tool-search` 扩展：未对模型声明的工具由 BM25 按需检索加载 |
+| `mcp` | `mcp` | 注入 `mcp` 扩展：**会话启动即连接 `mcp.json` 的全部 server**。已装 `pi-mcp-adapter` 时由 adapter 接管（内置被 `omitReplacedExtensions` 丢弃 + warning）。工具可见性由 per-server `exposure`（`direct` / `model-only` / `codemode`(默认) / `deferred` / `hidden`）决定，平台不接管 |
+| `llama.cpp` | —— | **不映射**：它 `registerProvider`（模型 provider），不是工具 |
+
+要点：
+
+- **注入 = 两步**：factory 进 `extensionFactories`（建 builtin 代码表）**且** `builtin:<ext>` 进 `additionalExtensionPaths`（触发装载）。缺一不可。
+- **激活与注入同源**：内置扩展注册的工具 `sourceInfo.source` 也是 `builtin`（`getSyntheticPathSource('builtin:x')`），所以同一个白名单过滤既管纯工具又管扩展工具，不存在“装载了但没勾”。
+- **`null` = 不装载任何内置扩展**：`mcp` 有连接副作用，必须显式勾选。
+- **平台默认清单不含 `mcp`**（`settings-reader.ts` 的 `DEFAULT_BUILTIN_TOOLS`）：与 `pi-mcp-adapter` 的取舍未定，留给用户按 agent 勾选；Web UI 的“全选”同样不含 `mcp`。
+- **降级**：解析 `dist/extensions/index.js` 失败时只 warn，纯工具白名单照常工作（与 pi 目录结构耦合，见 changelog 032）。
 
 ## 授权模型（双道闸 + 快照语义）
 

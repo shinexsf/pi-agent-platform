@@ -14,6 +14,14 @@ import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
+import {
+  BUILTIN_TOOLS,
+  BUILTIN_TOOL_NAMES,
+  BUILTIN_TOOL_DEFAULT_NAMES,
+  impliedBy,
+  withImpliedTools,
+  SERVER_BUILTIN_TOOLS,
+} from '../../constants/builtin-tools';
 
 interface ModelOption {
   provider: string;
@@ -24,11 +32,6 @@ interface ModelOption {
 interface NamedItem {
   name: string;
 }
-
-const BUILTIN_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
-// Server-side custom tools (AgentConfig.serverBuiltinTools) — gated separately
-// from pi builtin tools; null = 默认（仅 sendFileToUser），[]=全关，数组=白名单
-const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
 
 // callServer 方法级授权（AgentConfig.capabilities）：
 // null=未配置（opt-in：无任何方法权限）、[]=显式全禁、数组=授权白名单
@@ -153,7 +156,9 @@ onMounted(async () => {
         config: {
           systemPrompt: agent.config?.systemPrompt ?? '',
           appendSystemPrompt: agent.config?.appendSystemPrompt ?? '',
-          builtinTools: agent.config?.builtinTools ?? null,
+          // Mirror the worker rule on load (mcp ⇒ codemode + tool_search) so the editor never
+          // shows a list the runtime would silently expand; saving persists the expansion.
+          builtinTools: agent.config?.builtinTools ? withImpliedTools(agent.config.builtinTools) : null,
           serverBuiltinTools: agent.config?.serverBuiltinTools ?? null,
           capabilities: agent.config?.capabilities ?? null,
           extensions: agent.config?.extensions ?? null,
@@ -207,6 +212,20 @@ function serverToolsSummary(items: string[] | null): string {
   if (items === null) return '默认（仅 sendFileToUser）';
   if (items.length === 0) return '无';
   return items.length === SERVER_BUILTIN_TOOLS.length ? `全部 ${items.length} 项` : `${items.length} / ${SERVER_BUILTIN_TOOLS.length} 项`;
+}
+
+/**
+ * Selecting mcp also enables the extensions its servers need (exposure defaults to codemode;
+ * deferred needs tool_search). The worker enforces the same rule, so this is an affordance only.
+ * Un-ticking the implied tools afterwards is allowed — they work standalone.
+ */
+function onBuiltinToolChange(tool: string): void {
+  const list = form.value.config.builtinTools;
+  if (!list) return;
+  // Only expansion is automatic; un-ticking an implied tool stays the user's choice (the
+  // worker re-adds it at runtime anyway, which the "mcp 依赖" badge communicates).
+  const next = withImpliedTools(list);
+  if (next.length !== list.length) form.value.config.builtinTools = next;
 }
 </script>
 
@@ -306,10 +325,10 @@ function serverToolsSummary(items: string[] | null): string {
             <div class="resource-group">
               <div class="resource-group-header">
                 <span class="resource-group-title">Builtin tools</span>
-                <span class="resource-group-count">{{ resourceSummary(form.config.builtinTools, BUILTIN_TOOLS.length) }}</span>
+                <span class="resource-group-count">{{ resourceSummary(form.config.builtinTools, BUILTIN_TOOL_NAMES.length) }}</span>
               </div>
               <template v-if="isView">
-                <div v-if="form.config.builtinTools === null" class="resource-default">默认（全部 {{ BUILTIN_TOOLS.length }} 项）</div>
+                <div v-if="form.config.builtinTools === null" class="resource-default">默认（全部 {{ BUILTIN_TOOL_NAMES.length }} 项）</div>
                 <div v-else class="tag-list">
                   <span v-for="tool in form.config.builtinTools" :key="tool" class="tag">{{ tool }}</span>
                   <span v-if="form.config.builtinTools.length === 0" class="resource-empty">无</span>
@@ -318,19 +337,30 @@ function serverToolsSummary(items: string[] | null): string {
               <template v-else>
                 <label class="checkbox-inline">
                   <input type="checkbox" :checked="form.config.builtinTools === null"
-                    @change="form.config.builtinTools = ($event.target as HTMLInputElement).checked ? null : [...BUILTIN_TOOLS]" />
+                    @change="form.config.builtinTools = ($event.target as HTMLInputElement).checked ? null : [...BUILTIN_TOOL_DEFAULT_NAMES]" />
                   <span>使用默认</span>
                 </label>
+                <div class="resource-hint">
+                  codemode / tool_search / mcp 为 pi 内置扩展工具：勾选后在 worker 里装载对应扩展；mcp 会连接 mcp.json 里的 server（全选不含 mcp）。
+                  codemode 与 tool_search 可单独启用；勾选 mcp 后它们会被锁定为启用——server 工具怎么交给模型由 mcp.json 的 exposure 决定
+                </div>
                 <div v-if="form.config.builtinTools !== null" class="resource-edit">
                   <div class="resource-edit-actions">
-                    <button type="button" class="btn-link" @click="form.config.builtinTools = [...BUILTIN_TOOLS]">全选</button>
+                    <button type="button" class="btn-link" @click="form.config.builtinTools = [...BUILTIN_TOOL_DEFAULT_NAMES]">全选</button>
                     <button type="button" class="btn-link" @click="form.config.builtinTools = []">清空</button>
                   </div>
                   <div class="tag-list editable">
-                    <label v-for="tool in BUILTIN_TOOLS" :key="tool" class="tag-check"
-                      :class="{ checked: form.config.builtinTools.includes(tool) }">
-                      <input type="checkbox" :value="tool" v-model="form.config.builtinTools" />
+                    <label v-for="tool in BUILTIN_TOOL_NAMES" :key="tool" class="tag-check"
+                      :class="{
+                        checked: form.config.builtinTools.includes(tool),
+                        locked: !!impliedBy(form.config.builtinTools, tool),
+                      }"
+                      :title="impliedBy(form.config.builtinTools, tool) ? 'mcp 依赖：勾选 mcp 时自动启用并锁定（worker 会补齐）' : undefined">
+                      <input type="checkbox" :value="tool" v-model="form.config.builtinTools"
+                        :disabled="!!impliedBy(form.config.builtinTools, tool)"
+                        @change="onBuiltinToolChange(tool)" />
                       <span>{{ tool }}</span>
+                      <span v-if="impliedBy(form.config.builtinTools, tool)" class="tag-dep">mcp 依赖</span>
                     </label>
                   </div>
                 </div>
@@ -719,6 +749,18 @@ function serverToolsSummary(items: string[] | null): string {
 }
 
 .tag-check input { display: none; }
+
+.tag-check .tag-dep {
+  margin-left: 4px;
+  font-size: 0.64rem;
+  opacity: 0.75;
+}
+
+/* Implied by mcp: worker re-adds these at runtime, so the checkbox is not editable. */
+.tag-check.locked {
+  cursor: default;
+  opacity: 0.85;
+}
 
 .tag-check.checked {
   color: var(--accent-ink);

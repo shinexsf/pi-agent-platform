@@ -17,6 +17,29 @@ export interface GlobalSettings {
   [key: string]: unknown;
 }
 
+/**
+ * Platform default for `AgentConfig.builtinTools` — used only when the user has NOT configured
+ * `defaultBuiltinTools` in `~/.pi/server/config.json`.
+ *
+ * One list drives BOTH: (a) which pi builtin tools are activated, and (b) which pi builtin
+ * extensions get loaded (`codemode` / `tool_search` are extension-provided tools — naming them
+ * here loads `builtin:<ext>` in the worker). `mcp` is deliberately absent: loading it connects
+ * every server in `mcp.json` on session start, and it may be replaced by `pi-mcp-adapter` —
+ * opt in per agent instead.
+ */
+export const DEFAULT_BUILTIN_TOOLS: readonly string[] = [
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'grep',
+  'find',
+  'ls',
+  'powershell',
+  'codemode',
+  'tool_search',
+];
+
 function serverConfigPath(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? process.env.HOMEPATH ?? '.';
   const sep = home.includes('\\') ? '\\' : '/';

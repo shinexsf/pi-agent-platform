@@ -201,6 +201,7 @@ async function handlePrompt(sessionId: string, message: string, body: PromptRequ
 - customPrompt 路径：保留 Available tools / "In addition to..." / tool promptGuidelines（避免 model 乱调用工具）；**每轮重建 → 工具集变化自动跟随**（旧一次性 set 的限制已消除）
 - default 路径（未配 systemPrompt）：不注册 handler，走 pi SDK 原 default prompt（含 Pi doc / Role def / 硬编码 Guidelines），不动
 - **注入豁免**：pi 1.1.0 的 inline 扩展装载**先于** `extensionsOverride`，`createExtensionsFilter` 对 `<inline:` 前缀无条件放行——agent 的 extensions 白名单不会误杀接管 handler
+- **内置扩展装载（2026-10-20 起）**：`builtinTools` 含 `codemode` / `tool_search` / `mcp` 时，同一 loader 里再走两条：① factory 进 `extensionFactories`（与 takeover 内联扩展共存）；② `builtin:<ext>` 进 `additionalExtensionPaths`（**官方装载触发点**，`extensionFactories` 单独不触发装载、`extensionsOverride` 是装载后的 transform 兜不住）。注入的 `builtin:*` 在 `createExtensionsFilter` 里按**精确路径**豁免（第三参数 `injectedExtensions`），与 `<inline:` 同等级。激活侧不需额外分支：内置扩展注册的工具 `sourceInfo.source` 同样是 `builtin`。详见 `pi-agent-server_capabilities.md` 的「`builtinTools` 清单与内置扩展装载」。
 - **getSystemPrompt debug 读路径**：闭包 takeover state（创建时从 session base options eager seed + handler 每轮刷新）；seed 失败降级读公开 `session.systemPrompt` getter + warn；IPC 契约 `{text,length,source}` 不变，source 由 worker 本地配置判定
 - worker 同时经该 loader 注入 appendSystemPrompt / 资源过滤（extensions/skills/prompts override），自有 loader 必须手动 `await resourceLoader.reload()`（pi 契约：仅自建 loader 才自动 reload）
 

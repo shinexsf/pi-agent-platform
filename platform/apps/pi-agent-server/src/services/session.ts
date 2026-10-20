@@ -22,7 +22,7 @@ import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
-import { readSettings, type GlobalSettings } from './settings-reader.js';
+import { readSettings, DEFAULT_BUILTIN_TOOLS, type GlobalSettings } from './settings-reader.js';
 import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilities/registry.js';
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
@@ -219,17 +219,24 @@ function buildRuntimeConfig(
  * Merge agent config with global defaults from settings.json.
  * When agent config field is null/undefined, use the global default.
  * When agent config field is set (including empty array), use it as-is.
+ *
+ * `builtinTools` falls back to the platform default (DEFAULT_BUILTIN_TOOLS) when neither the
+ * agent nor `~/.pi/server/config.json` specify it — the list also drives pi builtin extension
+ * loading (codemode / tool_search), so an explicit user config keeps its exact meaning.
  */
 function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undefined {
   const globalSettings = readSettings();
-  
-  // No global defaults configured — return agent config as-is
-  if (!globalSettings) return agentConfig;
+  const globalBuiltinTools = globalSettings?.defaultBuiltinTools ?? [...DEFAULT_BUILTIN_TOOLS];
+
+  // No global defaults configured — apply the platform default for builtinTools only
+  if (!globalSettings) {
+    return { ...(agentConfig ?? {}), builtinTools: agentConfig?.builtinTools ?? globalBuiltinTools };
+  }
   
   // No agent config — create one with just global defaults
   if (!agentConfig) {
     return {
-      builtinTools: globalSettings.defaultBuiltinTools,
+      builtinTools: globalBuiltinTools,
       serverBuiltinTools: globalSettings.defaultServerBuiltinTools,
       extensions: globalSettings.defaultExtensions,
       skills: globalSettings.defaultSkills,
@@ -240,7 +247,7 @@ function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undef
   // Merge: agent config fields take precedence, fall back to global defaults
   return {
     ...agentConfig,
-    builtinTools: agentConfig.builtinTools ?? globalSettings.defaultBuiltinTools,
+    builtinTools: agentConfig.builtinTools ?? globalBuiltinTools,
     serverBuiltinTools: agentConfig.serverBuiltinTools ?? globalSettings.defaultServerBuiltinTools,
     extensions: agentConfig.extensions ?? globalSettings.defaultExtensions,
     skills: agentConfig.skills ?? globalSettings.defaultSkills,

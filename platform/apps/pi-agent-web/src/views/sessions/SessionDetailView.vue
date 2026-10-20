@@ -11,6 +11,7 @@ import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
+import { BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, impliedBy, withImpliedTools } from '../../constants/builtin-tools';
 
 interface ModelOption { provider: string; modelId: string; displayName: string }
 
@@ -64,9 +65,19 @@ const skills = ref<string[] | null>(null);
 const prompts = ref<string[] | null>(null);
 
 const thinkingLevels = ['low', 'medium', 'high'];
-const BUILTIN_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+const BUILTIN_TOOLS = BUILTIN_TOOL_NAMES;
 const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
 const builtinToolCount = computed(() => BUILTIN_TOOLS.length);
+/** 全选 = 平台默认集合（不含 mcp，避免一键触发 mcp.json 全 server 连接） */
+const builtinToolDefault = [...BUILTIN_TOOL_DEFAULT_NAMES];
+
+/** Selecting mcp also enables the extensions its servers need (same rule as the worker). */
+function onBuiltinToolChange(): void {
+  const list = builtinTools.value;
+  if (!list) return;
+  const next = withImpliedTools(list);
+  if (next.length !== list.length) builtinTools.value = next;
+}
 
 // available resources
 const availableSkills = ref<{ name: string }[]>([]);
@@ -130,7 +141,11 @@ onMounted(async () => {
     model.value = session.value.model;
     thinkingLevel.value = session.value.thinkingLevel ?? '';
     setCrumbName(session.value.id, session.value.title || session.value.id.slice(0, 8));
-    builtinTools.value = session.value.config?.builtinTools !== undefined ? [...(session.value.config.builtinTools ?? [])] : null;
+    // Mirror the worker rule (mcp ⇒ codemode + tool_search) so the editor never shows a list
+    // the runtime would silently expand — same as AgentEditorView.
+    builtinTools.value = session.value.config?.builtinTools !== undefined
+      ? (session.value.config.builtinTools ? withImpliedTools(session.value.config.builtinTools) : [])
+      : null;
     // serverBuiltinTools：缺省/显式 null 都是「默认」（仅 sendFileToUser）；数组才展开
     const sbt = session.value.config?.serverBuiltinTools as string[] | null | undefined;
     serverBuiltinTools.value = sbt == null ? null : [...sbt];
@@ -360,9 +375,17 @@ function workerUptime(ms: number): string {
               </template>
               <template v-else>
                 <label class="checkbox-inline"><input type="checkbox" :checked="builtinTools === null" @change="builtinTools = ($event.target as HTMLInputElement).checked ? null : [...BUILTIN_TOOLS]" /><span>使用默认</span></label>
+                <div class="sd-resource-hint">codemode / tool_search 可单独启用；勾选 mcp 后它们会被锁定为启用（server 工具怎么交给模型由 mcp.json 的 exposure 决定）</div>
                 <div v-if="builtinTools !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="builtinTools = [...BUILTIN_TOOLS]">全选</button><button type="button" class="btn-link" @click="builtinTools = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="t in BUILTIN_TOOLS" :key="t" class="tag-check" :class="{ checked: builtinTools.includes(t) }"><input type="checkbox" :value="t" v-model="builtinTools" /><span>{{ t }}</span></label></div>
+                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="builtinTools = [...builtinToolDefault]">全选</button><button type="button" class="btn-link" @click="builtinTools = []">清空</button></div>
+                  <div class="tag-list editable"><label v-for="t in BUILTIN_TOOLS" :key="t" class="tag-check"
+                    :class="{ checked: builtinTools.includes(t), locked: !!impliedBy(builtinTools, t) }"
+                    :title="impliedBy(builtinTools, t) ? 'mcp 依赖：勾选 mcp 时自动启用并锁定（worker 会补齐）' : undefined">
+                    <input type="checkbox" :value="t" v-model="builtinTools"
+                      :disabled="!!impliedBy(builtinTools, t)"
+                      @change="onBuiltinToolChange" /><span>{{ t }}</span>
+                    <span v-if="impliedBy(builtinTools, t)" class="tag-dep">mcp 依赖</span>
+                  </label></div>
                 </div>
               </template>
             </div>
@@ -657,6 +680,10 @@ function workerUptime(ms: number): string {
 .tag-check input { display: none; }
 .tag-check.checked { color: var(--accent-ink); background: var(--accent-soft); border-color: var(--accent); }
 .tag-check:hover { border-color: var(--border-strong); }
+.tag-check.locked { cursor: default; opacity: 0.85; }
+.tag-check .tag-dep { margin-left: 4px; font-size: 0.64rem; opacity: 0.75; }
+
+.sd-resource-hint { font-size: 0.74rem; line-height: 1.45; color: var(--text-tertiary); }
 
 .sd-resource-group {
   display: flex;

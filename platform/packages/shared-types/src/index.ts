@@ -15,7 +15,12 @@ export interface AgentConfig {
   systemPrompt?: string;
   appendSystemPrompt?: string;
 
-  // Builtin tools whitelist (null = all, [] = none, ['read','write'] = only these)
+  // Tool enable list — drives BOTH activation and built-in extension loading:
+  // - plain pi builtin tools: read / write / edit / bash / grep / find / ls / powershell
+  // - pi builtin EXTENSION tools: codemode / tool_search / mcp (naming one loads
+  //   `builtin:<ext>` in the worker; mcp connects the servers in mcp.json on session
+  //   start, is replaced by pi-mcp-adapter when present, and is NOT in the platform default)
+  // Semantics: null/undefined = inherit global default, [] = none, array = allowlist.
   builtinTools?: string[];
 
   // Extension whitelist (names from settings.json packages + extensions)
@@ -33,7 +38,7 @@ export interface AgentConfig {
   // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
   // that talk to the master via reverse IPC). Semantics: undefined/null = default
   // `['sendFileToUser']` (callServer OFF by default, opt-in); [] = none; array = allowlist.
-  // Independent from `builtinTools` (which only governs pi builtin tools).
+  // Independent from `builtinTools` (which governs pi builtin tools + builtin extension tools).
   serverBuiltinTools?: string[];
 
   // callServer method-level allowlist. null/undefined = use the global default
