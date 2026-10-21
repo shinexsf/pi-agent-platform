@@ -35,6 +35,60 @@ function isExpanded(key: string): boolean {
   return expandedItems.value.has(key)
 }
 
+type ToolEntry = SessionInfoDTO['resources']['tools'][number]
+
+/**
+ * Badge text for the tool's origin: `builtin` (pi core tool), `platform` (registered by the
+ * worker itself), otherwise the extension name — including pi's built-in extensions
+ * (`mcp`, `codemode`, `tool-search`). There is no tool called `mcp`; it is the extension that
+ * registers `mcp__<server>__<tool>`.
+ */
+function toolSourceLabel(t: ToolEntry): string {
+  if (t.sourceType === 'sdk') return 'platform'
+  return t.source || 'builtin'
+}
+
+/**
+ * Whether the model cannot see the tool yet (`deferred` / `hidden` exposure).
+ *
+ * Rendered as dimming, not as text: `exposure` is pi metadata the user cannot change, so the
+ * enum itself is noise (change: mcp-as-first-class-capability drops the `model-only` badge).
+ */
+function isLazy(t: { exposure: string }): boolean {
+  return t.exposure === 'deferred' || t.exposure === 'hidden'
+}
+
+type McpServerEntry = SessionInfoDTO['resources']['mcpServers'][number]
+type McpToolEntry = McpServerEntry['tools'][number]
+
+/** `<server>` header for an MCP group; the resource-tools group is not a server. */
+const mcpToolTotal = computed(() =>
+  (info.value?.resources.mcpServers ?? []).reduce((sum, g) => sum + g.tools.length, 0),
+)
+
+/** Server name as configured in mcp.json (`rea`), not the tool prefix (`mcp__rea__`). */
+function mcpGroupLabel(group: McpServerEntry): string {
+  return group.kind === 'resources' ? '资源工具' : group.name
+}
+
+/** How many tools of a group are still unloaded (deferred / hidden). */
+function mcpUnloadedCount(group: McpServerEntry): number {
+  return group.tools.filter(isLazy).length
+}
+
+/** MCP groups start collapsed — one server alone can hold 100+ tools. */
+const expandedMcp = ref(new Set<string>())
+
+function toggleMcp(key: string) {
+  if (expandedMcp.value.has(key)) expandedMcp.value.delete(key)
+  else expandedMcp.value.add(key)
+  expandedMcp.value = new Set(expandedMcp.value)
+}
+
+function isMcpExpanded(key: string): boolean {
+  return expandedMcp.value.has(key)
+}
+
 async function loadInfo() {
   loading.value = true
   error.value = null
@@ -204,21 +258,58 @@ onUnmounted(() => {
 
           <!-- Tools -->
           <div v-if="info.resources.tools.length > 0" class="info-section">
-            <div class="section-title row-title"><span>Tools</span><span class="section-count">{{ info.resources.tools.length }}</span></div>
+            <div class="section-title row-title">
+              <span>Tools</span>
+              <span class="section-count">{{ info.resources.tools.length }}</span>
+            </div>
             <div class="res-list">
-              <div v-for="t in info.resources.tools" :key="t.name" :class="['res-item', { expanded: isExpanded(`tool:${t.name}`) }]" @click="toggleItem(`tool:${t.name}`)">
+              <div v-for="t in info.resources.tools" :key="t.name" :class="['res-item', { expanded: isExpanded(`tool:${t.name}`), lazy: isLazy(t) }]" @click="toggleItem(`tool:${t.name}`)">
                 <span class="res-name">{{ t.name }}</span>
                 <template v-if="isExpanded(`tool:${t.name}`)">
                   <span class="res-full">{{ t.description }}</span>
-                  <span class="res-meta"><span :class="['src-tag', t.sourceType]">{{ t.sourceType === 'builtin' ? 'builtin' : t.source }}</span></span>
+                  <span class="res-meta">
+                    <span :class="['src-tag', t.sourceType]">{{ toolSourceLabel(t) }}</span>
+                  </span>
                 </template>
                 <span v-else class="res-desc">{{ t.description }}</span>
-                <span v-if="!isExpanded(`tool:${t.name}`)" :class="['src-tag', t.sourceType]">{{ t.sourceType === 'builtin' ? 'builtin' : t.source }}</span>
+                <span v-if="!isExpanded(`tool:${t.name}`)" class="res-tags">
+                  <span :class="['src-tag', t.sourceType]">{{ toolSourceLabel(t) }}</span>
+                </span>
               </div>
             </div>
           </div>
 
-          <div v-if="info.resources.prompts.length === 0 && info.resources.skills.length === 0 && info.resources.extensions.length === 0 && info.resources.tools.length === 0" class="info-section">
+          <!-- MCP: separate section, grouped by server (change: mcp-as-first-class-capability) -->
+          <div v-if="info.resources.mcpServers.length > 0" class="info-section">
+            <div class="section-title row-title">
+              <span>MCP</span>
+              <span class="section-count">
+                {{ info.resources.mcpServers.length }} 组 ·
+                {{ mcpToolTotal }} 工具
+              </span>
+            </div>
+            <div class="res-list">
+              <div v-for="g in info.resources.mcpServers" :key="g.kind + ':' + g.name" class="mcp-group">
+                <div :class="['res-item', 'mcp-group-head', { expanded: isMcpExpanded(g.kind + ':' + g.name) }]"
+                  @click="toggleMcp(g.kind + ':' + g.name)">
+                  <span class="res-name">{{ mcpGroupLabel(g) }}</span>
+                  <span class="res-desc mcp-count">
+                    {{ g.tools.length }} 工具<template v-if="mcpUnloadedCount(g) > 0">（{{ mcpUnloadedCount(g) }} 未加载）</template>
+                  </span>
+                </div>
+                <div v-if="isMcpExpanded(g.kind + ':' + g.name)" class="res-list mcp-tools">
+                  <div v-for="t in g.tools" :key="t.name" :class="['res-item', 'mcp-tool', { expanded: isExpanded(`mcp:${t.name}`), lazy: isLazy(t) }]"
+                    @click.stop="toggleItem(`mcp:${t.name}`)">
+                    <span class="res-name">{{ t.name }}</span>
+                    <span v-if="isExpanded(`mcp:${t.name}`)" class="res-full">{{ t.description }}</span>
+                    <span v-else class="res-desc">{{ t.description }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="info.resources.prompts.length === 0 && info.resources.skills.length === 0 && info.resources.extensions.length === 0 && info.resources.tools.length === 0 && info.resources.mcpServers.length === 0" class="info-section">
             <div class="section-title">Resources</div>
             <div class="empty-state">No prompts, skills, extensions, or tools loaded.</div>
           </div>
@@ -282,6 +373,16 @@ onUnmounted(() => {
 .res-meta { width: 100%; margin-top: 2px; }
 .src-tag { flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 500; white-space: nowrap; }
 .src-tag.builtin { background: #E8F5E9; color: #1B5E20; }
-.src-tag.extension { background: var(--surface-hover, #f5f5f5); color: var(--text-secondary, #666); }
+/* Any extension tool (pi built-in ones included: mcp / codemode / tool-search, or npm packages) */
+.src-tag.extension { background: #E3F2FD; color: #0D47A1; }
+.src-tag.sdk { background: #F3E5F5; color: #4A148C; }
+.res-item.lazy .res-name { opacity: 0.55; }
+.res-tags { flex-shrink: 0; display: inline-flex; gap: 4px; align-items: center; }
+.mcp-group + .mcp-group { margin-top: 2px; }
+.mcp-group-head { cursor: pointer; }
+.mcp-count { font-variant-numeric: tabular-nums; }
+.mcp-tools { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px dashed var(--border-color, #e0e0e0); }
+/* Registered but not loaded yet (tool_search hasn't pulled it in) */
+.res-item.lazy .res-name, .res-item.lazy .res-desc { opacity: 0.55; }
 .empty-state { color: var(--text-secondary, #666); font-size: 12px; padding: 8px 0; }
 </style>

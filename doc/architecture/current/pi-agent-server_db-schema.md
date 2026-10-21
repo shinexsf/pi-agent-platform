@@ -102,8 +102,12 @@ interface AgentConfig {
   systemPrompt?: string;
   appendSystemPrompt?: string;
 
-  // 内置工具控制（null = 全部启用，[] = 全部禁用）
+  // 内置工具控制（工具名清单；null = 跟随全局默认）
   builtinTools?: string[];
+
+  // MCP 能力开关（不是工具名）：true = 装载 builtin:mcp 并自动补齐 codemode/tool_search；
+  // null/undefined = 跟随全局 defaultMcp（平台默认关闭）
+  mcp?: { enabled?: boolean } | null;
 
   // 插件控制（从 settings.json 筛选）
   extensions?: string[];

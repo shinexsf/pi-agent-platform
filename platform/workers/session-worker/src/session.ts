@@ -33,6 +33,7 @@ import type {
   AgentConfig,
 } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
+import { groupMcpTools, isMcpToolName, type McpServerGroup } from './mcp-tools.js';
 import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
 import { logger } from './logger.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
@@ -481,12 +482,17 @@ export async function createSession(
     : undefined;
 
   // ─── Built-in extension injection (change: builtin-tools-unified-management) ───
-  // `builtinTools` doubles as the source of truth for pi's built-in extensions:
-  //   codemode / tool_search / mcp are extension-provided tools, so naming them in the
-  //   whitelist also loads the matching `builtin:<ext>` ($ee builtin-extensions.ts).
+  // Two independent inputs now (change: mcp-as-first-class-capability):
+  //   - `builtinTools` names TOOLS; codemode / tool_search are extension-provided tools, so
+  //     naming one loads the matching `builtin:<ext>` (see builtin-extensions.ts).
+  //   - `mcp.enabled` is the MCP capability switch: it loads `builtin:mcp` plus the codemode /
+  //     tool_search dependencies (a server's default `exposure: "codemode"` needs them).
   // Injection and activation share ONE list, so "injected but not whitelisted" cannot happen.
-  // null/empty → nothing injected (mcp must never connect unless explicitly selected).
-  const builtinInjection = await resolveBuiltinExtensionInjection(agentConfig?.builtinTools);
+  // A legacy `'mcp'` entry in builtinTools is ignored — MCP is never enabled via the tool list.
+  const builtinInjection = await resolveBuiltinExtensionInjection({
+    builtinTools: agentConfig?.builtinTools,
+    mcpEnabled: agentConfig?.mcp?.enabled === true,
+  });
   const extensionFactories: InlineExtension[] = [
     ...(takeoverExtension ? [takeoverExtension] : []),
     ...(builtinInjection?.factories ?? []),
@@ -655,8 +661,12 @@ export async function createSession(
           (builtinInjection?.toolNames ?? agentConfig.builtinTools!).includes(t.name),
       )
       .map((t) => t.name);
+    // MCP tools carry `sourceInfo.source === 'builtin'` too (their extension path is
+    // `builtin:mcp`), but they are NOT whitelisted tools: pi owns their visibility via each
+    // server's `exposure`. Filtering them out here would silently disable `direct`-exposure
+    // servers, so they are kept regardless (change: mcp-as-first-class-capability).
     const nonBuiltinTools = allTools
-      .filter((t) => t.sourceInfo?.source !== 'builtin')
+      .filter((t) => t.sourceInfo?.source !== 'builtin' || isMcpToolName(t.name))
       .map((t) => t.name);
     realSession.setActiveToolsByName([...activeBuiltinTools, ...nonBuiltinTools]);
   }
@@ -796,7 +806,14 @@ interface AgentSessionLike {
     getSkills(): { skills: ReadonlyArray<{ name: string; description: string; filePath: string; baseDir: string }> };
     getExtensions(): { extensions: Array<{ path: string; hidden?: boolean; commands: Map<string, unknown>; tools: Map<string, unknown> }> };
   };
-  getAllTools(): Array<{ name: string; description: string; sourceInfo: { path: string; source: string } }>;
+  getAllTools(): Array<{
+    name: string;
+    description: string;
+    exposure?: 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+    sourceInfo: { path: string; source: string };
+  }>;
+  /** pi >= 1.1.0: names of the tools currently active in the session. */
+  getActiveToolNames(): string[];
   sendUserMessage(content: string): Promise<void>;
   setSessionName(name: string): void;
   sessionManager: { getSessionFile(): string | undefined; getSessionName?(): string | undefined };
@@ -1037,7 +1054,20 @@ export class PiSessionAdapter {
     prompts: Array<{ name: string; description: string; filePath: string }>;
     skills: Array<{ name: string; description: string; filePath: string; baseDir: string }>;
     extensions: Array<{ name: string; path: string; commandCount: number; toolCount: number }>;
-    tools: Array<{ name: string; description: string; source: string; sourceType: 'builtin' | 'extension' }>;
+    tools: Array<{
+      name: string;
+      description: string;
+      source: string;
+      sourceType: 'builtin' | 'extension' | 'sdk';
+      exposure: 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+      active: boolean;
+    }>;
+    mcpServers: McpServerGroup<{
+      name: string;
+      description: string;
+      exposure: string;
+      active: boolean;
+    }>[];
   } {
     const prompts = (this.real.promptTemplates as ReadonlyArray<{
       name: string;
@@ -1080,22 +1110,72 @@ export class PiSessionAdapter {
         toolCount: e.tools.size,
       }));
 
-    // Tools: from session.getAllTools(), classify source as builtin or extension
+    // Tools: `getAllTools()` returns every registered tool (active or not) together with its
+    // `exposure` and `sourceInfo`. `sourceInfo.source` is useless for classification — pi sets it
+    // to the literal "builtin" for BOTH the core tools and everything a built-in extension
+    // registers (mcp / codemode / tool-search). The real discriminator is `sourceInfo.path`:
+    //
+    //   builtin:read            → core tool
+    //   builtin:mcp             → tool registered by the built-in `mcp` extension
+    //   <sdk:sendFileToUser>    → tool the worker registered itself
+    //   /abs/path/xxx.ts        → regular extension (source = package label)
+    const CORE_TOOL_NAMES = new Set(['read', 'bash', 'edit', 'write', 'find', 'grep', 'ls', 'powershell']);
+    // pi ships these as built-in *extensions*, but they are pi's own tools (not external vendors),
+    // so they read as `builtin` in the UI.
+    const PI_OWN_EXTENSIONS = new Set(['codemode', 'tool-search']);
+    const BUILTIN_PREFIX = 'builtin:';
+    const activeNames = new Set(this.real.getActiveToolNames());
     const allTools = this.real.getAllTools();
-    const extensionSources = new Set(extensions.map((e) => e.name));
-    const tools = allTools.map((t: { name: string; description: string; sourceInfo: { path: string; source: string } }) => {
-      // A tool is from an extension if its sourceInfo.source matches an extension name
-      const sourceName = t.sourceInfo?.source ?? '';
-      const isExtension = extensionSources.has(sourceName);
+
+    // MCP tools are reported per server in `mcpServers`, never flat in `tools` (change:
+    // mcp-as-first-class-capability).
+    const mcpTools = allTools.filter((t) => isMcpToolName(t.name));
+    const nonMcpTools = allTools.filter((t) => !isMcpToolName(t.name));
+    const mcpServers = groupMcpTools(
+      mcpTools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        exposure: t.exposure ?? 'direct',
+        active: activeNames.has(t.name),
+      })),
+    );
+
+    const tools = nonMcpTools.map((t) => {
+      const path = t.sourceInfo?.path ?? '';
+      const exposure = t.exposure ?? 'direct';
+      let sourceType: 'builtin' | 'extension' | 'sdk';
+      let source: string;
+
+      if (path.startsWith(BUILTIN_PREFIX)) {
+        const slot = path.slice(BUILTIN_PREFIX.length);
+        if (CORE_TOOL_NAMES.has(slot) || PI_OWN_EXTENSIONS.has(slot)) {
+          sourceType = 'builtin';
+          source = 'builtin';
+        } else {
+          // Any other built-in extension slot: the slot IS the extension name (it is never a tool
+          // name), so the badge reads like the extension.
+          sourceType = 'extension';
+          source = slot;
+        }
+      } else if (path.startsWith('<sdk:')) {
+        sourceType = 'sdk';
+        source = 'platform';
+      } else {
+        sourceType = 'extension';
+        source = t.sourceInfo?.source || path.split(/[/\\]/).slice(-2, -1).pop() || path;
+      }
+
       return {
         name: t.name,
         description: t.description,
-        source: sourceName,
-        sourceType: (isExtension ? 'extension' : 'builtin') as 'builtin' | 'extension',
+        source,
+        sourceType,
+        exposure,
+        active: activeNames.has(t.name),
       };
     });
 
-    return { prompts, skills, extensions, tools };
+    return { prompts, skills, extensions, tools, mcpServers };
   }
 
   /**

@@ -11,7 +11,7 @@ import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
-import { BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, impliedBy, withImpliedTools } from '../../constants/builtin-tools';
+import { BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, MCP_SWITCH_HINT, withMcpDependencies } from '../../constants/builtin-tools';
 
 interface ModelOption { provider: string; modelId: string; displayName: string }
 
@@ -55,6 +55,8 @@ const title = ref('');
 const model = ref('');
 const thinkingLevel = ref('');
 const builtinTools = ref<string[] | null>(null);
+/** MCP capability override for this session (null = inherit the agent / global default). */
+const mcp = ref<{ enabled?: boolean } | null>(null);
 // Server 侧自定义工具白名单（AgentConfig.serverBuiltinTools）：null=默认（仅 sendFileToUser）、[]=全关、数组=白名单
 const serverBuiltinTools = ref<string[] | null>(null);
 // callServer 方法级授权（session 快照级，null=未配置=无权限、[]=全禁、数组=白名单；
@@ -68,15 +70,22 @@ const thinkingLevels = ['low', 'medium', 'high'];
 const BUILTIN_TOOLS = BUILTIN_TOOL_NAMES;
 const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
 const builtinToolCount = computed(() => BUILTIN_TOOLS.length);
-/** 全选 = 平台默认集合（不含 mcp，避免一键触发 mcp.json 全 server 连接） */
+/** 全选 = 平台默认集合 */
 const builtinToolDefault = [...BUILTIN_TOOL_DEFAULT_NAMES];
 
-/** Selecting mcp also enables the extensions its servers need (same rule as the worker). */
-function onBuiltinToolChange(): void {
+const mcpEnabled = computed(() => mcp.value?.enabled === true);
+
+/**
+ * MCP is a capability, not a tool: the switch writes `config.mcp.enabled` and, when turned on,
+ * ticks codemode + tool_search (a server's default `exposure: codemode` needs them). Turning it
+ * off leaves those selections untouched. The worker enforces the same dependency.
+ */
+function setMcpEnabled(next: boolean): void {
+  mcp.value = { ...(mcp.value ?? {}), enabled: next };
+  if (!next) return;
   const list = builtinTools.value;
-  if (!list) return;
-  const next = withImpliedTools(list);
-  if (next.length !== list.length) builtinTools.value = next;
+  if (list === null) return; // inherit default (already contains both)
+  builtinTools.value = withMcpDependencies(list);
 }
 
 // available resources
@@ -141,11 +150,12 @@ onMounted(async () => {
     model.value = session.value.model;
     thinkingLevel.value = session.value.thinkingLevel ?? '';
     setCrumbName(session.value.id, session.value.title || session.value.id.slice(0, 8));
-    // Mirror the worker rule (mcp ⇒ codemode + tool_search) so the editor never shows a list
-    // the runtime would silently expand — same as AgentEditorView.
     builtinTools.value = session.value.config?.builtinTools !== undefined
-      ? (session.value.config.builtinTools ? withImpliedTools(session.value.config.builtinTools) : [])
+      ? (session.value.config.builtinTools ? [...session.value.config.builtinTools] : [])
       : null;
+    // mcp: undefined = inherit the agent's config; null/absent key shows as inherit too.
+    const cfgMcp = (session.value.config as { mcp?: { enabled?: boolean } | null } | undefined)?.mcp;
+    mcp.value = cfgMcp ?? null;
     // serverBuiltinTools：缺省/显式 null 都是「默认」（仅 sendFileToUser）；数组才展开
     const sbt = session.value.config?.serverBuiltinTools as string[] | null | undefined;
     serverBuiltinTools.value = sbt == null ? null : [...sbt];
@@ -179,6 +189,7 @@ async function save(): Promise<void> {
     body.config = {
       ...(session.value?.config ?? {}),
       builtinTools: builtinTools.value,
+      mcp: mcp.value,
       serverBuiltinTools: serverBuiltinTools.value,
       capabilities: capabilities.value,
       extensions: extensions.value,
@@ -375,18 +386,30 @@ function workerUptime(ms: number): string {
               </template>
               <template v-else>
                 <label class="checkbox-inline"><input type="checkbox" :checked="builtinTools === null" @change="builtinTools = ($event.target as HTMLInputElement).checked ? null : [...BUILTIN_TOOLS]" /><span>使用默认</span></label>
-                <div class="sd-resource-hint">codemode / tool_search 可单独启用；勾选 mcp 后它们会被锁定为启用（server 工具怎么交给模型由 mcp.json 的 exposure 决定）</div>
+                <div class="sd-resource-hint">codemode / tool_search 可单独启用。MCP 不在本列表，见下方独立开关</div>
                 <div v-if="builtinTools !== null" class="resource-edit">
                   <div class="resource-edit-actions"><button type="button" class="btn-link" @click="builtinTools = [...builtinToolDefault]">全选</button><button type="button" class="btn-link" @click="builtinTools = []">清空</button></div>
                   <div class="tag-list editable"><label v-for="t in BUILTIN_TOOLS" :key="t" class="tag-check"
-                    :class="{ checked: builtinTools.includes(t), locked: !!impliedBy(builtinTools, t) }"
-                    :title="impliedBy(builtinTools, t) ? 'mcp 依赖：勾选 mcp 时自动启用并锁定（worker 会补齐）' : undefined">
-                    <input type="checkbox" :value="t" v-model="builtinTools"
-                      :disabled="!!impliedBy(builtinTools, t)"
-                      @change="onBuiltinToolChange" /><span>{{ t }}</span>
-                    <span v-if="impliedBy(builtinTools, t)" class="tag-dep">mcp 依赖</span>
+                    :class="{ checked: builtinTools.includes(t) }">
+                    <input type="checkbox" :value="t" v-model="builtinTools" /><span>{{ t }}</span>
                   </label></div>
                 </div>
+              </template>
+            </div>
+
+            <!-- MCP capability (not a tool: loads builtin:mcp and connects mcp.json servers) -->
+            <div class="sd-resource-group">
+              <div class="sd-resource-header">
+                <span class="sd-resource-title">MCP</span>
+                <span class="sd-resource-count">{{ mcp === null ? '跟随 agent' : (mcpEnabled ? '已启用' : '已关闭') }}</span>
+              </div>
+              <template v-if="isView">
+                <span class="tag tag-default">{{ mcp === null ? '跟随 agent' : (mcpEnabled ? '已启用' : '已关闭') }}</span>
+              </template>
+              <template v-else>
+                <label class="checkbox-inline"><input type="checkbox" :checked="mcp === null" @change="mcp = ($event.target as HTMLInputElement).checked ? null : { enabled: mcpEnabled }" /><span>跟随 agent</span></label>
+                <label class="checkbox-inline"><input type="checkbox" :checked="mcpEnabled" :disabled="mcp === null" @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" /><span>启用 MCP</span></label>
+                <div class="sd-resource-hint">{{ MCP_SWITCH_HINT }}</div>
               </template>
             </div>
 

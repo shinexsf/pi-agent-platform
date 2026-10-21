@@ -102,6 +102,17 @@ src/views/
 
 面包屑由路由 `meta.crumbTitle` / `meta.crumbTitleFromParam` 补充最后一段（`/config/skills/my-skill` → 配置 / Skills / my-skill）。
 
+### 内置工具清单与 MCP 开关（三处共用一份定义）
+
+`src/constants/builtin-tools.ts` 是唯一事实源，被三处复用：`views/config/DefaultSettings.vue`（全局默认）、`views/agents/AgentEditorView.vue`（agent 级，`form.config.builtinTools === null` 表示继承）、`views/sessions/SessionDetailView.vue`（会话覆盖）。
+
+- **清单 = 8 个纯工具 + `codemode` + `tool_search`**（共 10 项，各自带 hint 说明副作用）。`mcp` **不在清单**。
+- **MCP 是独立开关**：渲染成单独的 `label.mcp-switch`「MCP 服务器工具」，写 `config.mcp = { enabled }`；`false` 时保留 `{enabled:false}`（显式关闭）、`null` 表示跟随全局。
+- **依赖联动**：打开 MCP 时 `withMcpDependencies()` 把 `codemode` / `tool_search` 补进 `builtinTools`（`MCP_DEPENDENT_TOOLS`，与 worker 侧同名规则）；关掉 MCP **不**回滚这两项。
+- **文案**：`MCP_SWITCH_HINT` 说明“会话启动即连接 mcp.json 全部 server / 开启后自动勾选 codemode 与 tool_search”。
+
+会话信息面板（`components/chat/SessionInfoModal.vue`，IDE 端 `apps/pi-agent-ide/src/components/SessionInfoModal.vue` 同构）按 `resources` 分区渲染：SKILLS / EXTENSIONS / TOOLS / **MCP**。MCP 区按 server 分组（`mcpServers`，工具多时默认收起，标题显示 `<server> N 工具（M 未加载）`）；TOOLS 区不出现 `mcp__*`，badge 语义：`builtin`（pi 核心工具与 codemode/tool_search）、扩展名（`mcp` / `npm:xxx`）、`platform`（worker 注册的 `sendFileToUser` 等）。`deferred` / `hidden` 工具默认折叠，可展开。
+
 ## 组件结构
 
 ### 导航与外壳

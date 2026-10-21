@@ -18,8 +18,8 @@ import {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DEFAULT_NAMES,
-  impliedBy,
-  withImpliedTools,
+  MCP_SWITCH_HINT,
+  withMcpDependencies,
   SERVER_BUILTIN_TOOLS,
 } from '../../constants/builtin-tools';
 
@@ -85,6 +85,7 @@ const form = ref({
     systemPrompt: '',
     appendSystemPrompt: '',
     builtinTools: null as string[] | null,
+    mcp: null as { enabled?: boolean } | null,
     serverBuiltinTools: null as string[] | null,
     capabilities: null as string[] | null,
     extensions: null as string[] | null,
@@ -156,9 +157,9 @@ onMounted(async () => {
         config: {
           systemPrompt: agent.config?.systemPrompt ?? '',
           appendSystemPrompt: agent.config?.appendSystemPrompt ?? '',
-          // Mirror the worker rule on load (mcp ⇒ codemode + tool_search) so the editor never
-          // shows a list the runtime would silently expand; saving persists the expansion.
-          builtinTools: agent.config?.builtinTools ? withImpliedTools(agent.config.builtinTools) : null,
+          builtinTools: agent.config?.builtinTools ?? null,
+          // MCP is its own switch (null = inherit the global defaultMcp).
+          mcp: agent.config?.mcp ?? null,
           serverBuiltinTools: agent.config?.serverBuiltinTools ?? null,
           capabilities: agent.config?.capabilities ?? null,
           extensions: agent.config?.extensions ?? null,
@@ -214,18 +215,21 @@ function serverToolsSummary(items: string[] | null): string {
   return items.length === SERVER_BUILTIN_TOOLS.length ? `全部 ${items.length} 项` : `${items.length} / ${SERVER_BUILTIN_TOOLS.length} 项`;
 }
 
+/** Whether the MCP capability is on for this agent (null = inherit the global default). */
+const mcpEnabled = computed(() => form.value.config.mcp?.enabled === true);
+
 /**
- * Selecting mcp also enables the extensions its servers need (exposure defaults to codemode;
- * deferred needs tool_search). The worker enforces the same rule, so this is an affordance only.
- * Un-ticking the implied tools afterwards is allowed — they work standalone.
+ * MCP is a capability, not a tool: the switch writes `config.mcp.enabled` and, when turned on,
+ * ticks codemode + tool_search (a server's default `exposure: codemode` needs them). Turning it
+ * off leaves those selections untouched. The worker enforces the same dependency, so a hand-made
+ * API payload cannot produce a half-working config.
  */
-function onBuiltinToolChange(tool: string): void {
+function setMcpEnabled(next: boolean): void {
+  form.value.config.mcp = { ...(form.value.config.mcp ?? {}), enabled: next };
+  if (!next) return;
   const list = form.value.config.builtinTools;
-  if (!list) return;
-  // Only expansion is automatic; un-ticking an implied tool stays the user's choice (the
-  // worker re-adds it at runtime anyway, which the "mcp 依赖" badge communicates).
-  const next = withImpliedTools(list);
-  if (next.length !== list.length) form.value.config.builtinTools = next;
+  if (list === null) return; // inherit default (already contains both)
+  form.value.config.builtinTools = withMcpDependencies(list);
 }
 </script>
 
@@ -341,8 +345,7 @@ function onBuiltinToolChange(tool: string): void {
                   <span>使用默认</span>
                 </label>
                 <div class="resource-hint">
-                  codemode / tool_search / mcp 为 pi 内置扩展工具：勾选后在 worker 里装载对应扩展；mcp 会连接 mcp.json 里的 server（全选不含 mcp）。
-                  codemode 与 tool_search 可单独启用；勾选 mcp 后它们会被锁定为启用——server 工具怎么交给模型由 mcp.json 的 exposure 决定
+                  codemode / tool_search 为 pi 内置扩展工具：勾选后在 worker 里装载对应扩展。MCP 不在本列表，见下方独立开关
                 </div>
                 <div v-if="form.config.builtinTools !== null" class="resource-edit">
                   <div class="resource-edit-actions">
@@ -351,16 +354,9 @@ function onBuiltinToolChange(tool: string): void {
                   </div>
                   <div class="tag-list editable">
                     <label v-for="tool in BUILTIN_TOOL_NAMES" :key="tool" class="tag-check"
-                      :class="{
-                        checked: form.config.builtinTools.includes(tool),
-                        locked: !!impliedBy(form.config.builtinTools, tool),
-                      }"
-                      :title="impliedBy(form.config.builtinTools, tool) ? 'mcp 依赖：勾选 mcp 时自动启用并锁定（worker 会补齐）' : undefined">
-                      <input type="checkbox" :value="tool" v-model="form.config.builtinTools"
-                        :disabled="!!impliedBy(form.config.builtinTools, tool)"
-                        @change="onBuiltinToolChange(tool)" />
+                      :class="{ checked: form.config.builtinTools.includes(tool) }">
+                      <input type="checkbox" :value="tool" v-model="form.config.builtinTools" />
                       <span>{{ tool }}</span>
-                      <span v-if="impliedBy(form.config.builtinTools, tool)" class="tag-dep">mcp 依赖</span>
                     </label>
                   </div>
                 </div>
@@ -400,6 +396,32 @@ function onBuiltinToolChange(tool: string): void {
                   </div>
                   <div class="resource-hint" style="margin-top:4px;opacity:.7;font-size:12px">callServer = 调用 server 管理能力（需在 agent 配置 capabilities 中授权可用方法）</div>
                 </div>
+              </template>
+            </div>
+
+            <!-- MCP capability (not a tool: loads builtin:mcp and connects mcp.json servers) -->
+            <div class="resource-group">
+              <div class="resource-group-header">
+                <span class="resource-group-title">MCP</span>
+                <span class="resource-group-count">{{ form.config.mcp?.enabled === true ? '已启用' : (form.config.mcp ? '已关闭' : '默认') }}</span>
+              </div>
+              <template v-if="isView">
+                <div class="resource-default">
+                  {{ form.config.mcp?.enabled === true ? '已启用' : (form.config.mcp ? '已关闭' : '跟随全局默认') }}
+                </div>
+              </template>
+              <template v-else>
+                <label class="checkbox-inline">
+                  <input type="checkbox" :checked="form.config.mcp === null"
+                    @change="form.config.mcp = ($event.target as HTMLInputElement).checked ? null : { enabled: mcpEnabled }" />
+                  <span>使用默认（继承全局）</span>
+                </label>
+                <label class="checkbox-inline">
+                  <input type="checkbox" :checked="mcpEnabled" :disabled="form.config.mcp === null"
+                    @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" />
+                  <span>启用 MCP</span>
+                </label>
+                <div class="resource-hint">{{ MCP_SWITCH_HINT }}</div>
               </template>
             </div>
 
@@ -749,18 +771,6 @@ function onBuiltinToolChange(tool: string): void {
 }
 
 .tag-check input { display: none; }
-
-.tag-check .tag-dep {
-  margin-left: 4px;
-  font-size: 0.64rem;
-  opacity: 0.75;
-}
-
-/* Implied by mcp: worker re-adds these at runtime, so the checkbox is not editable. */
-.tag-check.locked {
-  cursor: default;
-  opacity: 0.85;
-}
 
 .tag-check.checked {
   color: var(--accent-ink);

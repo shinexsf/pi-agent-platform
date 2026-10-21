@@ -130,7 +130,45 @@ export interface SessionInfoDTO {
     prompts: Array<{ name: string; description: string; filePath: string }>;
     skills: Array<{ name: string; description: string; filePath: string; baseDir: string }>;
     extensions: Array<{ name: string; path: string; commandCount: number; toolCount: number }>;
-    tools: Array<{ name: string; description: string; source: string; sourceType: 'builtin' | 'extension' }>;
+    /**
+     * Every non-MCP tool registered in the session (including tools the model can only reach
+     * through `codemode`/`tool_search`, and `deferred` ones not loaded yet).
+     *
+     * MCP tools (`mcp__*` and the MCP resource tools) are NOT here — see `mcpServers`.
+     *
+     * `source` is the label shown on the badge:
+     * - core tool / pi's own extension tools (`codemode`, `tool_search`) → `builtin`
+     * - npm package / local extension file → its package/file label
+     * - worker-registered tool (e.g. `sendFileToUser`) → `platform`
+     */
+    tools: Array<{
+      name: string;
+      description: string;
+      source: string;
+      sourceType: 'builtin' | 'extension' | 'sdk';
+      /** How the model reaches the tool; `deferred` means registered but not loaded yet. */
+      exposure: 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+      /** Whether the tool is in the session's current active tool set. */
+      active: boolean;
+    }>;
+    /**
+     * MCP tools, grouped by server (change: mcp-as-first-class-capability).
+     *
+     * pi names MCP tools `mcp__<server>__<tool>` and exposes three extra resource tools without
+     * that prefix; those go into a `kind: 'resources'` group that sorts last. A name that does not
+     * match the pattern lands in `kind: 'server'` / `name: '(unknown)'` instead of being dropped.
+     */
+    mcpServers: Array<{
+      /** Server name as it appears in the tool names (`-` already mapped to `_` by pi). */
+      name: string;
+      kind: 'server' | 'resources';
+      tools: Array<{
+        name: string;
+        description: string;
+        exposure: 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+        active: boolean;
+      }>;
+    }>;
   };
   /** Worker PID (-1 if not running). */
   workerPid: number;

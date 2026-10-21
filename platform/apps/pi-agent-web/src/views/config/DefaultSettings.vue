@@ -11,7 +11,7 @@
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { toast } from '../../composables/useFeedback';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, MCP_IMPLIED_TOOLS, impliedBy } from '../../constants/builtin-tools';
+import { BUILTIN_TOOLS, BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, MCP_SWITCH_HINT, withMcpDependencies } from '../../constants/builtin-tools';
 
 // All possible thinking levels from pi SDK
 const ALL_THINKING_LEVELS = [
@@ -43,6 +43,7 @@ interface Settings {
   defaultPrompts?: string[];
   defaultBuiltinTools?: string[];
   defaultServerBuiltinTools?: string[];
+  defaultMcp?: { enabled?: boolean };
   [key: string]: unknown;
 }
 
@@ -60,8 +61,8 @@ const loading = ref(true);
 const saving = ref(false);
 
 // Builtin tools list — shared with agent editor / session detail (single source of truth).
-// Includes pi builtin EXTENSION tools (codemode / tool_search / mcp): naming one in the list
-// loads `builtin:<ext>` in the worker. mcp is selectable but not part of the default set.
+// Includes pi builtin EXTENSION tools (codemode / tool_search): naming one in the list loads
+// `builtin:<ext>` in the worker. MCP is a separate capability switch below (`defaultMcp`).
 
 // 按 provider 分组的模型列表
 const modelsByProvider = computed(() => {
@@ -159,6 +160,7 @@ async function loadData() {
       defaultSkills: serverConfig.defaultSkills,
       defaultPrompts: serverConfig.defaultPrompts,
       defaultBuiltinTools: serverConfig.defaultBuiltinTools,
+      defaultMcp: serverConfig.defaultMcp ?? { enabled: false },
       // 未配置时 seed 内置默认（仅 sendFileToUser）——让勾选态如实反映生效值
       defaultServerBuiltinTools: serverConfig.defaultServerBuiltinTools ?? ['sendFileToUser'],
     };
@@ -205,6 +207,7 @@ async function saveSettings() {
         defaultSkills: settings.value.defaultSkills,
         defaultPrompts: settings.value.defaultPrompts,
         defaultBuiltinTools: settings.value.defaultBuiltinTools,
+        defaultMcp: settings.value.defaultMcp,
         defaultServerBuiltinTools: settings.value.defaultServerBuiltinTools,
       }),
     });
@@ -252,15 +255,6 @@ function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPro
   } else {
     arr.splice(index, 1);
   }
-  // Selecting mcp pulls in the extensions its servers need to reach the model
-  // (exposure defaults to codemode; deferred needs tool_search). The worker enforces the
-  // same rule, so this is a UI affordance, not the only safeguard. Un-ticking either of
-  // them afterwards is allowed — they stay usable on their own.
-  if (key === 'defaultBuiltinTools' && name === 'mcp' && arr.includes('mcp')) {
-    for (const implied of MCP_IMPLIED_TOOLS) {
-      if (!arr.includes(implied)) arr.push(implied);
-    }
-  }
 }
 
 function selectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', names: string[]) {
@@ -282,8 +276,21 @@ const extensionNames = computed(() => allExtensions.value.map(e => e.name));
 const skillNames = computed(() => allSkills.value.map(s => s.name));
 const promptNames = computed(() => allPrompts.value.map(p => p.name));
 const builtinToolNames = computed(() => [...BUILTIN_TOOL_NAMES]);
-/** 全选 = 平台默认集合（不含 mcp，避免一键启动所有 mcp.json server 连接） */
+/** 全选 = 平台默认集合 */
 const builtinToolDefaultNames = computed(() => [...BUILTIN_TOOL_DEFAULT_NAMES]);
+
+/**
+ * MCP is a capability, not a tool: its own switch writes `defaultMcp.enabled`.
+ * Turning it on also ticks codemode + tool_search (a server's default `exposure: codemode`
+ * needs them); turning it off leaves those selections alone.
+ */
+const mcpEnabled = computed({
+  get: () => settings.value.defaultMcp?.enabled === true,
+  set: (next: boolean) => {
+    settings.value.defaultMcp = { ...(settings.value.defaultMcp ?? {}), enabled: next };
+    if (next) settings.value.defaultBuiltinTools = withMcpDependencies(settings.value.defaultBuiltinTools ?? []);
+  },
+});
 
 // Server 侧自定义工具全局默认（AgentConfig.serverBuiltinTools 的 fallback）
 const SERVER_BUILTIN_TOOLS = [
@@ -441,20 +448,25 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
             <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultBuiltinTools')">全不选</button>
           </div>
         </div>
-        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的。codemode 与 tool_search 可单独启用：codemode 把多次工具调用编排成一段脚本（中间结果不进上下文），tool_search 只在 mcp server 配了 exposure: deferred 时有实际作用。勾选 mcp 会自动启用并锁定这两个工具——因为 server 工具怎么交给模型由 mcp.json 的 exposure 决定</div>
+        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的。codemode 与 tool_search 可单独启用：codemode 把多次工具调用编排成一段脚本（中间结果不进上下文），tool_search 用于检索未声明的工具（codemode / deferred 形态）。MCP 不在此列，见下方独立开关</div>
         <div class="models-checkbox-list">
           <label v-for="tool in BUILTIN_TOOLS" :key="tool.value" class="checkbox-item checkbox-item-stacked">
             <input
               type="checkbox"
               :checked="isResourceEnabled('defaultBuiltinTools', tool.value)"
-              :disabled="!!impliedBy(settings.defaultBuiltinTools, tool.value)"
               @change="toggleResource('defaultBuiltinTools', tool.value)"
             />
             <span class="model-label">{{ tool.label }}</span>
-            <span v-if="impliedBy(settings.defaultBuiltinTools, tool.value)" class="tool-option-badge">mcp 依赖</span>
             <span v-if="tool.hint" class="tool-option-hint">{{ tool.hint }}</span>
           </label>
         </div>
+
+        <!-- MCP capability switch — not a tool, so it lives outside the list -->
+        <label class="checkbox-item mcp-switch">
+          <input type="checkbox" v-model="mcpEnabled" />
+          <span class="model-label">MCP 服务器工具</span>
+          <span class="tool-option-hint">{{ MCP_SWITCH_HINT }}</span>
+        </label>
       </div>
 
       <!-- Default Enabled Server Builtin Tools -->
@@ -589,7 +601,14 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
   background: var(--surface-hover);
 }
 
-/* Tools with a hint (pi builtin extension tools: codemode / tool_search / mcp) */
+/* Tools with a hint (pi builtin extension tools: codemode / tool_search) */
+.mcp-switch {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-color, #e0e0e0);
+  flex-wrap: wrap;
+}
+
 .checkbox-item-stacked {
   flex-wrap: wrap;
   align-items: flex-start;
@@ -605,16 +624,6 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--text-secondary);
-}
-
-.tool-option-badge {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
-  white-space: nowrap;
 }
 
 .checkbox-item input[type="checkbox"] {

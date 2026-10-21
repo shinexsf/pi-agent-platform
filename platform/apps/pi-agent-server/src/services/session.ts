@@ -223,14 +223,22 @@ function buildRuntimeConfig(
  * `builtinTools` falls back to the platform default (DEFAULT_BUILTIN_TOOLS) when neither the
  * agent nor `~/.pi/server/config.json` specify it — the list also drives pi builtin extension
  * loading (codemode / tool_search), so an explicit user config keeps its exact meaning.
+ *
+ * `mcp` falls back to `defaultMcp` the same way (change: mcp-as-first-class-capability); it is a
+ * capability switch, not part of `builtinTools`.
  */
 function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undefined {
   const globalSettings = readSettings();
   const globalBuiltinTools = globalSettings?.defaultBuiltinTools ?? [...DEFAULT_BUILTIN_TOOLS];
+  const globalMcp = globalSettings?.defaultMcp;
 
   // No global defaults configured — apply the platform default for builtinTools only
   if (!globalSettings) {
-    return { ...(agentConfig ?? {}), builtinTools: agentConfig?.builtinTools ?? globalBuiltinTools };
+    return {
+      ...(agentConfig ?? {}),
+      builtinTools: agentConfig?.builtinTools ?? globalBuiltinTools,
+      mcp: agentConfig?.mcp ?? globalMcp,
+    };
   }
   
   // No agent config — create one with just global defaults
@@ -241,6 +249,7 @@ function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undef
       extensions: globalSettings.defaultExtensions,
       skills: globalSettings.defaultSkills,
       prompts: globalSettings.defaultPrompts,
+      mcp: globalMcp,
     };
   }
   
@@ -252,6 +261,7 @@ function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undef
     extensions: agentConfig.extensions ?? globalSettings.defaultExtensions,
     skills: agentConfig.skills ?? globalSettings.defaultSkills,
     prompts: agentConfig.prompts ?? globalSettings.defaultPrompts,
+    mcp: agentConfig.mcp ?? globalMcp,
   };
 }
 

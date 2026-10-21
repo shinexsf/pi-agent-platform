@@ -4,17 +4,18 @@
  *
  * One list governs two things on the worker side:
  * 1. plain pi builtin tools (read / write / edit / bash / grep / find / ls / powershell)
- * 2. pi builtin EXTENSION tools (codemode / tool_search / mcp) — naming one of these in the
- *    list makes the worker load `builtin:<ext>` (see workers/session-worker/src/builtin-extensions.ts)
+ * 2. pi builtin EXTENSION tools (codemode / tool_search) — naming one makes the worker load
+ *    `builtin:<ext>` (see workers/session-worker/src/builtin-extensions.ts)
  *
- * `mcp` is intentionally NOT part of the "全选" default in the global settings page: loading it
- * connects every server in mcp.json on session start. It stays selectable per agent.
+ * MCP is NOT in this list any more (change: mcp-as-first-class-capability). It is a capability
+ * switch (`AgentConfig.mcp.enabled` / `defaultMcp`) rendered as its own toggle next to the list,
+ * because enabling it connects every server in mcp.json on session start and registers tools
+ * named `mcp__<server>__<tool>` — none of which is a tool you pick by name.
  *
- * Dependency rule: an mcp server hands its tools to the model according to its `exposure` in
- * mcp.json — `codemode` (the default) needs the codemode tool, `deferred` needs tool_search.
- * The platform cannot know a project's exposures before connecting, so selecting `mcp` implies
- * BOTH. The worker enforces this too (builtin-extensions.ts), so the API cannot produce a
- * half-working list. codemode / tool_search stay independently selectable without mcp.
+ * Dependency rule: enabling MCP turns on codemode + tool_search, because a server hands its
+ * tools to the model according to its `exposure` in mcp.json — `codemode` (the default) needs
+ * the codemode tool, `deferred` needs tool_search, and the platform cannot know a project's
+ * exposures before connecting. Turning MCP off leaves those two selections untouched.
  */
 
 export interface BuiltinToolOption {
@@ -24,8 +25,6 @@ export interface BuiltinToolOption {
   hint?: string;
   /** true = pi builtin EXTENSION tool (injects `builtin:<ext>`), false = plain pi tool */
   extension?: boolean;
-  /** Tools this option needs at runtime (selecting it enables them too). */
-  implies?: readonly string[];
 }
 
 export const BUILTIN_TOOLS: readonly BuiltinToolOption[] = [
@@ -53,51 +52,32 @@ export const BUILTIN_TOOLS: readonly BuiltinToolOption[] = [
     hint: '装载 pi 内置 tool-search 扩展：检索未对模型声明的工具（codemode / deferred 形态，例如 mcp 工具）并按需加载为直接声明，下次调用即可用。纯内置工具（全部 direct）没有可搜目标，用不上',
     extension: true,
   },
-  {
-    value: 'mcp',
-    label: 'mcp (MCP 服务器工具)',
-    hint: '装载 pi 内置 mcp 扩展：会话启动即连接 mcp.json 里的全部 server。server 工具怎么交给模型由 mcp.json 的 exposure 决定（默认 codemode 需要 codemode 工具，deferred 需要 tool_search），所以勾选 mcp 会自动启用这两个工具',
-    extension: true,
-    implies: ['codemode', 'tool_search'],
-  },
 ];
-
-/** Tool names implied by selecting `mcp` (kept in sync with the `implies` field above). */
-export const MCP_IMPLIED_TOOLS: readonly string[] =
-  BUILTIN_TOOLS.find((tool) => tool.value === 'mcp')?.implies ?? [];
-
-/** Which option pulled a tool in (for the "mcp 依赖" badge); undefined when it was chosen directly. */
-export function impliedBy(selected: readonly string[] | null | undefined, name: string): string | undefined {
-  if (!selected || !selected.includes(name)) return undefined;
-  return BUILTIN_TOOLS.find((tool) => tool.implies?.includes(name) && selected.includes(tool.value))?.value;
-}
-
-/**
- * Add the tools implied by `selected` (mcp → codemode + tool_search) and return the new list.
- * Mirrors the worker-side rule in builtin-extensions.ts so the UI never shows a config the
- * runtime would silently expand.
- */
-export function withImpliedTools(selected: readonly string[]): string[] {
-  const next = [...selected];
-  for (const tool of BUILTIN_TOOLS) {
-    if (!tool.implies || !next.includes(tool.value)) continue;
-    for (const implied of tool.implies) {
-      if (!next.includes(implied)) next.push(implied);
-    }
-  }
-  return next;
-}
 
 /** Values only — for `<input type="checkbox" v-model>` loops and "select all" buttons. */
 export const BUILTIN_TOOL_NAMES: readonly string[] = BUILTIN_TOOLS.map((tool) => tool.value);
 
+/** The platform's default set (matches server `DEFAULT_BUILTIN_TOOLS`). */
+export const BUILTIN_TOOL_DEFAULT_NAMES: readonly string[] = [...BUILTIN_TOOL_NAMES];
+
 /**
- * The platform's default set (matches server `DEFAULT_BUILTIN_TOOLS`): everything except `mcp`.
- * Used by "全选" so one click does not silently start connecting every mcp.json server.
+ * Tools the MCP capability brings along (codemode + tool_search).
+ * Mirrors the worker-side rule in builtin-extensions.ts.
  */
-export const BUILTIN_TOOL_DEFAULT_NAMES: readonly string[] = BUILTIN_TOOLS
-  .filter((tool) => tool.value !== 'mcp')
-  .map((tool) => tool.value);
+export const MCP_DEPENDENT_TOOLS: readonly string[] = ['codemode', 'tool_search'];
+
+/** Text shown next to the MCP switch in all three config surfaces. */
+export const MCP_SWITCH_HINT =
+  '装载 pi 内置 mcp 扩展：会话启动即连接 mcp.json 里的全部 server（工具名为 mcp__<server>__<tool>）。开启后会自动勾选 codemode 与 tool_search，否则默认 exposure 下的 mcp 工具对模型不可见';
+
+/** Add the MCP dependencies to a tool selection (idempotent). */
+export function withMcpDependencies(selected: readonly string[]): string[] {
+  const next = [...selected];
+  for (const name of MCP_DEPENDENT_TOOLS) {
+    if (!next.includes(name)) next.push(name);
+  }
+  return next;
+}
 
 /** Server-side custom tools (AgentConfig.serverBuiltinTools) — separate axis from pi tools. */
 export const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];

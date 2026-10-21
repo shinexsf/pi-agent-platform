@@ -95,6 +95,65 @@ function isExpanded(key: string): boolean {
   return expandedItems.value.has(key)
 }
 
+type ToolEntry = SessionInfoDTO['resources']['tools'][number]
+
+/**
+ * Badge text for the tool's origin.
+ *
+ * `builtin` = pi core tool, `platform` = registered by the worker itself, otherwise the label is
+ * the extension name — including pi's built-in extensions (`mcp`, `codemode`, `tool-search`) and
+ * npm packages / local files. There is no tool called `mcp`; it is the extension that registers
+ * `mcp__<server>__<tool>`.
+ */
+function toolSourceLabel(t: ToolEntry): string {
+  if (t.sourceType === 'sdk') return 'platform'
+  return t.source || 'builtin'
+}
+
+/** Extra badge describing how the model reaches the tool (empty for plain `direct`). */
+function toolExposureLabel(t: ToolEntry): string {
+  // Raw pi enum (ToolExposure) — no translation, so it matches the source/docs:
+  // direct (nothing shown) | model-only | codemode | deferred | hidden
+  return t.exposure === 'direct' ? '' : t.exposure
+}
+
+/** Deferred tools are registered but not loaded until tool_search pulls them in. */
+function isLazy(t: ToolEntry): boolean {
+  return t.exposure === 'deferred' || t.exposure === 'hidden'
+}
+
+/** Deferred/hidden tools are collapsed by default — a session can register 100+ of them. */
+const showLazyTools = ref(false)
+const lazyToolCount = computed(() => (info.value?.resources.tools ?? []).filter(isLazy).length)
+const visibleTools = computed(() => {
+  const all = info.value?.resources.tools ?? []
+  return showLazyTools.value ? all : all.filter((t) => !isLazy(t))
+})
+
+// ── MCP servers ──
+// MCP tools are not in the tool whitelist; they are reported per server (mcpServers), with the
+// `(codemode)` group holding MCP tools whose name does not map back to a server.
+const mcpToolsExpanded = ref(new Set<string>())
+const mcpServerCount = computed(() => (info.value?.resources.mcpServers ?? []).filter((g) => g.kind === 'server').length)
+const mcpToolTotal = computed(() =>
+  (info.value?.resources.mcpServers ?? []).reduce((sum, g) => sum + g.tools.length, 0),
+)
+const activeMcpToolCount = computed(() =>
+  (info.value?.resources.mcpServers ?? []).reduce((sum, g) => sum + g.tools.filter((t) => t.active).length, 0),
+)
+
+function toggleMcpTools(key: string): void {
+  const next = new Set(mcpToolsExpanded.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  mcpToolsExpanded.value = next
+}
+
+/** Tools in a server group the model cannot see yet (`deferred` / `hidden`). */
+function countUnloaded(group: { tools: Array<{ exposure: string }> }): number {
+  return group.tools.filter((t) => t.exposure === 'deferred' || t.exposure === 'hidden').length
+}
+
 async function loadInfo() {
   loading.value = true
   error.value = null
@@ -345,28 +404,75 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <!-- ── MCP servers ── -->
+          <div v-if="(info.resources.mcpServers ?? []).length > 0" class="info-section">
+            <div class="section-title section-title-row">
+              <span>MCP</span>
+              <span class="section-count">
+                {{ mcpServerCount }} server{{ mcpServerCount > 1 ? 's' : '' }} · {{ mcpToolTotal }} tools<span
+                  v-if="activeMcpToolCount > 0"
+                  >, {{ activeMcpToolCount }} loaded</span
+                >
+              </span>
+            </div>
+            <div class="resource-list">
+              <div v-for="g in info.resources.mcpServers" :key="g.name" class="mcp-server">
+                <div class="resource-item mcp-server-head" @click="toggleMcpTools(g.name)">
+                  <span class="resource-name">{{ g.name }}</span>
+                  <span class="resource-desc">{{ countUnloaded(g) > 0 ? `${g.tools.length} tools · ${countUnloaded(g)} deferred` : `${g.tools.length} tools` }}</span>
+                  <span class="mcp-caret">{{ mcpToolsExpanded.has(g.name) ? '▾' : '▸' }}</span>
+                </div>
+                <div v-if="mcpToolsExpanded.has(g.name)" class="mcp-tool-list">
+                  <div
+                    v-for="t in g.tools"
+                    :key="t.name"
+                    :class="['resource-item', 'mcp-tool-item', { expanded: isExpanded(`mcp:${t.name}`), lazy: isLazy(t) }]"
+                    @click="toggleItem(`mcp:${t.name}`)"
+                  >
+                    <span class="resource-name">{{ g.kind === 'server' ? t.name.replace(`mcp__${g.name}__`, '') : t.name }}</span>
+                    <template v-if="isExpanded(`mcp:${t.name}`)">
+                      <span class="resource-full">{{ t.description }}</span>
+                      <span class="resource-path">{{ t.name }}</span>
+                    </template>
+                    <span v-else class="resource-desc">{{ t.description }}</span>
+                    <span class="source-tags">
+                      <span v-if="toolExposureLabel(t)" class="source-tag exposure">{{ toolExposureLabel(t) }}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- ── Tools ── -->
           <div v-if="info.resources.tools.length > 0" class="info-section">
             <div class="section-title section-title-row">
               <span>Tools</span>
-              <span class="section-count">{{ info.resources.tools.length }}</span>
+              <span class="section-count">{{ visibleTools.length }}</span>
+              <button v-if="lazyToolCount > 0" class="lazy-toggle" @click.stop="showLazyTools = !showLazyTools">
+                {{ showLazyTools ? 'hide' : 'show' }} deferred / hidden（{{ lazyToolCount }}）
+              </button>
             </div>
             <div class="resource-list">
               <div
-                v-for="t in info.resources.tools"
+                v-for="t in visibleTools"
                 :key="t.name"
-                :class="['resource-item', { expanded: isExpanded(`tool:${t.name}`) }]"
+                :class="['resource-item', { expanded: isExpanded(`tool:${t.name}`), lazy: isLazy(t) }]"
                 @click="toggleItem(`tool:${t.name}`)"
               >
                 <span class="resource-name">{{ t.name }}</span>
                 <template v-if="isExpanded(`tool:${t.name}`)">
                   <span class="resource-full">{{ t.description }}</span>
                   <span class="resource-meta">
-                    <span :class="['source-tag', t.sourceType]">{{ t.sourceType === 'builtin' ? 'builtin' : t.source }}</span>
+                    <span :class="['source-tag', t.sourceType]">{{ toolSourceLabel(t) }}</span>
+                    <span v-if="toolExposureLabel(t)" class="source-tag exposure">{{ toolExposureLabel(t) }}</span>
                   </span>
                 </template>
                 <span v-else class="resource-desc">{{ t.description }}</span>
-                <span v-if="!isExpanded(`tool:${t.name}`)" :class="['source-tag', t.sourceType]">{{ t.sourceType === 'builtin' ? 'builtin' : t.source }}</span>
+                <span v-if="!isExpanded(`tool:${t.name}`)" class="source-tags">
+                  <span v-if="toolExposureLabel(t)" class="source-tag exposure">{{ toolExposureLabel(t) }}</span>
+                  <span :class="['source-tag', t.sourceType]">{{ toolSourceLabel(t) }}</span>
+                </span>
               </div>
             </div>
           </div>
@@ -792,9 +898,54 @@ onUnmounted(() => {
   color: var(--tool-done-text);
 }
 
+/* Tool registered by a pi built-in extension (mcp / codemode / tool-search) */
 .source-tag.extension {
+  background: var(--tool-code-bg, rgba(13, 71, 161, 0.12));
+  color: var(--tool-code-text, #0d47a1);
+}
+
+/* Tool registered by the platform worker itself */
+.source-tag.sdk {
   background: var(--hover-bg-strong);
+  color: var(--text-primary, #333);
+}
+
+/* How the model reaches the tool (deferred / codemode / model-only / hidden) */
+.source-tag.exposure {
+  background: transparent;
+  border: 1px solid var(--border-color);
   color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.source-tags {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.lazy-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--accent, #1976d2);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+
+.lazy-toggle:hover {
+  text-decoration: underline;
+}
+
+/* Registered but not loaded yet — tool_search has not pulled it in */
+.resource-item.lazy .resource-name,
+.resource-item.lazy .resource-desc {
+  opacity: 0.55;
 }
 
 .empty-state {

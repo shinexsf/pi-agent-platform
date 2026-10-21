@@ -11,6 +11,8 @@ export interface GlobalSettings {
   defaultSkills?: string[];
   defaultPrompts?: string[];
   defaultBuiltinTools?: string[];
+  /** Global default for `AgentConfig.mcp` (MCP capability switch). undefined = MCP off. */
+  defaultMcp?: { enabled?: boolean };
   /** Global default for AgentConfig.serverBuiltinTools (server-side custom tools:
    *  sendFileToUser / callServer). undefined = built-in default ['sendFileToUser']. */
   defaultServerBuiltinTools?: string[];
@@ -23,9 +25,9 @@ export interface GlobalSettings {
  *
  * One list drives BOTH: (a) which pi builtin tools are activated, and (b) which pi builtin
  * extensions get loaded (`codemode` / `tool_search` are extension-provided tools — naming them
- * here loads `builtin:<ext>` in the worker). `mcp` is deliberately absent: loading it connects
- * every server in `mcp.json` on session start, and it may be replaced by `pi-mcp-adapter` —
- * opt in per agent instead.
+ * here loads `builtin:<ext>` in the worker). `mcp` is deliberately absent and MUST NOT come back:
+ * it is a capability switch (`AgentConfig.mcp.enabled` / `defaultMcp`), not a tool — loading it
+ * connects every server in `mcp.json` on session start.
  */
 export const DEFAULT_BUILTIN_TOOLS: readonly string[] = [
   'read',

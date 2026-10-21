@@ -17,10 +17,10 @@ export interface AgentConfig {
 
   // Tool enable list — drives BOTH activation and built-in extension loading:
   // - plain pi builtin tools: read / write / edit / bash / grep / find / ls / powershell
-  // - pi builtin EXTENSION tools: codemode / tool_search / mcp (naming one loads
-  //   `builtin:<ext>` in the worker; mcp connects the servers in mcp.json on session
-  //   start, is replaced by pi-mcp-adapter when present, and is NOT in the platform default)
+  // - pi builtin EXTENSION tools: codemode / tool_search (naming one loads `builtin:<ext>`
+  //   in the worker)
   // Semantics: null/undefined = inherit global default, [] = none, array = allowlist.
+  // MCP is NOT a tool and MUST NOT appear here — see `mcp` below.
   builtinTools?: string[];
 
   // Extension whitelist (names from settings.json packages + extensions)
@@ -32,7 +32,16 @@ export interface AgentConfig {
   // Prompts whitelist (null = all, [] = none, ['a','b'] = only these)
   prompts?: string[];
 
-  // MCP servers (future)
+  // MCP capability switch (change: mcp-as-first-class-capability).
+  // Owns the built-in `mcp` extension: loading it connects every server in `mcp.json` on
+  // session start. Enabling it also loads+activates codemode & tool_search, because a server's
+  // default `exposure: "codemode"` leaves its tools unreachable otherwise.
+  // undefined = inherit global default (`defaultMcp`), `{ enabled: false }` = explicitly off.
+  // Object (not a bare boolean) so per-agent server lists / default exposure can be added later.
+  mcp?: { enabled?: boolean };
+
+  // Per-server MCP overrides (future MCP management). Not read by the worker yet — the
+  // servers actually connected come from pi's own mcp.json (global + project).
   mcpServers?: Record<string, unknown>;
 
   // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
