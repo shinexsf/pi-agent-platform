@@ -4,14 +4,31 @@
  *
  * 路由：/sessions/:id（查看） / sessions/:id/edit（编辑）
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { SessionDTO, AgentDTO } from '@pi-agent-platform/shared-types';
 import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
+import InfoTip from '../../components/ui/InfoTip.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
-import { BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, MCP_SWITCH_HINT, withMcpDependencies } from '../../constants/builtin-tools';
+import {
+  BASE_AGENT_CONFIG,
+  BUILTIN_TOOL_NAMES,
+  MCP_SWITCH_HINT,
+  SERVER_BUILTIN_TOOLS,
+  withMcpDependencies,
+} from '../../constants/builtin-tools';
+import { useConfigIssues } from '../../composables/useConfigIssues';
+import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
+import {
+  applyTemplate,
+  createTemplate,
+  fetchTemplates,
+  templateSnapshot,
+} from '../../composables/useTemplates';
+import type { AgentTemplateDTO } from '@pi-agent-platform/shared-types';
+import { confirmDialog } from '../../composables/useFeedback';
 
 interface ModelOption { provider: string; modelId: string; displayName: string }
 
@@ -26,7 +43,6 @@ interface CapabilityInfo {
   summary: string;
 }
 const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
-const globalServerTools = ref<string[]>(['sendFileToUser']);
 
 const route = useRoute();
 const router = useRouter();
@@ -54,26 +70,48 @@ const allModels = ref<ModelOption[]>([]);
 const title = ref('');
 const model = ref('');
 const thinkingLevel = ref('');
-const builtinTools = ref<string[] | null>(null);
-/** MCP capability override for this session (null = inherit the agent / global default). */
-const mcp = ref<{ enabled?: boolean } | null>(null);
-// Server 侧自定义工具白名单（AgentConfig.serverBuiltinTools）：null=默认（仅 sendFileToUser）、[]=全关、数组=白名单
-const serverBuiltinTools = ref<string[] | null>(null);
-// callServer 方法级授权（session 快照级，null=未配置=无权限、[]=全禁、数组=白名单；
-// 缺 key（存量）时 UI 展示并继承 agent 当前值，保存即固化为 session 级）
+// 资源清单一律是显式数组（change: explicit-agent-config）：打开编辑页显示的是"生效值"
+// （session 有 key 用 session 的，否则用 agent 的归一结果），保存即把七项固化到 session 行。
+const builtinTools = ref<string[]>([...BASE_AGENT_CONFIG.builtinTools]);
+const mcp = ref<{ enabled: boolean }>({ enabled: false });
+const serverBuiltinTools = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinTools]);
+// callServer 方法级授权：null = 走全局策略（唯一保留的 tri-state）、[] = 全禁、数组 = 白名单
 const capabilities = ref<string[] | null>(null);
-const extensions = ref<string[] | null>(null);
-const skills = ref<string[] | null>(null);
-const prompts = ref<string[] | null>(null);
+const extensions = ref<string[]>([]);
+const skills = ref<string[]>([]);
+const prompts = ref<string[]>([]);
+
+const issues = useConfigIssues();
+const issueIndex = computed(() => issues.buildIssueIndex(
+  {
+    builtinTools: builtinTools.value,
+    serverBuiltinTools: serverBuiltinTools.value,
+    extensions: extensions.value,
+    skills: skills.value,
+    prompts: prompts.value,
+    capabilities: capabilities.value,
+    mcp: mcp.value,
+  },
+  model.value || null,
+));
+const configIssues = computed(() => issues.issuesFor(
+  {
+    builtinTools: builtinTools.value,
+    serverBuiltinTools: serverBuiltinTools.value,
+    extensions: extensions.value,
+    skills: skills.value,
+    prompts: prompts.value,
+    capabilities: capabilities.value,
+    mcp: mcp.value,
+  },
+  model.value || null,
+));
 
 const thinkingLevels = ['low', 'medium', 'high'];
 const BUILTIN_TOOLS = BUILTIN_TOOL_NAMES;
-const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
 const builtinToolCount = computed(() => BUILTIN_TOOLS.length);
-/** 全选 = 平台默认集合 */
-const builtinToolDefault = [...BUILTIN_TOOL_DEFAULT_NAMES];
 
-const mcpEnabled = computed(() => mcp.value?.enabled === true);
+const mcpEnabled = computed(() => mcp.value.enabled === true);
 
 /**
  * MCP is a capability, not a tool: the switch writes `config.mcp.enabled` and, when turned on,
@@ -81,11 +119,9 @@ const mcpEnabled = computed(() => mcp.value?.enabled === true);
  * off leaves those selections untouched. The worker enforces the same dependency.
  */
 function setMcpEnabled(next: boolean): void {
-  mcp.value = { ...(mcp.value ?? {}), enabled: next };
+  mcp.value = { enabled: next };
   if (!next) return;
-  const list = builtinTools.value;
-  if (list === null) return; // inherit default (already contains both)
-  builtinTools.value = withMcpDependencies(list);
+  builtinTools.value = withMcpDependencies(builtinTools.value);
 }
 
 // available resources
@@ -95,11 +131,12 @@ const availableExtensions = ref<{ names: string[] }>({ names: [] });
 const skillNames = computed(() => availableSkills.value.map(i => i.name));
 const promptNames = computed(() => availablePrompts.value.map(i => i.name));
 
-/** callServer 是否实际启用（session 显式配置优先，否则看全局默认）——联动 Capabilities 区显隐 */
-const callServerEnabled = computed(() => {
-  const sbt = serverBuiltinTools.value;
-  if (sbt !== null) return sbt.includes('callServer');
-  return globalServerTools.value.includes('callServer');
+/** callServer 是否启用（显式清单）——联动 Capabilities 区显隐 */
+const callServerEnabled = computed(() => serverBuiltinTools.value.includes('callServer'));
+
+// 关掉 callServer 时清空方法级授权（与 agent 编辑页同一规则；保存时 normalizeAgentConfig 也会兜底）
+watch(callServerEnabled, (on) => {
+  if (!on) capabilities.value = [];
 });
 const capabilityGroups = computed(() => capabilityModules.value.filter(g => g.capabilities.length > 0));
 const allCapabilityMethods = computed(() => capabilityModules.value.flatMap(g => g.capabilities.map(c => c.method)));
@@ -109,19 +146,94 @@ function capabilitiesSummary(items: string[] | null): string {
   return `${items.length} / ${allCapabilityMethods.value.length} 项`;
 }
 
-// resource section collapsed state
-const resourcesExpanded = ref(false);
+// ---- 配置模板（agent-templates）：填充覆盖资源七字段，只改表单本地状态 ----
+const templates = ref<AgentTemplateDTO[]>([]);
+const templatePick = ref('');
+const templateSaving = ref(false);
+const templateName = ref('');
+const showTemplateSave = ref(false);
+
+async function loadTemplates(): Promise<void> {
+  try {
+    templates.value = await fetchTemplates();
+  } catch {
+    templates.value = [];
+  }
+}
+
+/** 表单当前值 → 覆盖到模板目标结构（保留 systemPrompt 但 applyTemplate 会清空）。 */
+function currentTemplateTarget() {
+  return {
+    builtinTools: builtinTools.value,
+    mcp: { enabled: mcp.value.enabled === true },
+    serverBuiltinTools: serverBuiltinTools.value,
+    capabilities: capabilities.value,
+    extensions: extensions.value,
+    skills: skills.value,
+    prompts: prompts.value,
+  };
+}
+
+function applyTarget(next: ReturnType<typeof currentTemplateTarget>): void {
+  builtinTools.value = next.builtinTools;
+  mcp.value = next.mcp;
+  serverBuiltinTools.value = next.serverBuiltinTools;
+  capabilities.value = next.capabilities;
+  extensions.value = next.extensions;
+  skills.value = next.skills;
+  prompts.value = next.prompts;
+}
+
+async function applyPickedTemplate(): Promise<void> {
+  const picked = templates.value.find((t) => t.id === templatePick.value);
+  if (!picked) {
+    toast('请先选择一个模板', 'warning');
+    return;
+  }
+  const ok = await confirmDialog({
+    title: '从模板填充',
+    message: `将用模板「${picked.name}」覆盖当前工具 / MCP / 插件 / Skill / Prompt / Server 工具 / 能力授权。标题、模型不受影响。不保存退出即恢复。`,
+    confirmText: '填充',
+  });
+  if (!ok) return;
+  applyTarget(applyTemplate(currentTemplateTarget(), picked));
+  toast(`已填充模板「${picked.name}」（未保存）`, 'success');
+}
+
+async function saveAsTemplate(): Promise<void> {
+  const name = templateName.value.trim();
+  if (!name) {
+    toast('请填写模板名', 'warning');
+    return;
+  }
+  if (templateSaving.value) return;
+  templateSaving.value = true;
+  try {
+    await createTemplate({
+      name,
+      description: session.value?.title ? `来自会话 ${session.value.title}` : undefined,
+      config: templateSnapshot(currentTemplateTarget()),
+    });
+    toast(`已存为模板「${name}」`, 'success');
+    templateName.value = '';
+    showTemplateSave.value = false;
+    await loadTemplates();
+  } catch (err) {
+    toast(`存为模板失败：${(err as Error).message}`, 'error');
+  } finally {
+    templateSaving.value = false;
+  }
+}
 
 onMounted(async () => {
   try {
-    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes, serverCfgRes] = await Promise.all([
+    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes] = await Promise.all([
       fetch(`/api/sessions/${sessionId.value}`),
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
       fetch('/api/capabilities'),
-      fetch('/api/config/server'),
     ]);
 
     if (!sessionRes.ok) throw new Error(`HTTP ${sessionRes.status}`);
@@ -134,11 +246,6 @@ onMounted(async () => {
       const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
       capabilityModules.value = data.modules ?? [];
     }
-    if (serverCfgRes.ok) {
-      const cfg = (await serverCfgRes.json()) as { defaultServerBuiltinTools?: string[] };
-      if (Array.isArray(cfg.defaultServerBuiltinTools)) globalServerTools.value = cfg.defaultServerBuiltinTools;
-    }
-
     // load agent info
     if (session.value.agentId) {
       const agentRes = await fetch(`/api/agents/${session.value.agentId}`);
@@ -150,32 +257,30 @@ onMounted(async () => {
     model.value = session.value.model;
     thinkingLevel.value = session.value.thinkingLevel ?? '';
     setCrumbName(session.value.id, session.value.title || session.value.id.slice(0, 8));
-    builtinTools.value = session.value.config?.builtinTools !== undefined
-      ? (session.value.config.builtinTools ? [...session.value.config.builtinTools] : [])
-      : null;
-    // mcp: undefined = inherit the agent's config; null/absent key shows as inherit too.
-    const cfgMcp = (session.value.config as { mcp?: { enabled?: boolean } | null } | undefined)?.mcp;
-    mcp.value = cfgMcp ?? null;
-    // serverBuiltinTools：缺省/显式 null 都是「默认」（仅 sendFileToUser）；数组才展开
-    const sbt = session.value.config?.serverBuiltinTools as string[] | null | undefined;
-    serverBuiltinTools.value = sbt == null ? null : [...sbt];
-    // capabilities：session 有 key（数组/null）→ 用 session 的（纯快照）；缺 key（存量，
-    // 未快照过）→ 展示并继承 agent 当前值（控制面同款 fallback），保存后固化为 session 级
-    const caps = session.value.config?.capabilities as string[] | null | undefined;
-    if (caps !== undefined) {
-      capabilities.value = caps === null ? null : [...caps];
-    } else {
-      const agentCaps = agent.value?.config?.capabilities as string[] | null | undefined;
-      capabilities.value = agentCaps === undefined ? null : (agentCaps === null ? null : [...agentCaps]);
-    }
-    extensions.value = session.value.config?.extensions !== undefined ? [...(session.value.config.extensions ?? [])] : null;
-    skills.value = session.value.config?.skills !== undefined ? [...(session.value.config.skills ?? [])] : null;
-    prompts.value = session.value.config?.prompts !== undefined ? [...(session.value.config.prompts ?? [])] : null;
+    // 生效值 = agent 归一配置 + session 行里有 key 的字段（session 优先）。
+    // 这是一个"只读合成"：保存时才把这些值显式写进 session 行。
+    const agentCfg = normalizeAgentConfig(agent.value?.config);
+    const sc = (session.value.config ?? {}) as Record<string, unknown>;
+    const pick = <K extends keyof typeof agentCfg>(key: K): typeof agentCfg[K] =>
+      (sc[key as string] !== undefined ? sc[key as string] : agentCfg[key]) as typeof agentCfg[K];
+
+    builtinTools.value = [...(pick('builtinTools') as string[])];
+    mcp.value = { enabled: (pick('mcp') as { enabled?: boolean } | null)?.enabled === true };
+    serverBuiltinTools.value = [...(pick('serverBuiltinTools') as string[])];
+    extensions.value = [...(pick('extensions') as string[])];
+    skills.value = [...(pick('skills') as string[])];
+    prompts.value = [...(pick('prompts') as string[])];
+    // capabilities 保留 tri-state：session 有 key（数组/null）→ 用 session 的；
+    // 缺 key（存量）→ 用 agent 的（控制面同款 fallback），保存后固化为 session 级。
+    const caps = sc.capabilities as string[] | null | undefined;
+    capabilities.value = caps === undefined ? agentCfg.capabilities : (caps === null ? null : [...caps]);
   } catch (err) {
     loadError.value = `加载失败：${(err as Error).message}`;
   } finally {
     loading.value = false;
   }
+  await issues.loadAvailability();
+  await loadTemplates();
 });
 
 async function save(): Promise<void> {
@@ -186,15 +291,16 @@ async function save(): Promise<void> {
     if (title.value !== (session.value?.title ?? '')) body.title = title.value || undefined;
     if (model.value !== session.value?.model) body.model = model.value;
     if (thinkingLevel.value !== (session.value?.thinkingLevel ?? '')) body.thinkingLevel = thinkingLevel.value || undefined;
+    // 七项显式落库（不再写 null 表示"继承"）
     body.config = {
       ...(session.value?.config ?? {}),
-      builtinTools: builtinTools.value,
-      mcp: mcp.value,
-      serverBuiltinTools: serverBuiltinTools.value,
+      builtinTools: [...builtinTools.value],
+      mcp: { enabled: mcp.value.enabled },
+      serverBuiltinTools: [...serverBuiltinTools.value],
       capabilities: capabilities.value,
-      extensions: extensions.value,
-      skills: skills.value,
-      prompts: prompts.value,
+      extensions: [...extensions.value],
+      skills: [...skills.value],
+      prompts: [...prompts.value],
     };
 
     const res = await fetch(`/api/sessions/${sessionId.value}`, {
@@ -216,6 +322,29 @@ function openChat(): void {
   const base = import.meta.env.BASE_URL || '/';
   const url = `${base}chat/${sessionId.value}${session.value?.agentId ? `?agentId=${session.value.agentId}` : ''}`;
   window.open(url, '_blank');
+}
+
+/** 全选 = 展开为当前显式清单。 */
+function selectAllBuiltinTools(): void {
+  builtinTools.value = [...BUILTIN_TOOL_NAMES];
+}
+function selectAllServerTools(): void {
+  serverBuiltinTools.value = [...SERVER_BUILTIN_TOOLS];
+}
+function pruneField(field: 'extensions' | 'skills' | 'prompts' | 'capabilities' | 'builtinTools'): void {
+  if (field === 'capabilities') {
+    if (capabilities.value !== null) capabilities.value = issues.pruneInvalid('capabilities', capabilities.value);
+    return;
+  }
+  const refs = { extensions, skills, prompts, builtinTools } as const;
+  const target = refs[field as 'extensions' | 'skills' | 'prompts' | 'builtinTools'];
+  target.value = issues.pruneInvalid(field, target.value);
+}
+function toggleCapability(method: string, checked: boolean): void {
+  const next = new Set(capabilities.value ?? []);
+  if (checked) next.add(method);
+  else next.delete(method);
+  capabilities.value = [...next];
 }
 
 function formatModel(m: string): string {
@@ -365,133 +494,212 @@ function workerUptime(ms: number): string {
           </div>
         </div>
 
-        <!-- 资源配置 -->
+        <!-- 资源配置（常开展示；单层显式清单：打开即显示生效值，无“使用默认”） -->
         <div class="sd-section sd-resources-section">
-          <button type="button" class="sd-toggle" @click="resourcesExpanded = !resourcesExpanded">
-            <AppIcon :name="resourcesExpanded ? 'chevron-down' : 'chevron-right'" :size="16" />
+          <div class="sd-section-head">
             <span class="sd-section-title">Resources</span>
-          </button>
+            <InfoTip text="这里显示的是本会话的生效清单（保存后固化到会话行，优先于 agent 配置；没有继承层）。" />
+            <span v-if="configIssues.length" class="sd-badge warn">{{ configIssues.length }} 项无效</span>
+          </div>
 
-          <div v-if="resourcesExpanded" class="sd-resources-body">
+          <div class="sd-resources-body">
+            <div v-if="!isView" class="template-bar">
+              <select v-model="templatePick" class="control template-select">
+                <option value="">选择模板…</option>
+                <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
+              </select>
+              <button type="button" class="btn btn-sm" :disabled="!templatePick" @click="applyPickedTemplate">从模板填充</button>
+              <template v-if="showTemplateSave">
+                <input v-model="templateName" class="control template-name-input" placeholder="模板名" />
+                <button type="button" class="btn btn-sm btn-primary" :disabled="templateSaving" @click="saveAsTemplate">保存模板</button>
+                <button type="button" class="btn btn-sm" @click="showTemplateSave = false">取消</button>
+              </template>
+              <button v-else type="button" class="btn btn-sm" @click="showTemplateSave = true">存为模板</button>
+            </div>
+            <div v-if="configIssues.length" class="issues-banner">
+              <div class="issues-banner-title">{{ configIssues.length }} 项配置在当前环境中不存在：</div>
+              <div class="issues-banner-list">
+                <span v-for="issue in configIssues" :key="issue.field + issue.value" class="issues-item">
+                  {{ issue.field }} · <strong>{{ issue.value }}</strong>（{{ issue.reason }}）
+                </span>
+              </div>
+            </div>
+
             <!-- Builtin tools -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">Builtin tools</span>
-                <span class="sd-resource-count">{{ builtinToolCount }} 项</span>
+                <InfoTip text="codemode / tool_search 可单独启用；MCP 不在本列表，见下方独立开关。" />
+                <span class="sd-resource-count">{{ builtinTools.length }} / {{ builtinToolCount }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="selectAllBuiltinTools">全选</button>
+                  <button type="button" class="btn-link" @click="builtinTools = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('builtinTools')">清理无效项</button>
+                </span>
               </div>
-              <template v-if="isView">
-                <div v-if="builtinTools === null" class="tag-list"><span class="tag tag-default">默认（全部 {{ builtinToolCount }} 项）</span></div>
-                <div v-else-if="builtinTools.length" class="tag-list"><span v-for="t in builtinTools" :key="t" class="tag">{{ t }}</span></div>
-                <span v-else class="sd-empty">无</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="builtinTools === null" @change="builtinTools = ($event.target as HTMLInputElement).checked ? null : [...BUILTIN_TOOLS]" /><span>使用默认</span></label>
-                <div class="sd-resource-hint">codemode / tool_search 可单独启用。MCP 不在本列表，见下方独立开关</div>
-                <div v-if="builtinTools !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="builtinTools = [...builtinToolDefault]">全选</button><button type="button" class="btn-link" @click="builtinTools = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="t in BUILTIN_TOOLS" :key="t" class="tag-check"
-                    :class="{ checked: builtinTools.includes(t) }">
-                    <input type="checkbox" :value="t" v-model="builtinTools" /><span>{{ t }}</span>
-                  </label></div>
-                </div>
-              </template>
+              <div v-if="isView" class="tag-list">
+                <span v-for="t in builtinTools" :key="t" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('builtinTools', t) }">{{ t }}</span>
+                <span v-if="builtinTools.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="t in BUILTIN_TOOLS" :key="t" class="tag-check"
+                  :class="{ checked: builtinTools.includes(t) }">
+                  <input type="checkbox" :value="t" v-model="builtinTools" /><span>{{ t }}</span>
+                </label>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="t in builtinTools" :key="'bad-' + t">
+                  <label v-if="issueIndex('builtinTools', t)" class="tag-check checked tag-invalid" title="工具不存在">
+                    <input type="checkbox" :value="t" v-model="builtinTools" /><span>{{ t }}（无效）</span>
+                  </label>
+                </template>
+              </div>
             </div>
 
-            <!-- MCP capability (not a tool: loads builtin:mcp and connects mcp.json servers) -->
+            <!-- MCP capability -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">MCP</span>
-                <span class="sd-resource-count">{{ mcp === null ? '跟随 agent' : (mcpEnabled ? '已启用' : '已关闭') }}</span>
+                <InfoTip :text="MCP_SWITCH_HINT" :width="340" />
+                <span class="sd-resource-count">{{ mcpEnabled ? '已启用' : '未启用' }}</span>
               </div>
               <template v-if="isView">
-                <span class="tag tag-default">{{ mcp === null ? '跟随 agent' : (mcpEnabled ? '已启用' : '已关闭') }}</span>
+                <span class="tag" :class="{ 'tag-default': !mcpEnabled }">{{ mcpEnabled ? '已启用' : '未启用' }}</span>
               </template>
               <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="mcp === null" @change="mcp = ($event.target as HTMLInputElement).checked ? null : { enabled: mcpEnabled }" /><span>跟随 agent</span></label>
-                <label class="checkbox-inline"><input type="checkbox" :checked="mcpEnabled" :disabled="mcp === null" @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" /><span>启用 MCP</span></label>
-                <div class="sd-resource-hint">{{ MCP_SWITCH_HINT }}</div>
+                <label class="checkbox-inline">
+                  <input type="checkbox" :checked="mcpEnabled"
+                    @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" />
+                  <span>启用 MCP</span>
+                </label>
               </template>
             </div>
 
-            <!-- Server builtin tools (serverBuiltinTools) -->
+            <!-- Server builtin tools -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">Server Builtin Tools</span>
-                <span class="sd-resource-count">{{ serverBuiltinTools === null ? '默认（仅 sendFileToUser）' : `${serverBuiltinTools.length} / ${SERVER_BUILTIN_TOOLS.length} 项` }}</span>
+                <InfoTip text="仅下次 spawn 生效（会话行是完整快照）。callServer 的可用方法由下方 Capabilities 授权。" :width="320" />
+                <span class="sd-resource-count">{{ serverBuiltinTools.length }} / {{ SERVER_BUILTIN_TOOLS.length }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="selectAllServerTools">全选</button>
+                  <button type="button" class="btn-link" @click="serverBuiltinTools = []">清空</button>
+                </span>
               </div>
-              <template v-if="isView">
-                <div v-if="serverBuiltinTools === null" class="tag-list"><span class="tag tag-default">默认（仅 sendFileToUser）</span></div>
-                <div v-else-if="serverBuiltinTools.length" class="tag-list"><span v-for="t in serverBuiltinTools" :key="t" class="tag">{{ t }}</span></div>
-                <span v-else class="sd-empty">无</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="serverBuiltinTools === null" @change="serverBuiltinTools = ($event.target as HTMLInputElement).checked ? null : ['sendFileToUser']" /><span>使用默认（仅 sendFileToUser）</span></label>
-                <div v-if="serverBuiltinTools !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="serverBuiltinTools = [...SERVER_BUILTIN_TOOLS]">全选</button><button type="button" class="btn-link" @click="serverBuiltinTools = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check" :class="{ checked: serverBuiltinTools.includes(t) }"><input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}</span></label></div>
-                  <div style="margin-top:4px;opacity:.7;font-size:12px">⚠️ 仅下次 spawn 生效（完全快照）；可用方法由 agent 配置的 capabilities 授权</div>
-                </div>
-              </template>
+              <div v-if="isView" class="tag-list">
+                <span v-for="t in serverBuiltinTools" :key="t" class="tag">{{ t }}</span>
+                <span v-if="serverBuiltinTools.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check"
+                  :class="{ checked: serverBuiltinTools.includes(t) }">
+                  <input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}</span>
+                </label>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="t in serverBuiltinTools" :key="'bad-' + t">
+                  <label v-if="issueIndex('serverBuiltinTools', t)" class="tag-check checked tag-invalid" title="平台工具不存在">
+                    <input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}（无效）</span>
+                  </label>
+                </template>
+              </div>
             </div>
 
             <!-- Extensions -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">Extensions</span>
-                <span class="sd-resource-count">{{ availableExtensions.names.length }} 可用</span>
+                <span class="sd-resource-count">{{ extensions.length }} / {{ availableExtensions.names.length }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="extensions = [...availableExtensions.names]">全选</button>
+                  <button type="button" class="btn-link" @click="extensions = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('extensions')">清理无效项</button>
+                </span>
               </div>
-              <template v-if="isView">
-                <div v-if="extensions === null" class="tag-list"><span class="tag tag-default">默认（全部）</span></div>
-                <div v-else-if="extensions.length" class="tag-list"><span v-for="e in extensions" :key="e" class="tag">{{ e }}</span></div>
-                <span v-else class="sd-empty">无</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="extensions === null" @change="extensions = ($event.target as HTMLInputElement).checked ? null : []" /><span>使用默认</span></label>
-                <div v-if="extensions !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="extensions = [...availableExtensions.names]">全选</button><button type="button" class="btn-link" @click="extensions = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="e in availableExtensions.names" :key="e" class="tag-check" :class="{ checked: extensions.includes(e) }"><input type="checkbox" :value="e" v-model="extensions" /><span>{{ e }}</span></label></div>
-                </div>
-              </template>
+              <div v-if="isView" class="tag-list">
+                <span v-for="e in extensions" :key="e" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('extensions', e) }">{{ e }}</span>
+                <span v-if="extensions.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="e in availableExtensions.names" :key="e" class="tag-check"
+                  :class="{ checked: extensions.includes(e) }">
+                  <input type="checkbox" :value="e" v-model="extensions" /><span>{{ e }}</span>
+                </label>
+                <span v-if="availableExtensions.names.length === 0" class="sd-empty">未安装插件</span>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="e in extensions" :key="'bad-' + e">
+                  <label v-if="issueIndex('extensions', e)" class="tag-check checked tag-invalid" title="插件不存在或未安装">
+                    <input type="checkbox" :value="e" v-model="extensions" /><span>{{ e }}（无效）</span>
+                  </label>
+                </template>
+              </div>
             </div>
 
             <!-- Skills -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">Skills</span>
-                <span class="sd-resource-count">{{ availableSkills.length }} 可用</span>
+                <span class="sd-resource-count">{{ skills.length }} / {{ availableSkills.length }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="skills = [...skillNames]">全选</button>
+                  <button type="button" class="btn-link" @click="skills = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('skills')">清理无效项</button>
+                </span>
               </div>
-              <template v-if="isView">
-                <div v-if="skills === null" class="tag-list"><span class="tag tag-default">默认（全部）</span></div>
-                <div v-else-if="skills.length" class="tag-list"><span v-for="s in skills" :key="s" class="tag">{{ s }}</span></div>
-                <span v-else class="sd-empty">无</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="skills === null" @change="skills = ($event.target as HTMLInputElement).checked ? null : []" /><span>使用默认</span></label>
-                <div v-if="skills !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="skills = skillNames">全选</button><button type="button" class="btn-link" @click="skills = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="s in availableSkills" :key="s.name" class="tag-check" :class="{ checked: skills.includes(s.name) }"><input type="checkbox" :value="s.name" v-model="skills" /><span>{{ s.name }}</span></label></div>
-                </div>
-              </template>
+              <div v-if="isView" class="tag-list">
+                <span v-for="sk in skills" :key="sk" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('skills', sk) }">{{ sk }}</span>
+                <span v-if="skills.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="s in availableSkills" :key="s.name" class="tag-check"
+                  :class="{ checked: skills.includes(s.name) }">
+                  <input type="checkbox" :value="s.name" v-model="skills" /><span>{{ s.name }}</span>
+                </label>
+                <span v-if="availableSkills.length === 0" class="sd-empty">未安装 Skill</span>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="sk in skills" :key="'bad-' + sk">
+                  <label v-if="issueIndex('skills', sk)" class="tag-check checked tag-invalid" title="Skill 不存在">
+                    <input type="checkbox" :value="sk" v-model="skills" /><span>{{ sk }}（无效）</span>
+                  </label>
+                </template>
+              </div>
             </div>
 
             <!-- Prompts -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
                 <span class="sd-resource-title">Prompts</span>
-                <span class="sd-resource-count">{{ availablePrompts.length }} 可用</span>
+                <span class="sd-resource-count">{{ prompts.length }} / {{ availablePrompts.length }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="prompts = [...promptNames]">全选</button>
+                  <button type="button" class="btn-link" @click="prompts = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('prompts')">清理无效项</button>
+                </span>
               </div>
-              <template v-if="isView">
-                <div v-if="prompts === null" class="tag-list"><span class="tag tag-default">默认（全部）</span></div>
-                <div v-else-if="prompts.length" class="tag-list"><span v-for="p in prompts" :key="p" class="tag">{{ p }}</span></div>
-                <span v-else class="sd-empty">无</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline"><input type="checkbox" :checked="prompts === null" @change="prompts = ($event.target as HTMLInputElement).checked ? null : []" /><span>使用默认</span></label>
-                <div v-if="prompts !== null" class="resource-edit">
-                  <div class="resource-edit-actions"><button type="button" class="btn-link" @click="prompts = promptNames">全选</button><button type="button" class="btn-link" @click="prompts = []">清空</button></div>
-                  <div class="tag-list editable"><label v-for="p in availablePrompts" :key="p.name" class="tag-check" :class="{ checked: prompts.includes(p.name) }"><input type="checkbox" :value="p.name" v-model="prompts" /><span>{{ p.name }}</span></label></div>
-                </div>
-              </template>
+              <div v-if="isView" class="tag-list">
+                <span v-for="p in prompts" :key="p" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('prompts', p) }">{{ p }}</span>
+                <span v-if="prompts.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="p in availablePrompts" :key="p.name" class="tag-check"
+                  :class="{ checked: prompts.includes(p.name) }">
+                  <input type="checkbox" :value="p.name" v-model="prompts" /><span>{{ p.name }}</span>
+                </label>
+                <span v-if="availablePrompts.length === 0" class="sd-empty">未安装 Prompt</span>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="p in prompts" :key="'bad-' + p">
+                  <label v-if="issueIndex('prompts', p)" class="tag-check checked tag-invalid" title="Prompt 模板不存在">
+                    <input type="checkbox" :value="p" v-model="prompts" /><span>{{ p }}（无效）</span>
+                  </label>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -500,41 +708,37 @@ function workerUptime(ms: number): string {
         <div v-if="callServerEnabled" class="sd-section">
           <h3 class="sd-section-title">
             Capabilities
-            <span style="font-size:12px;font-weight:400;opacity:.65;margin-left:8px">callServer 可调用的 server 方法授权（session 快照级）</span>
+            <InfoTip text="callServer 可调用的 server 方法授权（session 快照级）。未勾选任何方法 = 不授权；仅影响本会话，保存后固化不再跟随 agent。" :width="340" />
           </h3>
 
           <template v-if="isView">
-            <div v-if="capabilities === null" class="resource-default">未授权（未配置 = 无任何方法权限；缺 key 的存量会话继承 agent）</div>
+            <div v-if="capabilities === null" class="resource-default">未配置（走全局 callServer 策略）</div>
             <div v-else-if="capabilities.length === 0" class="resource-empty">已配置 0 项（未授权任何方法）</div>
             <div v-else class="tag-list">
-              <span v-for="m in capabilities" :key="m" class="tag">{{ m }}</span>
+              <span v-for="m in capabilities" :key="m" class="tag"
+                :class="{ 'tag-invalid': issueIndex('capabilities', m) }">{{ m }}</span>
             </div>
           </template>
           <template v-else>
-            <label class="checkbox-inline">
-              <input type="checkbox" :checked="capabilities === null"
-                @change="capabilities = ($event.target as HTMLInputElement).checked ? null : []" />
-              <span>未配置（不授权任何方法；缺 key 时继承 agent）</span>
-            </label>
-            <div v-if="capabilities !== null" class="resource-edit">
-              <div class="resource-edit-actions">
-                <button type="button" class="btn-link" @click="capabilities = [...allCapabilityMethods]">全选</button>
-                <button type="button" class="btn-link" @click="capabilities = []">清空（全禁）</button>
+            <div class="resource-edit-actions">
+              <button type="button" class="btn-link" @click="capabilities = [...allCapabilityMethods]">全选</button>
+              <button type="button" class="btn-link" @click="capabilities = []">清空（全禁）</button>
+              <button type="button" class="btn-link" @click="pruneField('capabilities')">清理无效项</button>
+            </div>
+            <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
+              <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
+              <div class="tag-list editable">
+                <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
+                  :class="{ checked: (capabilities ?? []).includes(cap.method) }">
+                  <input type="checkbox" :value="cap.method"
+                    :checked="(capabilities ?? []).includes(cap.method)"
+                    @change="toggleCapability(cap.method, ($event.target as HTMLInputElement).checked)" />
+                  <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
+                </label>
               </div>
-              <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
-                <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
-                <div class="tag-list editable">
-                  <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
-                    :class="{ checked: capabilities.includes(cap.method) }">
-                    <input type="checkbox" :value="cap.method" v-model="capabilities" />
-                    <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
-                  </label>
-                </div>
-              </div>
-              <div style="font-size:12px;opacity:.7;line-height:1.6">
-                ⚠️ 仅影响本会话（session 快照，不写回 agent）；写入后即固化，不再跟随 agent 配置。
-                存量会话未配置过时继承 agent 当前值；授权是显式的，未配置 = 无任何方法权限。list / detail 返回同样按授权收敛。
-              </div>
+            </div>
+            <div style="font-size:12px;opacity:.7;line-height:1.6">
+              scoped 写方法仅能操作本 agent / 本 session 自己的行（固定安全网，不可配置）。
             </div>
           </template>
         </div>
@@ -684,9 +888,39 @@ function workerUptime(ms: number): string {
 .sd-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 14px; border: 0; background: var(--surface-subtle); cursor: pointer; text-align: left; transition: background 120ms; }
 .sd-toggle:hover { background: var(--surface-hover); }
 .sd-toggle .sd-section-title { font-size: 0.88rem; }
+.sd-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .sd-resources-body { display: flex; flex-direction: column; gap: 16px; padding: 14px; }
 
 .sd-resource-group { display: flex; flex-direction: column; gap: 4px; }
+.sd-badge.warn {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.issues-banner {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.issues-banner-title { font-weight: 600; color: #b45309; margin-bottom: 4px; }
+.issues-banner-list { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-secondary); }
+.tag-invalid, .tag-check.tag-invalid {
+  border-color: #d97706 !important;
+  color: #b45309 !important;
+  background: rgba(245, 158, 11, 0.12) !important;
+}
 .sd-resource-header { display: flex; align-items: center; gap: 8px; }
 .sd-resource-title { font-size: 0.82rem; font-weight: 650; color: var(--text); }
 .sd-resource-count { font-size: 0.72rem; color: var(--text-tertiary); }
@@ -706,6 +940,18 @@ function workerUptime(ms: number): string {
 .tag-check.locked { cursor: default; opacity: 0.85; }
 .tag-check .tag-dep { margin-left: 4px; font-size: 0.64rem; opacity: 0.75; }
 
+.template-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm, 8px);
+}
+.template-bar .template-select { min-width: 150px; max-width: 240px; }
+.template-bar .template-name-input { min-width: 130px; max-width: 200px; }
 .sd-resource-hint { font-size: 0.74rem; line-height: 1.45; color: var(--text-tertiary); }
 
 .sd-resource-group {

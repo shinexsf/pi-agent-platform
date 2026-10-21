@@ -15,29 +15,32 @@ export interface AgentConfig {
   systemPrompt?: string;
   appendSystemPrompt?: string;
 
-  // Tool enable list — drives BOTH activation and built-in extension loading:
+  // Tool enable list — explicit allowlist that drives BOTH activation and built-in
+  // extension loading (change: explicit-agent-config):
   // - plain pi builtin tools: read / write / edit / bash / grep / find / ls / powershell
   // - pi builtin EXTENSION tools: codemode / tool_search (naming one loads `builtin:<ext>`
   //   in the worker)
-  // Semantics: null/undefined = inherit global default, [] = none, array = allowlist.
-  // MCP is NOT a tool and MUST NOT appear here — see `mcp` below.
+  // Semantics: this is the ONLY source of truth. missing/null = empty (no tools).
+  // The platform has no "inherit global default" layer. MCP is NOT a tool and MUST NOT
+  // appear here — see `mcp` below.
   builtinTools?: string[];
 
-  // Extension whitelist (names from settings.json packages + extensions)
+  // Extension whitelist (names from settings.json packages + extensions).
+  // missing/null = empty (no extensions).
   extensions?: string[];
 
-  // Skills whitelist (null = all, [] = none, ['a','b'] = only these)
+  // Skills whitelist. missing/null = empty (no skills).
   skills?: string[];
 
-  // Prompts whitelist (null = all, [] = none, ['a','b'] = only these)
+  // Prompts whitelist. missing/null = empty (no prompts).
   prompts?: string[];
 
   // MCP capability switch (change: mcp-as-first-class-capability).
   // Owns the built-in `mcp` extension: loading it connects every server in `mcp.json` on
   // session start. Enabling it also loads+activates codemode & tool_search, because a server's
   // default `exposure: "codemode"` leaves its tools unreachable otherwise.
-  // undefined = inherit global default (`defaultMcp`), `{ enabled: false }` = explicitly off.
-  // Object (not a bare boolean) so per-agent server lists / default exposure can be added later.
+  // missing/null = off ({"enabled": false}). Object (not a bare boolean) so per-agent server
+  // lists / default exposure can be added later.
   mcp?: { enabled?: boolean };
 
   // Per-server MCP overrides (future MCP management). Not read by the worker yet — the
@@ -45,8 +48,7 @@ export interface AgentConfig {
   mcpServers?: Record<string, unknown>;
 
   // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
-  // that talk to the master via reverse IPC). Semantics: undefined/null = default
-  // `['sendFileToUser']` (callServer OFF by default, opt-in); [] = none; array = allowlist.
+  // that talk to the master via reverse IPC). Semantics: missing/null = empty (none).
   // Independent from `builtinTools` (which governs pi builtin tools + builtin extension tools).
   serverBuiltinTools?: string[];
 
@@ -56,6 +58,137 @@ export interface AgentConfig {
   // Enforced by the master-side control plane at dispatch time — the tool
   // switch (serverBuiltinTools) only controls prompt-layer injection.
   capabilities?: string[] | null;
+}
+
+/**
+ * Resolved form of {@link AgentConfig}: every resource field is present.
+ *
+ * Only the 7 resource fields are normalized — prompt / model / thinkingLevel stay
+ * optional on purpose (the UI writes them as part of ResourceConfig but the
+ * boundary contract only guarantees the resource lists).
+ */
+export interface ResolvedAgentConfig extends AgentConfig {
+  extensions: string[];
+  skills: string[];
+  prompts: string[];
+  builtinTools: string[];
+  mcp: { enabled: boolean };
+  serverBuiltinTools: string[];
+  capabilities: string[] | null;
+}
+
+/**
+ * Normalize a stored config into {@link ResolvedAgentConfig}: missing/null resource
+ * fields become empty; `mcp` becomes `{ enabled: false }`; `capabilities` keeps its
+ * tri-state meaning (null = global default policy).
+ *
+ * Invariant: `capabilities` is the method-level authorization for `callServer`, so when
+ * `callServer` is not in `serverBuiltinTools` the authorization is meaningless and is
+ * forced to `[]` (全禁). Without this, a template/agent saved after unchecking
+ * `callServer` would keep stale authorizations that silently reactivate when the tool
+ * is switched back on.
+ *
+ * This is the single place where "missing means empty" is applied (change:
+ * explicit-agent-config). There is deliberately no global-default merge layer.
+ */
+export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgentConfig {
+  const c = config ?? {};
+  const serverBuiltinTools = c.serverBuiltinTools ?? [];
+  return {
+    ...c,
+    extensions: c.extensions ?? [],
+    skills: c.skills ?? [],
+    prompts: c.prompts ?? [],
+    builtinTools: c.builtinTools ?? [],
+    mcp: { enabled: c.mcp?.enabled === true },
+    serverBuiltinTools,
+    capabilities: serverBuiltinTools.includes('callServer') ? (c.capabilities ?? null) : [],
+  };
+}
+
+/**
+ * Pi builtin tools + the two builtin-extension tools that appear in the tool checklist.
+ * `mcp` is deliberately absent (it is a capability switch, see {@link AgentConfig.mcp}).
+ */
+export const PLATFORM_BUILTIN_TOOLS = [
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'grep',
+  'find',
+  'ls',
+  'powershell',
+  'codemode',
+  'tool_search',
+] as const;
+
+/** Worker-registered platform tools (`AgentConfig.serverBuiltinTools`). */
+export const PLATFORM_SERVER_TOOLS = ['sendFileToUser', 'callServer'] as const;
+
+/** A stored config value that no longer resolves (renamed tool, uninstalled extension, …). */
+export interface ConfigIssue {
+  /** Which config field the value came from. */
+  field: 'extensions' | 'skills' | 'prompts' | 'builtinTools' | 'serverBuiltinTools' | 'capabilities' | 'model';
+  /** The offending value. */
+  value: string;
+  /** Human-readable reason (Chinese, shown directly in the web UI). */
+  reason: string;
+}
+
+/** What currently exists — supplied by the caller (server route or web composable). */
+export interface ConfigAvailability {
+  extensions?: string[];
+  skills?: string[];
+  prompts?: string[];
+  capabilities?: string[];
+  /** `provider/model` strings. */
+  models?: string[];
+  tools?: string[];
+  serverTools?: string[];
+}
+
+/**
+ * Pure rule table shared by server (save response) and web (live highlighting).
+ *
+ * A field is only checked when the caller supplies its availability list — omitted lists
+ * produce no issues (no false positives from partial knowledge).
+ */
+export function findConfigIssues(
+  config: AgentConfig | null | undefined,
+  available: ConfigAvailability = {},
+): ConfigIssue[] {
+  const issues: ConfigIssue[] = [];
+  const check = (
+    field: ConfigIssue['field'],
+    values: readonly string[] | undefined,
+    known: readonly string[] | undefined,
+    reason: string,
+  ) => {
+    if (!known || !values) return;
+    const set = new Set(known);
+    for (const value of values) {
+      if (!set.has(value)) issues.push({ field, value, reason });
+    }
+  };
+
+  check('extensions', config?.extensions, available.extensions, '插件不存在或未安装');
+  check('skills', config?.skills, available.skills, 'Skill 不存在');
+  check('prompts', config?.prompts, available.prompts, 'Prompt 模板不存在');
+  check(
+    'builtinTools',
+    config?.builtinTools,
+    available.tools ?? [...PLATFORM_BUILTIN_TOOLS],
+    '工具不存在',
+  );
+  check(
+    'serverBuiltinTools',
+    config?.serverBuiltinTools,
+    available.serverTools ?? [...PLATFORM_SERVER_TOOLS],
+    '平台工具不存在',
+  );
+  check('capabilities', config?.capabilities ?? undefined, available.capabilities, '授权方法不存在');
+  return issues;
 }
 
 // ---------- Agent ----------
@@ -70,6 +203,24 @@ export interface AgentDTO {
   config?: AgentConfig; // parsed from JSON column
 
   createdAt: number; // epoch ms
+  updatedAt: number;
+}
+
+/**
+ * Saved configuration template: a snapshot of the seven AgentConfig fields
+ * (`systemPrompt` + resources + `capabilities`), no agent name/description.
+ * Applying a template overwrites those fields and clears `systemPrompt`
+ * (it is not part of a template).
+ *
+ * `config` is normalized with `normalizeAgentConfig()` on write — a template
+ * means exactly what it says, there is no inheritance layer.
+ */
+export interface AgentTemplateDTO {
+  id: string;
+  name: string;
+  description?: string;
+  config: AgentConfig;
+  createdAt: number;
   updatedAt: number;
 }
 

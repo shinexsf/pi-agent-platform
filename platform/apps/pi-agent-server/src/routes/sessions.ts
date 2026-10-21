@@ -22,6 +22,8 @@ import { sessionRegistry } from '../services/session.js';
 import { renameSession as renameSessionOp } from '../services/session-ops.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
+import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
+import { collectConfigIssues } from '../services/config-issues.js';
 import { childLogger } from '../logger.js';
 
 const logger = childLogger('session-info');
@@ -584,12 +586,20 @@ export function createSessionsRouter(
     }
     if (body.model !== undefined) patch.model = body.model;
     if (body.thinkingLevel !== undefined) patch.thinkingLevel = body.thinkingLevel || undefined;
-    if (body.config !== undefined) patch.config = body.config;
+    if (body.config !== undefined) {
+      // Normalize session-level overrides too (same explicit-clist contract as agents).
+      patch.config = body.config ? normalizeAgentConfig(body.config) : body.config;
+    }
     sessionRepo.update(id, patch as any);
     // Title goes through the pi-sync path (worker alive → setSessionName + event回流;
     // dead → direct DB write) instead of landing in `patch` above.
     if (titleTouched) await renameSession(id, newTitle);
-    return c.json({ ok: true, session: sessionRepo.get(id) });
+    const saved = sessionRepo.get(id);
+    return c.json({
+      ok: true,
+      session: saved,
+      issues: collectConfigIssues(saved?.config),
+    });
   });
 
   // POST /api/sessions/:id/model — set current session's model (C4, D11)

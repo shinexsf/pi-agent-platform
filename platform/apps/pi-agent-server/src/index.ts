@@ -12,6 +12,7 @@ import { logger } from './logger.js';
 import { initDb } from './db/init.js';
 import { createAgentRepo } from './repos/agent.repo.js';
 import { createSessionRepo } from './repos/session.repo.js';
+import { createTemplateRepo } from './repos/template.repo.js';
 import { initSessionRegistry } from './services/session.js';
 import { workerPool } from './worker-pool.js';
 import { createAgentsRouter } from './routes/agents.js';
@@ -19,6 +20,7 @@ import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createConfigRouter } from './routes/config.js';
+import { createTemplatesRouter } from './routes/templates.js';
 import { createServerLogsRouter } from './routes/server-logs.js';
 import { AttachmentStore } from './services/attachment-store.js';
 import { startTimeoutScanner } from './session-timeout-scanner.js';
@@ -56,6 +58,7 @@ async function main() {
   const { db, raw } = initDb(config.databasePath);
   const agentRepo = createAgentRepo(db);
   const sessionRepo = createSessionRepo(db);
+  const templateRepo = createTemplateRepo(db);
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
   // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
@@ -81,6 +84,7 @@ async function main() {
   app.route('/api/sessions', createEventsRouter());
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
   app.route('/api/config', createConfigRouter(config));
+  app.route('/api/templates', createTemplatesRouter(templateRepo));
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
 

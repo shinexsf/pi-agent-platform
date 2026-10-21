@@ -18,11 +18,11 @@
  */
 
 import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';
+import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
-import { readSettings, DEFAULT_BUILTIN_TOOLS, type GlobalSettings } from './settings-reader.js';
 import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilities/registry.js';
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
@@ -192,17 +192,20 @@ function buildRuntimeConfig(
   /** Session-row overrides (respawn path): row wins over agent (full-snapshot semantics). */
   sessionOverrides?: { model?: string; thinkingLevel?: string | null; config?: AgentConfig | null },
 ): RuntimeConfig {
-  // Merge agent config with global defaults from settings.json
-  const mergedConfig = mergeWithGlobalDefaults(
+  // Normalize to the explicit-clist contract (change: explicit-agent-config):
+  // missing/null resource fields become empty, `mcp` becomes { enabled: false }.
+  // There is deliberately NO global-default merge layer — the agent/session row is the
+  // single source of truth (`~/.pi/server/config.json` no longer feeds agent config).
+  const sourceConfig =
     sessionOverrides && sessionOverrides.config !== null && sessionOverrides.config !== undefined
       ? sessionOverrides.config
-      : agent.config,
-  );
+      : agent.config;
+  const resolvedConfig = normalizeAgentConfig(sourceConfig);
   return {
     workspacePath: agent.workspacePath,
     model: sessionOverrides?.model || agent.model,
     thinkingLevel: sessionOverrides?.thinkingLevel ?? agent.thinkingLevel,
-    config: mergedConfig,
+    config: resolvedConfig,
     // Capability index (callserver-control-plane D2): compact method+summary list
     // pushed at spawn so the callServer tool description can embed it (registry
     // on master is the single source of truth; next spawn picks up changes).
@@ -212,56 +215,6 @@ function buildRuntimeConfig(
     capabilityIndex: buildCapabilityIndex(
       resolveEffectiveCapabilities(sessionOverrides?.config, agent.config),
     ),
-  };
-}
-
-/**
- * Merge agent config with global defaults from settings.json.
- * When agent config field is null/undefined, use the global default.
- * When agent config field is set (including empty array), use it as-is.
- *
- * `builtinTools` falls back to the platform default (DEFAULT_BUILTIN_TOOLS) when neither the
- * agent nor `~/.pi/server/config.json` specify it — the list also drives pi builtin extension
- * loading (codemode / tool_search), so an explicit user config keeps its exact meaning.
- *
- * `mcp` falls back to `defaultMcp` the same way (change: mcp-as-first-class-capability); it is a
- * capability switch, not part of `builtinTools`.
- */
-function mergeWithGlobalDefaults(agentConfig?: AgentConfig): AgentConfig | undefined {
-  const globalSettings = readSettings();
-  const globalBuiltinTools = globalSettings?.defaultBuiltinTools ?? [...DEFAULT_BUILTIN_TOOLS];
-  const globalMcp = globalSettings?.defaultMcp;
-
-  // No global defaults configured — apply the platform default for builtinTools only
-  if (!globalSettings) {
-    return {
-      ...(agentConfig ?? {}),
-      builtinTools: agentConfig?.builtinTools ?? globalBuiltinTools,
-      mcp: agentConfig?.mcp ?? globalMcp,
-    };
-  }
-  
-  // No agent config — create one with just global defaults
-  if (!agentConfig) {
-    return {
-      builtinTools: globalBuiltinTools,
-      serverBuiltinTools: globalSettings.defaultServerBuiltinTools,
-      extensions: globalSettings.defaultExtensions,
-      skills: globalSettings.defaultSkills,
-      prompts: globalSettings.defaultPrompts,
-      mcp: globalMcp,
-    };
-  }
-  
-  // Merge: agent config fields take precedence, fall back to global defaults
-  return {
-    ...agentConfig,
-    builtinTools: agentConfig.builtinTools ?? globalBuiltinTools,
-    serverBuiltinTools: agentConfig.serverBuiltinTools ?? globalSettings.defaultServerBuiltinTools,
-    extensions: agentConfig.extensions ?? globalSettings.defaultExtensions,
-    skills: agentConfig.skills ?? globalSettings.defaultSkills,
-    prompts: agentConfig.prompts ?? globalSettings.defaultPrompts,
-    mcp: agentConfig.mcp ?? globalMcp,
   };
 }
 

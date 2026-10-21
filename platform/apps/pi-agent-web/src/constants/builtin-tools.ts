@@ -57,8 +57,24 @@ export const BUILTIN_TOOLS: readonly BuiltinToolOption[] = [
 /** Values only — for `<input type="checkbox" v-model>` loops and "select all" buttons. */
 export const BUILTIN_TOOL_NAMES: readonly string[] = BUILTIN_TOOLS.map((tool) => tool.value);
 
-/** The platform's default set (matches server `DEFAULT_BUILTIN_TOOLS`). */
-export const BUILTIN_TOOL_DEFAULT_NAMES: readonly string[] = [...BUILTIN_TOOL_NAMES];
+/** 新建 agent 的初始工具集（7 项跨平台基础工具）。 */
+export const BASE_TOOL_NAMES: readonly string[] = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+
+/**
+ * 新建 agent 的初始配置（change: explicit-agent-config）。
+ *
+ * 平台不再有"全局默认层"：这份值只是"新表单的初始勾选"，保存后即成为该 agent 的显式清单。
+ * `capabilities: null` 是唯一例外语义（null = 全局 callServer 策略）。
+ */
+export const BASE_AGENT_CONFIG = {
+  builtinTools: [...BASE_TOOL_NAMES],
+  extensions: [] as string[],
+  skills: [] as string[],
+  prompts: [] as string[],
+  mcp: { enabled: false },
+  serverBuiltinTools: ['sendFileToUser'],
+  capabilities: null as string[] | null,
+};
 
 /**
  * Tools the MCP capability brings along (codemode + tool_search).

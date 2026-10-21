@@ -110,16 +110,14 @@ interface SettingsConfig {
   [key: string]: unknown;
 }
 
-/** pi-agent-server specific config (stored in ~/.pi/server/config.json) */
+/**
+ * pi-agent-server specific config (stored in ~/.pi/server/config.json).
+ *
+ * Agent resource defaults were removed in `explicit-agent-config` — agent config is now a
+ * single explicit list per agent (no inheritance layer). Remaining keys are server-level
+ * settings that are not per-agent.
+ */
 interface ServerDefaultsConfig {
-  defaultExtensions?: string[];
-  defaultSkills?: string[];
-  defaultPrompts?: string[];
-  defaultBuiltinTools?: string[];
-  /** Global default for AgentConfig.mcp (MCP capability switch). */
-  defaultMcp?: { enabled?: boolean };
-  /** Global default for AgentConfig.serverBuiltinTools (sendFileToUser / callServer). */
-  defaultServerBuiltinTools?: string[];
   [key: string]: unknown;
 }
 

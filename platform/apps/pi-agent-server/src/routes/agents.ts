@@ -5,6 +5,8 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
 import type { CreateAgentRequest, UpdateAgentRequest } from '@pi-agent-platform/api-types';
+import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
+import { collectConfigIssues } from '../services/config-issues.js';
 import { normalizePath } from '../utils/normalize-path.js';
 
 /**
@@ -100,17 +102,27 @@ export function createAgentsRouter(
     if (!body.name || !body.workspacePath || !body.model) {
       return c.json({ error: 'Missing required fields: name, workspacePath, model' }, 400);
     }
-    const created = agentRepo.create(body);
-    return c.json(created, 201);
+    const created = agentRepo.create({
+      ...body,
+      config: body.config ? normalizeAgentConfig(body.config) : body.config,
+    });
+    return c.json({ ...created, issues: collectConfigIssues(created.config) }, 201);
   });
 
   // POST /api/agents/:id
   router.post('/:id', async (c) => {
     const id = c.req.param('id');
     const body = (await c.req.json()) as UpdateAgentRequest;
-    const updated = agentRepo.update(id, body);
+    // Normalize on write too: missing resource fields become empty lists, so the row
+    // itself carries the explicit contract (no inheritance layer anywhere).
+    const updated = agentRepo.update(id, {
+      ...body,
+      ...(body.config !== undefined
+        ? { config: body.config ? normalizeAgentConfig(body.config) : body.config }
+        : {}),
+    });
     if (!updated) return c.json({ error: 'Agent not found' }, 404);
-    return c.json(updated);
+    return c.json({ ...updated, issues: collectConfigIssues(updated.config) });
   });
 
   // POST /api/agents/:id/delete — cascade: kills every session worker,

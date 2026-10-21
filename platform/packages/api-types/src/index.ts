@@ -5,6 +5,7 @@
 
 export type {
   AgentDTO,
+  AgentTemplateDTO,
   AgentConfig,
   SessionDTO,
   SessionStatus,
@@ -12,9 +13,10 @@ export type {
   MessageRole,
   ToolCallDTO,
   RuntimeConfig,
+  ConfigIssue,
 } from '@pi-agent-platform/shared-types';
 
-import type { AgentDTO, AgentConfig, SessionDTO, MessageDTO } from '@pi-agent-platform/shared-types';
+import type { AgentDTO, AgentTemplateDTO, AgentConfig, SessionDTO, MessageDTO } from '@pi-agent-platform/shared-types';
 
 // ---------- Agents ----------
 
@@ -221,6 +223,23 @@ export interface GetMessagesResponse {
   messageCount: number;
   messages: MessageDTO[];
 }
+
+// ---------- Templates ----------
+
+export interface CreateTemplateRequest {
+  name: string;
+  description?: string;
+  config: AgentConfig;
+}
+
+export interface UpdateTemplateRequest {
+  name?: string;
+  description?: string;
+  config?: AgentConfig;
+}
+
+export type ListTemplatesResponse = AgentTemplateDTO[];
+export type TemplateResponse = AgentTemplateDTO;
 
 // ---------- Error ----------
 

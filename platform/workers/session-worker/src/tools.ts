@@ -1,12 +1,12 @@
 /**
  * Server-side tools injected into agent sessions — tools that talk to the
  * master via reverse IPC. Gated by `AgentConfig.serverBuiltinTools`
- * (undefined/null → DEFAULT_SERVER_BUILTIN_TOOLS; [] → none; array → allowlist),
+ * (undefined/null → none; [] → none; array → allowlist — explicit-agent-config),
  * independent from `builtinTools` (pi builtin tools only).
  *
  * Each tool is a pi SDK ToolDefinition created per-session via closures
  * that capture sessionId and callMaster. Adding a server tool = append a
- * factory here + include its name in the default list (if default-on).
+ * factory here + list its name in the agent config (no default list).
  */
 
 import type { CapabilityIndexEntry } from '@pi-agent-platform/shared-types';
@@ -14,12 +14,8 @@ import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 
 export type CallMasterFn = (method: string, args: unknown[]) => Promise<unknown>;
 
-/** Default when AgentConfig.serverBuiltinTools is undefined/null.
- *  callServer is power — OFF by default, opt-in per agent (spec callserver-tool). */
-const DEFAULT_SERVER_BUILTIN_TOOLS = ['sendFileToUser'];
-
 export interface ServerToolsOptions {
-  /** Raw AgentConfig.serverBuiltinTools value (undefined/null → default set). */
+  /** Raw AgentConfig.serverBuiltinTools value (undefined/null → none — explicit-agent-config). */
   serverBuiltinTools?: string[];
   /** Compact capability index pushed by master at createSession — embedded into
    *  the callServer description so the model needs zero extra round-trips. */
@@ -180,15 +176,16 @@ function createCallServerTool(
 
 /**
  * Create the server-side tools enabled for this session.
- * Gated by AgentConfig.serverBuiltinTools (undefined/null → default set,
- * [] → none, array → exact allowlist).
+ * Gated by AgentConfig.serverBuiltinTools (undefined/null → none,
+ * [] → none, array → exact allowlist). The master normalizes before spawn, so a
+ * missing value already arrives as []; this fallback just keeps the worker honest.
  */
 export function createServerTools(
   sessionId: string,
   callMaster: CallMasterFn,
   opts: ServerToolsOptions = {},
 ): ToolDefinition[] {
-  const enabled = new Set(opts.serverBuiltinTools ?? DEFAULT_SERVER_BUILTIN_TOOLS);
+  const enabled = new Set(opts.serverBuiltinTools ?? []);
   const tools: ToolDefinition[] = [];
   if (enabled.has('sendFileToUser')) {
     tools.push(createSendFileToUserTool(sessionId, callMaster));

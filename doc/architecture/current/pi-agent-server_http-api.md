@@ -132,6 +132,9 @@ interface SessionContextDTO {
 | `/api/config/extensions/upload-single` | POST | 上传单文件 |
 | `/api/config/extensions/upload-zip` | POST | 上传 zip 包 |
 | `/api/config/extensions/:name` | DELETE | 卸载插件 |
+| `/api/templates` | GET | 列出配置模板（七字段快照，全局）|
+| `/api/templates` | POST | 新建模板（`name` 必填，重复名 409；`config` 归一后落库）|
+| `/api/templates/:id` | GET/PATCH/DELETE | 读取 / 改名·改描述 / 删除 |
 
 ## Worker（调试）
 

@@ -102,21 +102,21 @@ interface AgentConfig {
   systemPrompt?: string;
   appendSystemPrompt?: string;
 
-  // 内置工具控制（工具名清单；null = 跟随全局默认）
+  // 内置工具控制（工具名清单；缺失 / null = 空=全不启用，没有全局默认层）
   builtinTools?: string[];
 
   // MCP 能力开关（不是工具名）：true = 装载 builtin:mcp 并自动补齐 codemode/tool_search；
-  // null/undefined = 跟随全局 defaultMcp（平台默认关闭）
+  // 缺失 = { enabled: false }
   mcp?: { enabled?: boolean } | null;
 
-  // 插件控制（从 settings.json 筛选）
+  // 插件控制（从 settings.json 筛选；缺失 = 空）
   extensions?: string[];
 
-  // 技能/模板控制（null = 全部，[] = 无）
+  // 技能/模板控制（缺失 / null = 空，[] = 空）
   skills?: string[];
   prompts?: string[];
 
-  // Server 侧工具白名单（sendFileToUser / callServer；未配置 = ['sendFileToUser']，即 callServer 默认关）
+  // Server 侧工具白名单（sendFileToUser / callServer；缺失 = [] = 全不给）
   serverBuiltinTools?: string[];
 
   // callServer 方法级授权（opt-in：未配置 = 无任何方法权限，[] = 全禁，数组 = 白名单；
@@ -124,6 +124,8 @@ interface AgentConfig {
   capabilities?: string[] | null;
 }
 ```
+
+**语义统一**：所有清单字段都是「精确清单，缺失即空」，由 `normalizeAgentConfig()`（`packages/shared-types`）在写入 / spawn / 前端打开时统一归一；**无继承层、无迁移代码**。列表里失效的值不阻断保存，由 `findConfigIssues()` 标注（黄标 + 清理）。
 
 ## TypeScript（drizzle）
 
@@ -228,6 +230,23 @@ CREATE INDEX idx_attachments_session ON attachments(session_id);
 - `filename`: 实际磁盘文件名（UUID 格式）
 - 附件 ID: `att_<uuid-no-dashes-12chars>`（如 `att_452a8fcc9e32`）
 - MIME 白名单已移除，支持所有文件类型
+
+## agent_templates 表
+
+```sql
+CREATE TABLE agent_templates (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  config        TEXT NOT NULL,   -- AgentConfig JSON（写入前 normalizeAgentConfig 归一）
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE INDEX idx_agent_templates_name ON agent_templates(name);
+```
+
+全局表（不挂 agent）：一行 = 一份配置快照（工具 / MCP / 插件 / Skill / Prompt / Server 工具 / 能力授权），**不含 `systemPrompt`、agent 名、模型、workspacePath**。填充是显式覆盖，语义与单层清单一致。`MIGRATIONS` 追加 `agent_templates_v1`；存量库靠 `CREATE TABLE IF NOT EXISTS` 自动建表。
 
 ## 路径规范化
 

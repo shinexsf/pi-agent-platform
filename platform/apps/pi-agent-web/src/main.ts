@@ -35,6 +35,7 @@ import SystemLogs from './views/config/SystemLogs.vue';
 import ProviderEditorView from './views/config/ProviderEditorView.vue';
 import ResourceEditorView from './views/config/ResourceEditorView.vue';
 import AgentEditorView from './views/agents/AgentEditorView.vue';
+import TemplatesView from './views/templates/TemplatesView.vue';
 
 // Step 1: base routes（一级导航由 `components/layout/nav-tree.ts` 从 meta 读取）
 const baseRoutes = [
@@ -138,6 +139,12 @@ const baseRoutes = [
         meta: { crumbTitleFromParam: 'name' },
       },
       { path: 'extensions', name: 'config-extensions', component: ExtensionsConfig },
+      {
+        path: 'templates',
+        name: 'config-templates',
+        component: TemplatesView,
+        meta: { crumbTitle: 'Agent 模板' },
+      },
       { path: 'logs', name: 'config-logs', component: SystemLogs },
     ],
   },

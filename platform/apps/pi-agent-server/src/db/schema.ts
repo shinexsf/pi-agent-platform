@@ -72,3 +72,21 @@ export const attachments = sqliteTable(
     sessionIdx: index('idx_attachments_session').on(t.sessionId),
   }),
 );
+
+/** Saved agent configuration templates (snapshot of the seven AgentConfig fields).
+ *  Global (not per-agent); applying one overwrites an agent/session form's fields. */
+export const agentTemplates = sqliteTable(
+  'agent_templates',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    /** AgentConfig JSON (normalized on write by normalizeAgentConfig). */
+    config: text('config').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    nameIdx: index('idx_agent_templates_name').on(t.name),
+  }),
+);

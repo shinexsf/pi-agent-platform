@@ -16,6 +16,7 @@ export const MIGRATIONS = [
   'agents_v2',  // config consolidation: removed system_prompt, append_system_prompt, tools
   'sessions_v2',  // config consolidation: removed system_prompt, append_system_prompt, tools
   'attachments_v1',
+  'agent_templates_v1',  // saved configuration templates (global)
 ] as const;
 
 export type DB = ReturnType<typeof drizzle<typeof schema>>;
@@ -71,6 +72,17 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       PRIMARY KEY (session_id, sha)
     );
     CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(session_id);
+
+    -- Saved configuration templates (global; snapshot of the seven AgentConfig fields).
+    CREATE TABLE IF NOT EXISTS agent_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      config TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_templates_name ON agent_templates(name);
   `);
 
   const db = drizzle(sqlite, { schema });

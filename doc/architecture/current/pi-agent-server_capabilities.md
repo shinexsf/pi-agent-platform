@@ -54,12 +54,16 @@ flowchart TD
 
 | 字段（`AgentConfig`） | 管什么 | 生效层 |
 |---|---|---|
-| `builtinTools` | 工具启用清单，**清单里只放工具名**：① pi 内置工具（`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `powershell`）；② pi 内置**扩展**工具（`codemode` / `tool_search`）——名字在清单里时 worker 装载 `builtin:<ext>` 并激活对应工具。未配置 = 全局默认（`~/.pi/server/config.json` 的 `defaultBuiltinTools`，再兜底平台默认 10 项）。**`mcp` 不是工具，不在本清单**（历史遗留值会被忽略） | worker：`additionalExtensionPaths` + `extensionFactories` 注入 + `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
-| `mcp` | MCP 能力开关 `{ enabled?: boolean }`：`true` = worker 装载 `builtin:mcp` + 补齐 `codemode` / `tool_search` 依赖。未配置 = 全局默认（`defaultMcp`，平台默认关闭） | worker：同上的两步注入；激活不过白名单（MCP 工具按 per-server `exposure` 由 pi 决定） |
-| `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer`），**未配置 = `['sendFileToUser']`（callServer 默认关）**，[]=全关 | worker customTools 注入 = prompt 可见性 |
-| `capabilities` | `callServer` 方法级授权：**未配置 = opt-in 无任何方法权限**，[]=全禁，数组=精确白名单 | master 控制面 dispatch 强制校验 |
+| `builtinTools` | 工具启用清单，**清单里只放工具名**：① pi 内置工具（`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `powershell`）；② pi 内置**扩展**工具（`codemode` / `tool_search`）——名字在清单里时 worker 装载 `builtin:<ext>` 并激活对应工具。**缺失 / null = 空=全不启用**。**`mcp` 不是工具，不在本清单**（历史遗留值会被忽略） | worker：`additionalExtensionPaths` + `extensionFactories` 注入 + `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
+| `mcp` | MCP 能力开关 `{ enabled?: boolean }`：`true` = worker 装载 `builtin:mcp` + 补齐 `codemode` / `tool_search` 依赖。**缺失 = `{enabled:false}`** | worker：同上的两步注入；激活不过白名单（MCP 工具按 per-server `exposure` 由 pi 决定） |
+| `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer`），**缺失 = `[]` = 全不给**（平台基础配置模板勾 `sendFileToUser`，callServer 永不预置） | worker customTools 注入 = prompt 可见性 |
+| `capabilities` | `callServer` 方法级授权：**缺失（null/undefined）= opt-in 无任何方法权限**，[]=全禁，数组=精确白名单（session 行缺 key 时回落 agent 行的既有快照语义不变） | master 控制面 dispatch 强制校验 |
 
-四字段都在 `AgentConfig` JSON 列（agents / sessions 共用），加字段零迁移。全局 `~/.pi/server/config.json` **只含默认开关**（`defaultServerBuiltinTools` / `defaultMcp` 等 default* 字段），**不存任何 capabilities 策略**。
+四字段都在 `AgentConfig` JSON 列（agents / sessions 共用），加字段零迁移。
+
+**单层显式清单（无继承层）**：所有配置字段都"缺失即空"，全局 `~/.pi/server/config.json` **不再承载任何 `default*` 资源默认值**（已删除）——一个 agent 的生效清单完全由它自己的行决定。归一在写入与 spawn 两处走同一个 `normalizeAgentConfig()`（`services/session.ts` + `routes/agents.ts` + `routes/sessions.ts`，规则在 `packages/shared-types`）。存量行由前端打开时按同一份规则归一后显示；**不存在迁移代码**。
+
+列表里的值在当前环境不存在（工具 / 插件 / Skill / Prompt / capability / 模型）时：不阻断保存，但读写响应带 `issues[]`（`findConfigIssues`），三处 UI 渲染黄标 + 原因 +「清理无效项」。旧的全选语义 = **展开成当时的显式清单**（不在存储里引入 `*` 特例）。
 
 ### `builtinTools` 清单与内置扩展装载
 
@@ -80,7 +84,7 @@ MCP 单独成开关（`AgentConfig.mcp.enabled`，三处 UI 渲染为「MCP 服�
 - **关闭不清除**：`mcp.enabled` 关掉只撤 MCP 扩展，`codemode` / `tool_search` 的用户勾选原样保留。
 - **工具可见性交给 pi**：per-server `exposure`（`direct` / `model-only` / `codemode`(默认) / `deferred` / `hidden`）决定模型怎么拿到工具；`codemode` / `deferred` 形态要 `tool_search` 或 codemode 沙箱才可达，平台不接管选择。
 - **不在白名单里过滤**：MCP 工具的 `sourceInfo.source` 也是 `builtin`（扩展路径 `builtin:mcp`），所以 `setActiveToolsByName` 的白名单过滤**必须显式跳过 MCP 工具**（`isMcpToolName`），否则 `exposure: 'direct'` 的 server 会被静默停用。
-- **默认关闭**：`DEFAULT_MCP_ENABLED = false`（`settings-reader.ts`），三处 UI 默认不勾 → 存量项目零影响。
+- **默认关闭**：`mcp` 缺失或 `enabled !== true` 即不装载（无全局默认层），三处 UI 默认不勾 → 存量项目零影响。
 
 要点：
 
@@ -128,9 +132,10 @@ MCP 单独成开关（`AgentConfig.mcp.enabled`，三处 UI 渲染为「MCP 服�
 
 ## WebUI（三处）
 
-1. **Agent 编辑**：Resources 区域内 `Server Builtin Tools` 组（三态：默认/勾选/清空）；Resources **外**独立 `Capabilities` 区（随 callServer 启用联动显隐，module 分组勾选 + 全选/清空，未配置显示"未授权"）。
-2. **Session 编辑**：同款两块；capabilities 为 session 快照级——缺 key 的存量会话展示并继承 agent 当前值，**保存即固化**（不回写 agent），提示下次 spawn 生效。
-3. **配置 → 默认设置**：`defaultServerBuiltinTools` 勾选（未配置时 seed 内置默认，如实反映生效值）。
+1. **Agent 编辑**：Resources 区内 6 个分组（Builtin tools / MCP / Server Builtin Tools / Extensions / Skills / Prompts），每项带「全选 / 清空」，无效项「清理无效项」；Resources **外**独立 `Capabilities` 区（随 callServer 启用联动显隐，module 分组勾选 + 全选/清空，未配置显示“未授权”）。
+2. **Session 编辑**：同款分组，打开即显示**生效值**（agent 归一值 + session 覆盖）；capabilities 为 session 快照级——缺 key 的存量会话展示 agent 当前值，**保存即固化**（不回写 agent），提示下次 spawn 生效。
+3. **配置 → 默认设置**：只剩三项——默认模型（`provider/model`，保存拆分写 pi settings 的 `defaultProvider` + `defaultModel`）、默认思考等级、启用的模型。**不再有任何资源默认值**。
+4. 三处共用 `composables/useConfigIssues.ts` 的黄标/清理逻辑。
 
 ## 注入到 prompt 的文本（两半）
 
@@ -143,7 +148,7 @@ MCP 单独成开关（`AgentConfig.mcp.enabled`，三处 UI 渲染为「MCP 服�
 |---|---|
 | **master 控制面** | 注册、分发、授权（唯一强制点）、审计、能力索引下发 |
 | **worker** | 只按 `serverBuiltinTools` 注入工具、把索引拼进 description、转发调用——**不做任何授权判断** |
-| **AgentConfig（session 快照）** | 工具开关与方法授权的唯一配置来源；全局 config.json 只兜工具默认 |
+| **AgentConfig（session 快照）** | 工具开关与方法授权的唯一配置来源（单层，无全局资源默认）；全局 config.json 只存通用设置 |
 
 ## 相关文档
 

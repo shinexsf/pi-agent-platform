@@ -79,6 +79,12 @@ withDefaults(
     <template v-else-if="name === 'tools'">
       <path d="M14.5 5.5a4 4 0 0 0-5 5L4 16l4 4 5.5-5.5a4 4 0 0 0 5-5l-2.6 2.6-4-4z" />
     </template>
+    <template v-else-if="name === 'templates'">
+      <rect x="3.5" y="3.5" width="8" height="8" rx="1.5" />
+      <rect x="12.5" y="3.5" width="8" height="8" rx="1.5" />
+      <rect x="3.5" y="12.5" width="8" height="8" rx="1.5" />
+      <path d="M16.5 13v7M13 16.5h7" />
+    </template>
     <template v-else-if="name === 'refresh'">
       <path d="M20 7v5h-5M4 17v-5h5" />
       <path d="M6.1 8a7 7 0 0 1 11.7-1L20 12M4 12l2.2 5a7 7 0 0 0 11.7-1" />

@@ -1,17 +1,18 @@
 <script setup lang="ts">
 /**
- * DefaultSettings — 默认设置管理
+ * DefaultSettings — 默认设置（change: explicit-agent-config）
  *
- * 功能：
- * - defaultProvider 下拉选择
- * - defaultModel 下拉选择（联动 provider）
- * - defaultThinkingLevel 选择（根据模型动态显示可用等级）
- * - enabledModels 列表管理
- * - defaultExtensions / defaultSkills / defaultPrompts / defaultBuiltinTools 列表管理
+ * 只保留"默认模型"这一维度，写进 pi 自己的 `~/.pi/agent/settings.json`：
+ * - defaultProvider + defaultModel —— pi TUI 新会话预选 / 模型不可用时的回落目标
+ * - defaultThinkingLevel —— 新会话默认思考等级
+ * - enabledModels —— 模型选择器里可选的模型集合
+ *
+ * agent/session 的资源清单（插件 / Skill / Prompt / 工具 / MCP / 授权）是单层显式配置，
+ * 本页不再提供"全局默认"，避免出现"继承层"。
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { toast } from '../../composables/useFeedback';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_NAMES, BUILTIN_TOOL_DEFAULT_NAMES, MCP_SWITCH_HINT, withMcpDependencies } from '../../constants/builtin-tools';
+import InfoTip from '../../components/ui/InfoTip.vue';
 
 // All possible thinking levels from pi SDK
 const ALL_THINKING_LEVELS = [
@@ -38,180 +39,108 @@ interface Settings {
   defaultModel?: string;
   defaultThinkingLevel?: string;
   enabledModels?: string[];
-  defaultExtensions?: string[];
-  defaultSkills?: string[];
-  defaultPrompts?: string[];
-  defaultBuiltinTools?: string[];
-  defaultServerBuiltinTools?: string[];
-  defaultMcp?: { enabled?: boolean };
-  [key: string]: unknown;
-}
-
-interface ResourceInfo {
-  name: string;
   [key: string]: unknown;
 }
 
 const settings = ref<Settings>({});
 const allModels = ref<ModelInfo[]>([]);
-const allExtensions = ref<ResourceInfo[]>([]);
-const allSkills = ref<ResourceInfo[]>([]);
-const allPrompts = ref<ResourceInfo[]>([]);
 const loading = ref(true);
 const saving = ref(false);
 
-// Builtin tools list — shared with agent editor / session detail (single source of truth).
-// Includes pi builtin EXTENSION tools (codemode / tool_search): naming one in the list loads
-// `builtin:<ext>` in the worker. MCP is a separate capability switch below (`defaultMcp`).
+/** 默认模型的单一控件值：`provider/model`（空串 = 未设置）。 */
+const defaultModelKey = ref('');
 
-// 按 provider 分组的模型列表
-const modelsByProvider = computed(() => {
-  const grouped: Record<string, ModelInfo[]> = {};
-  for (const model of allModels.value) {
-    const provider = model.provider;
-    if (!provider) continue;
-    if (!grouped[provider]) {
-      grouped[provider] = [];
-    }
-    grouped[provider].push(model);
+const modelKeys = computed(() => allModels.value.map((m) => `${m.provider}/${m.modelId}`));
+
+const modelLabelByKey = computed(() => {
+  const map: Record<string, string> = {};
+  for (const m of allModels.value) {
+    map[`${m.provider}/${m.modelId}`] = `${m.displayName || m.modelId} (${m.provider})`;
   }
-  return grouped;
+  return map;
 });
 
-// 当前选中 provider 的模型列表
-const currentProviderModels = computed(() => {
-  const provider = settings.value.defaultProvider;
-  if (!provider) return [];
-  return modelsByProvider.value[provider] ?? [];
+/** 当前选中模型的可用思考等级 */
+const availableThinkingLevels = computed(() => {
+  const [provider, ...rest] = defaultModelKey.value.split('/');
+  const modelId = rest.join('/');
+  const model = allModels.value.find((m) => m.provider === provider && m.modelId === modelId);
+  if (!model?.thinkingLevelMap) {
+    return [
+      { value: 'off', label: '关闭' },
+      { value: 'low', label: '低' },
+      { value: 'medium', label: '中' },
+      { value: 'high', label: '高' },
+    ];
+  }
+  return ALL_THINKING_LEVELS.filter((l) => model.thinkingLevelMap![l.value] !== null);
 });
 
-// 所有可用模型（用于 enabledModels 管理）
-const allAvailableModels = computed(() => {
-  return allModels.value.map((m) => ({
+const allAvailableModels = computed(() =>
+  allModels.value.map((m) => ({
     ...m,
     enabled: settings.value.enabledModels?.includes(`${m.provider}/${m.modelId}`) ?? false,
-  }));
-});
-
-// 当前选中模型的可用思考等级
-const availableThinkingLevels = computed(() => {
-  if (!settings.value.defaultProvider || !settings.value.defaultModel) {
-    // 没有选中模型，显示默认选项
-    return [
-      { value: 'off', label: '关闭' },
-      { value: 'low', label: '低' },
-      { value: 'medium', label: '中' },
-      { value: 'high', label: '高' },
-    ];
-  }
-  
-  // 找到当前选中的模型
-  const model = allModels.value.find(
-    m => m.provider === settings.value.defaultProvider && m.modelId === settings.value.defaultModel
-  );
-  
-  if (!model?.thinkingLevelMap) {
-    // 模型没有 thinkingLevelMap，显示默认选项
-    return [
-      { value: 'off', label: '关闭' },
-      { value: 'low', label: '低' },
-      { value: 'medium', label: '中' },
-      { value: 'high', label: '高' },
-    ];
-  }
-  
-  // 根据 thinkingLevelMap 过滤可用等级
-  return ALL_THINKING_LEVELS.filter(l => model.thinkingLevelMap![l.value] !== null);
-});
+  })),
+);
 
 onMounted(async () => {
   await loadData();
 });
 
-// Watch for provider changes to validate model selection
-watch(() => settings.value.defaultProvider, () => {
-  if (!loading.value && settings.value.defaultProvider && settings.value.defaultModel) {
-    const exists = currentProviderModels.value.some(
-      (m) => m.modelId === settings.value.defaultModel
-    );
-    if (!exists) {
-      settings.value.defaultModel = undefined;
-    }
-  }
-});
-
 async function loadData() {
   loading.value = true;
   try {
-    const [settingsRes, serverRes, modelsRes, extensionsRes, skillsRes, promptsRes] = await Promise.all([
+    const [settingsRes, modelsRes] = await Promise.all([
       fetch('/api/config/settings'),
-      fetch('/api/config/server'),
       fetch('/api/models'),
-      fetch('/api/config/extensions/detail'),
-      fetch('/api/config/skills'),
-      fetch('/api/config/prompts'),
     ]);
-    const sdkSettings = await settingsRes.json();
-    const serverConfig = await serverRes.json();
-    // Merge: SDK settings for model config, server config for resource defaults
+    const sdkSettings = (await settingsRes.json()) as Settings;
     settings.value = {
-      ...sdkSettings,
-      defaultExtensions: serverConfig.defaultExtensions,
-      defaultSkills: serverConfig.defaultSkills,
-      defaultPrompts: serverConfig.defaultPrompts,
-      defaultBuiltinTools: serverConfig.defaultBuiltinTools,
-      defaultMcp: serverConfig.defaultMcp ?? { enabled: false },
-      // 未配置时 seed 内置默认（仅 sendFileToUser）——让勾选态如实反映生效值
-      defaultServerBuiltinTools: serverConfig.defaultServerBuiltinTools ?? ['sendFileToUser'],
+      defaultProvider: sdkSettings.defaultProvider,
+      defaultModel: sdkSettings.defaultModel,
+      defaultThinkingLevel: sdkSettings.defaultThinkingLevel,
+      enabledModels: sdkSettings.enabledModels,
     };
+    defaultModelKey.value =
+      sdkSettings.defaultProvider && sdkSettings.defaultModel
+        ? `${sdkSettings.defaultProvider}/${sdkSettings.defaultModel}`
+        : '';
     allModels.value = await modelsRes.json();
-    allExtensions.value = await extensionsRes.json();
-    allSkills.value = await skillsRes.json();
-    allPrompts.value = await promptsRes.json();
-    // Validate defaultModel after both settings and models are loaded
-    if (settings.value.defaultProvider && settings.value.defaultModel) {
-      const exists = currentProviderModels.value.some(
-        (m) => m.modelId === settings.value.defaultModel
-      );
-      if (!exists) {
-        settings.value.defaultModel = undefined;
-      }
-    }
   } catch (err) {
     console.error('Failed to load settings:', err);
+    toast('加载默认设置失败', 'error');
   } finally {
     loading.value = false;
   }
 }
 
+// 换模型后若当前思考等级不被新模型支持，清空（让 pi 用模型默认）
+watch(defaultModelKey, () => {
+  if (loading.value) return;
+  const allowed = availableThinkingLevels.value.map((l) => l.value);
+  if (settings.value.defaultThinkingLevel && !allowed.includes(settings.value.defaultThinkingLevel)) {
+    settings.value.defaultThinkingLevel = undefined;
+  }
+});
+
 async function saveSettings() {
   saving.value = true;
   try {
-    // Save SDK settings (model config)
-    await fetch('/api/config/settings', {
+    const [provider, ...rest] = defaultModelKey.value.split('/');
+    const model = rest.join('/');
+    // 未设置时写空串而不是省略键：PUT 是浅合并，省略会把旧值留下。
+    const res = await fetch('/api/config/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        defaultProvider: settings.value.defaultProvider,
-        defaultModel: settings.value.defaultModel,
+        defaultProvider: defaultModelKey.value ? provider : '',
+        defaultModel: defaultModelKey.value ? model : '',
         defaultThinkingLevel: settings.value.defaultThinkingLevel,
         enabledModels: settings.value.enabledModels,
       }),
     });
-    // Save server config (resource defaults)
-    await fetch('/api/config/server', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        defaultExtensions: settings.value.defaultExtensions,
-        defaultSkills: settings.value.defaultSkills,
-        defaultPrompts: settings.value.defaultPrompts,
-        defaultBuiltinTools: settings.value.defaultBuiltinTools,
-        defaultMcp: settings.value.defaultMcp,
-        defaultServerBuiltinTools: settings.value.defaultServerBuiltinTools,
-      }),
-    });
-    toast('保存成功！新配置将在创建新 session 时生效。', 'success');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    toast('保存成功！新会话与模型选择器会立即使用该默认值。', 'success');
   } catch (err) {
     toast('保存失败: ' + (err as Error).message, 'error');
   } finally {
@@ -220,84 +149,19 @@ async function saveSettings() {
 }
 
 function toggleModelEnabled(modelKey: string) {
-  if (!settings.value.enabledModels) {
-    settings.value.enabledModels = [];
-  }
-
+  if (!settings.value.enabledModels) settings.value.enabledModels = [];
   const index = settings.value.enabledModels.indexOf(modelKey);
-  if (index === -1) {
-    settings.value.enabledModels.push(modelKey);
-  } else {
-    settings.value.enabledModels.splice(index, 1);
-  }
+  if (index === -1) settings.value.enabledModels.push(modelKey);
+  else settings.value.enabledModels.splice(index, 1);
 }
 
 function selectAllModels() {
-  settings.value.enabledModels = allModels.value.map(
-    (m) => `${m.provider}/${m.modelId}`
-  );
+  settings.value.enabledModels = allModels.value.map((m) => `${m.provider}/${m.modelId}`);
 }
 
 function deselectAllModels() {
   settings.value.enabledModels = [];
 }
-
-// ── Resource list helpers (extensions/skills/prompts/builtinTools) ──
-
-function toggleResource(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', name: string) {
-  if (!settings.value[key]) {
-    settings.value[key] = [];
-  }
-  const arr = settings.value[key] as string[];
-  const index = arr.indexOf(name);
-  if (index === -1) {
-    arr.push(name);
-  } else {
-    arr.splice(index, 1);
-  }
-}
-
-function selectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', names: string[]) {
-  settings.value[key] = [...names];
-}
-
-function deselectAllResources(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools') {
-  settings.value[key] = [];
-}
-
-function isResourceEnabled(key: 'defaultExtensions' | 'defaultSkills' | 'defaultPrompts' | 'defaultBuiltinTools' | 'defaultServerBuiltinTools', name: string): boolean {
-  const arr = settings.value[key];
-  if (!arr) return true; // null/undefined = all enabled (default)
-  return arr.includes(name);
-}
-
-// Computed names for select all buttons
-const extensionNames = computed(() => allExtensions.value.map(e => e.name));
-const skillNames = computed(() => allSkills.value.map(s => s.name));
-const promptNames = computed(() => allPrompts.value.map(p => p.name));
-const builtinToolNames = computed(() => [...BUILTIN_TOOL_NAMES]);
-/** 全选 = 平台默认集合 */
-const builtinToolDefaultNames = computed(() => [...BUILTIN_TOOL_DEFAULT_NAMES]);
-
-/**
- * MCP is a capability, not a tool: its own switch writes `defaultMcp.enabled`.
- * Turning it on also ticks codemode + tool_search (a server's default `exposure: codemode`
- * needs them); turning it off leaves those selections alone.
- */
-const mcpEnabled = computed({
-  get: () => settings.value.defaultMcp?.enabled === true,
-  set: (next: boolean) => {
-    settings.value.defaultMcp = { ...(settings.value.defaultMcp ?? {}), enabled: next };
-    if (next) settings.value.defaultBuiltinTools = withMcpDependencies(settings.value.defaultBuiltinTools ?? []);
-  },
-});
-
-// Server 侧自定义工具全局默认（AgentConfig.serverBuiltinTools 的 fallback）
-const SERVER_BUILTIN_TOOLS = [
-  { value: 'sendFileToUser', label: 'sendFileToUser (发送文件给用户)' },
-  { value: 'callServer', label: 'callServer (调用 server 管理能力)' },
-];
-const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.value));
 </script>
 
 <template>
@@ -307,32 +171,31 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
     <div v-if="loading" class="loading">加载中...</div>
 
     <div v-else class="settings-form">
-      <!-- Default Provider -->
+      <!-- Default Model (single control: provider/model) -->
       <div class="form-group">
-        <label>默认 Provider</label>
-        <select v-model="settings.defaultProvider" class="form-select">
-          <option value="">-- 选择 Provider --</option>
-          <option v-for="provider in Object.keys(modelsByProvider)" :key="provider" :value="provider">
-            {{ provider }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Default Model -->
-      <div class="form-group">
-        <label>默认模型</label>
-        <select v-model="settings.defaultModel" class="form-select" :disabled="!settings.defaultProvider">
-          <option value="">-- 选择模型 --</option>
-          <option v-for="model in currentProviderModels" :key="model.modelId" :value="model.modelId">
-            {{ model.displayName || model.modelId }}
+        <label class="field-label-line">
+          默认模型
+          <InfoTip
+            text="pi 新会话的预选模型；agent / session 未指定或指定的模型不存在时回落到这里。写入 ~/.pi/agent/settings.json 的 defaultProvider + defaultModel。"
+            :width="340"
+          />
+        </label>
+        <select v-model="defaultModelKey" class="form-select">
+          <option value="">-- 未设置 --</option>
+          <option v-for="key in modelKeys" :key="key" :value="key">
+            {{ modelLabelByKey[key] }}
           </option>
         </select>
       </div>
 
       <!-- Default Thinking Level -->
       <div class="form-group">
-        <label>默认 Thinking Level</label>
+        <label class="field-label-line">
+          默认思考等级
+          <InfoTip text="pi 新会话默认的思考强度（off → max）；列表随所选默认模型的可用等级变化。" :width="280" />
+        </label>
         <select v-model="settings.defaultThinkingLevel" class="form-select">
+          <option :value="undefined">-- 使用模型默认 --</option>
           <option v-for="level in availableThinkingLevels" :key="level.value" :value="level.value">
             {{ level.label }}
           </option>
@@ -342,7 +205,10 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
       <!-- Enabled Models -->
       <div class="form-group">
         <div class="models-header">
-          <label>启用的模型</label>
+          <label class="field-label-line">
+            启用的模型
+            <InfoTip text="只影响本平台 UI 可选项与 /api/models 输出；未勾选的模型在 agent / session 里选不到。" :width="290" />
+          </label>
           <div class="models-actions">
             <button class="btn btn-sm btn-secondary" @click="selectAllModels">全选</button>
             <button class="btn btn-sm btn-secondary" @click="deselectAllModels">全不选</button>
@@ -364,134 +230,6 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
         </div>
       </div>
 
-      <!-- Default Enabled Extensions -->
-      <div class="form-group">
-        <div class="models-header">
-          <label>默认启用的插件</label>
-          <div class="models-actions">
-            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultExtensions', extensionNames)">全选</button>
-            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultExtensions')">全不选</button>
-          </div>
-        </div>
-        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
-        <div class="models-checkbox-list">
-          <label v-for="ext in allExtensions" :key="ext.name" class="checkbox-item">
-            <input
-              type="checkbox"
-              :checked="isResourceEnabled('defaultExtensions', ext.name)"
-              @change="toggleResource('defaultExtensions', ext.name)"
-            />
-            <span class="model-label">{{ ext.name }}</span>
-          </label>
-          <div v-if="allExtensions.length === 0" class="empty-hint">
-            暂无已安装的插件
-          </div>
-        </div>
-      </div>
-
-      <!-- Default Enabled Skills -->
-      <div class="form-group">
-        <div class="models-header">
-          <label>默认启用的 Skill</label>
-          <div class="models-actions">
-            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultSkills', skillNames)">全选</button>
-            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultSkills')">全不选</button>
-          </div>
-        </div>
-        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
-        <div class="models-checkbox-list">
-          <label v-for="skill in allSkills" :key="skill.name" class="checkbox-item">
-            <input
-              type="checkbox"
-              :checked="isResourceEnabled('defaultSkills', skill.name)"
-              @change="toggleResource('defaultSkills', skill.name)"
-            />
-            <span class="model-label">{{ skill.name }}</span>
-          </label>
-          <div v-if="allSkills.length === 0" class="empty-hint">
-            暂无可用的 Skill
-          </div>
-        </div>
-      </div>
-
-      <!-- Default Enabled Prompts -->
-      <div class="form-group">
-        <div class="models-header">
-          <label>默认启用的 Prompt</label>
-          <div class="models-actions">
-            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultPrompts', promptNames)">全选</button>
-            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultPrompts')">全不选</button>
-          </div>
-        </div>
-        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的</div>
-        <div class="models-checkbox-list">
-          <label v-for="prompt in allPrompts" :key="prompt.name" class="checkbox-item">
-            <input
-              type="checkbox"
-              :checked="isResourceEnabled('defaultPrompts', prompt.name)"
-              @change="toggleResource('defaultPrompts', prompt.name)"
-            />
-            <span class="model-label">{{ prompt.name }}</span>
-          </label>
-          <div v-if="allPrompts.length === 0" class="empty-hint">
-            暂无可用的 Prompt
-          </div>
-        </div>
-      </div>
-
-      <!-- Default Enabled Builtin Tools -->
-      <div class="form-group">
-        <div class="models-header">
-          <label>默认启用的内置工具</label>
-          <div class="models-actions">
-            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultBuiltinTools', builtinToolDefaultNames)">全选</button>
-            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultBuiltinTools')">全不选</button>
-          </div>
-        </div>
-        <div class="resource-hint">留空 = 全部启用；选中 = 仅启用选中的。codemode 与 tool_search 可单独启用：codemode 把多次工具调用编排成一段脚本（中间结果不进上下文），tool_search 用于检索未声明的工具（codemode / deferred 形态）。MCP 不在此列，见下方独立开关</div>
-        <div class="models-checkbox-list">
-          <label v-for="tool in BUILTIN_TOOLS" :key="tool.value" class="checkbox-item checkbox-item-stacked">
-            <input
-              type="checkbox"
-              :checked="isResourceEnabled('defaultBuiltinTools', tool.value)"
-              @change="toggleResource('defaultBuiltinTools', tool.value)"
-            />
-            <span class="model-label">{{ tool.label }}</span>
-            <span v-if="tool.hint" class="tool-option-hint">{{ tool.hint }}</span>
-          </label>
-        </div>
-
-        <!-- MCP capability switch — not a tool, so it lives outside the list -->
-        <label class="checkbox-item mcp-switch">
-          <input type="checkbox" v-model="mcpEnabled" />
-          <span class="model-label">MCP 服务器工具</span>
-          <span class="tool-option-hint">{{ MCP_SWITCH_HINT }}</span>
-        </label>
-      </div>
-
-      <!-- Default Enabled Server Builtin Tools -->
-      <div class="form-group">
-        <div class="models-header">
-          <label>默认启用的 Server 工具</label>
-          <div class="models-actions">
-            <button class="btn btn-sm btn-secondary" @click="selectAllResources('defaultServerBuiltinTools', serverBuiltinToolNames)">全选</button>
-            <button class="btn btn-sm btn-secondary" @click="deselectAllResources('defaultServerBuiltinTools')">全不选</button>
-          </div>
-        </div>
-        <div class="resource-hint">agent 未单独配置 serverBuiltinTools 时生效；内置默认 = 仅 sendFileToUser。callServer 开启后仍需在 agent 的 capabilities 中授权可用方法</div>
-        <div class="models-checkbox-list">
-          <label v-for="tool in SERVER_BUILTIN_TOOLS" :key="tool.value" class="checkbox-item">
-            <input
-              type="checkbox"
-              :checked="isResourceEnabled('defaultServerBuiltinTools', tool.value)"
-              @change="toggleResource('defaultServerBuiltinTools', tool.value)"
-            />
-            <span class="model-label">{{ tool.label }}</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Save Button -->
       <div class="form-actions">
         <button class="btn btn-primary" @click="saveSettings" :disabled="saving">
           {{ saving ? '保存中...' : '保存设置' }}
@@ -539,6 +277,13 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
   color: var(--text);
 }
 
+.field-label-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+
 .form-select {
   width: 100%;
   padding: 10px 12px;
@@ -556,7 +301,6 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
 
 .form-select:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .models-header {
@@ -568,12 +312,6 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
 .models-actions {
   display: flex;
   gap: 8px;
-}
-
-.resource-hint {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
 }
 
 .models-checkbox-list {
@@ -599,31 +337,6 @@ const serverBuiltinToolNames = computed(() => SERVER_BUILTIN_TOOLS.map(t => t.va
 
 .checkbox-item:hover {
   background: var(--surface-hover);
-}
-
-/* Tools with a hint (pi builtin extension tools: codemode / tool_search) */
-.mcp-switch {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-color, #e0e0e0);
-  flex-wrap: wrap;
-}
-
-.checkbox-item-stacked {
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-.checkbox-item-stacked input[type="checkbox"] {
-  margin-top: 2px;
-}
-
-.tool-option-hint {
-  flex-basis: 100%;
-  padding-left: 24px;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--text-secondary);
 }
 
 .checkbox-item input[type="checkbox"] {

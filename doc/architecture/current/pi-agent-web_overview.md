@@ -98,18 +98,27 @@ src/views/
   /config/prompts/:name?             PromptsConfig
   /config/prompts/new                ResourceEditorView
   /config/extensions                 ExtensionsConfig
+  /config/templates                  TemplatesView（Agent模板）
 ```
 
 面包屑由路由 `meta.crumbTitle` / `meta.crumbTitleFromParam` 补充最后一段（`/config/skills/my-skill` → 配置 / Skills / my-skill）。
 
 ### 内置工具清单与 MCP 开关（三处共用一份定义）
 
-`src/constants/builtin-tools.ts` 是唯一事实源，被三处复用：`views/config/DefaultSettings.vue`（全局默认）、`views/agents/AgentEditorView.vue`（agent 级，`form.config.builtinTools === null` 表示继承）、`views/sessions/SessionDetailView.vue`（会话覆盖）。
+`src/constants/builtin-tools.ts` 是唯一事实源，被两处复用：`views/agents/AgentEditorView.vue`（agent 级）与 `views/sessions/SessionDetailView.vue`（会话覆盖）；`BASE_AGENT_CONFIG` 是新建 agent 表单的起点。
 
+- **单层显式清单**：三处编辑面都没有「使用默认 / 跟随全局」复选框——打开就是生效值，不勾 = 不给。默认设置页只剩三项（默认模型 / 默认思考等级 / 启用的模型），**不再有资源默认值**。
 - **清单 = 8 个纯工具 + `codemode` + `tool_search`**（共 10 项，各自带 hint 说明副作用）。`mcp` **不在清单**。
-- **MCP 是独立开关**：渲染成单独的 `label.mcp-switch`「MCP 服务器工具」，写 `config.mcp = { enabled }`；`false` 时保留 `{enabled:false}`（显式关闭）、`null` 表示跟随全局。
+- **MCP 是独立开关**：渲染成单独的 `label.mcp-switch`「MCP 服务器工具」，写 `config.mcp = { enabled }`；缺失按 `{enabled:false}` 归一。
 - **依赖联动**：打开 MCP 时 `withMcpDependencies()` 把 `codemode` / `tool_search` 补进 `builtinTools`（`MCP_DEPENDENT_TOOLS`，与 worker 侧同名规则）；关掉 MCP **不**回滚这两项。
-- **文案**：`MCP_SWITCH_HINT` 说明“会话启动即连接 mcp.json 全部 server / 开启后自动勾选 codemode 与 tool_search”。
+- **每个资源分组带「全选 / 清空」**；全选 = **展开成当前所有项的显式清单**（不存 `*` 特例），页面文案提示"后续新增资源不会自动加入"。
+- **无效项标注**：`composables/useConfigIssues.ts` 基于 `GET /api/config/{extensions,skills,prompts,capabilities}` 与模型列表计算，列表里的失效值渲染黄标 + 原因 tooltip +「清理无效项」；保存响应里的 `issues[]` 同步汇总到顶部横幅；`capabilities === null` 不标注，模型不可用只标不自动替换。
+
+**Agent模板（`agent-templates`）**：`/config/templates`（配置模块二级菜单「Agent模板」，`views/config/sections.ts` 的 `CONFIG_SECTIONS` 增补）管理页 `views/templates/TemplatesView.vue`——**卡片网格**展示（名称 / 描述 / 分项标签 `templateFacets()` / 更新时间 / 编辑·删除），支持**页内新增模板**（从零勾选七项）与**编辑**（名称 + 描述 + `TemplateResourceForm` 七分组勾选，编辑卡片占满整行）；agent / session 编辑页 Resources 区的「从模板填充 / 存为模板」工具条共用 `composables/useTemplates.ts`。模板 = 七字段快照（`systemPrompt` 不入模板）；填充先 `confirmDialog` 确认，只改表单本地状态（不保存退出即恢复，无来源标记、无撤销按钮），填充时 `systemPrompt` 清空、MCP 依赖自动补齐。
+
+**页面说明统一走 `InfoTip`**（`components/ui/InfoTip.vue`）：标题 / 分组标题旁一个 `i` 图标，点击弹气泡（Esc 或点空白关闭），不再在页面里堆内联长文案。配置类页面（agent 编辑、session 编辑、默认设置、模板编辑器、Agent模板页）均已迁移。
+
+**资源区默认铺开**：agent / session 编辑页的 Resources（含 Capabilities）不再折叠，进页面即可见全部清单（原先的 `resourcesExpanded` 开关已移除）。
 
 会话信息面板（`components/chat/SessionInfoModal.vue`，IDE 端 `apps/pi-agent-ide/src/components/SessionInfoModal.vue` 同构）按 `resources` 分区渲染：SKILLS / EXTENSIONS / TOOLS / **MCP**。MCP 区按 server 分组（`mcpServers`，工具多时默认收起，标题显示 `<server> N 工具（M 未加载）`）；TOOLS 区不出现 `mcp__*`，badge 语义：`builtin`（pi 核心工具与 codemode/tool_search）、扩展名（`mcp` / `npm:xxx`）、`platform`（worker 注册的 `sendFileToUser` 等）。`deferred` / `hidden` 工具默认折叠，可展开。
 
