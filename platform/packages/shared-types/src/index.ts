@@ -35,17 +35,16 @@ export interface AgentConfig {
   // Prompts whitelist. missing/null = empty (no prompts).
   prompts?: string[];
 
-  // MCP capability switch (change: mcp-as-first-class-capability).
-  // Owns the built-in `mcp` extension: loading it connects every server in `mcp.json` on
-  // session start. Enabling it also loads+activates codemode & tool_search, because a server's
-  // default `exposure: "codemode"` leaves its tools unreachable otherwise.
-  // missing/null = off ({"enabled": false}). Object (not a bare boolean) so per-agent server
-  // lists / default exposure can be added later.
-  mcp?: { enabled?: boolean };
-
-  // Per-server MCP overrides (future MCP management). Not read by the worker yet — the
-  // servers actually connected come from pi's own mcp.json (global + project).
-  mcpServers?: Record<string, unknown>;
+  // MCP capability (change: platform-mcp-catalog).
+  // - `enabled`      — the switch. Loads the built-in `mcp` extension and drives the
+  //                    platform catalog registration; also brings codemode + tool_search
+  //                    along, because a server's default `exposure: "codemode"` leaves its
+  //                    tools unreachable otherwise.
+  // - `servers`      — names selected from the platform catalog (`~/.pi/server/mcp.json`).
+  //                    Only meaningful while `enabled` is true, but it is KEPT when the switch
+  //                    is turned off (it is a selection, not an authorization).
+  // missing/null = off with no selection. Server definitions never live in the DB — only names.
+  mcp?: { enabled?: boolean; servers?: string[] };
 
   // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
   // that talk to the master via reverse IPC). Semantics: missing/null = empty (none).
@@ -72,15 +71,19 @@ export interface ResolvedAgentConfig extends AgentConfig {
   skills: string[];
   prompts: string[];
   builtinTools: string[];
-  mcp: { enabled: boolean };
+  mcp: { enabled: boolean; servers: string[] };
   serverBuiltinTools: string[];
   capabilities: string[] | null;
 }
 
 /**
  * Normalize a stored config into {@link ResolvedAgentConfig}: missing/null resource
- * fields become empty; `mcp` becomes `{ enabled: false }`; `capabilities` keeps its
- * tri-state meaning (null = global default policy).
+ * fields become empty; `mcp` becomes `{ enabled: false, servers: [] }`; `capabilities`
+ * keeps its tri-state meaning (null = global default policy).
+ *
+ * `mcp.enabled === false` MUST keep `servers`: turning the switch off suspends the selection
+ * instead of discarding it (the opposite of `capabilities`, where removing `callServer`
+ * forces `[]` because that IS an authorization).
  *
  * Invariant: `capabilities` is the method-level authorization for `callServer`, so when
  * `callServer` is not in `serverBuiltinTools` the authorization is meaningless and is
@@ -100,7 +103,7 @@ export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgent
     skills: c.skills ?? [],
     prompts: c.prompts ?? [],
     builtinTools: c.builtinTools ?? [],
-    mcp: { enabled: c.mcp?.enabled === true },
+    mcp: { enabled: c.mcp?.enabled === true, servers: c.mcp?.servers ?? [] },
     serverBuiltinTools,
     capabilities: serverBuiltinTools.includes('callServer') ? (c.capabilities ?? null) : [],
   };
@@ -129,7 +132,15 @@ export const PLATFORM_SERVER_TOOLS = ['sendFileToUser', 'callServer'] as const;
 /** A stored config value that no longer resolves (renamed tool, uninstalled extension, …). */
 export interface ConfigIssue {
   /** Which config field the value came from. */
-  field: 'extensions' | 'skills' | 'prompts' | 'builtinTools' | 'serverBuiltinTools' | 'capabilities' | 'model';
+  field:
+    | 'extensions'
+    | 'skills'
+    | 'prompts'
+    | 'builtinTools'
+    | 'serverBuiltinTools'
+    | 'capabilities'
+    | 'model'
+    | 'mcp.servers';
   /** The offending value. */
   value: string;
   /** Human-readable reason (Chinese, shown directly in the web UI). */
@@ -146,6 +157,8 @@ export interface ConfigAvailability {
   models?: string[];
   tools?: string[];
   serverTools?: string[];
+  /** Server names from the platform catalog (`GET /api/config/mcp-servers`). */
+  mcpServers?: string[];
 }
 
 /**
@@ -188,6 +201,11 @@ export function findConfigIssues(
     '平台工具不存在',
   );
   check('capabilities', config?.capabilities ?? undefined, available.capabilities, '授权方法不存在');
+  // Dormant selections are not defects: a server name that vanished from the catalog only
+  // matters while MCP is switched on (change: platform-mcp-catalog).
+  if (config?.mcp?.enabled === true) {
+    check('mcp.servers', config.mcp.servers, available.mcpServers, 'MCP server 不在平台目录中');
+  }
   return issues;
 }
 
@@ -389,3 +407,102 @@ export interface CapabilityDef<Params = unknown, Result = unknown> {
  *  is contravariant — specific Params defs won't assign to CapabilityDef<unknown>). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyCapabilityDef = CapabilityDef<any, any>;
+// ---------- MCP catalog (change: platform-mcp-catalog) ----------
+
+/**
+ * Tool exposure of an MCP server (pi's `McpExposure`). `codemode-deferred` is accepted as
+ * an alias of `deferred` and normalized on parse.
+ */
+export type McpExposureValue = 'codemode' | 'deferred' | 'direct' | 'hidden';
+
+/** One server of the platform catalog (`~/.pi/server/mcp.json`). */
+export interface McpCatalogEntry {
+  name: string;
+  /** pi-shaped config, passed as-is to `pi.registerMcpServer()`. */
+  config: Record<string, unknown>;
+  exposure: McpExposureValue;
+  description?: string;
+  enabled: boolean;
+}
+
+export interface ParsedMcpCatalog {
+  servers: McpCatalogEntry[];
+  /** Per-entry problems. One broken server never hides the others. */
+  errors: string[];
+}
+
+/** Tool namespace of a server (`mcp__<name>__<tool>`), `-` mapped to `_` like pi does. */
+export function mcpServerNamespace(name: string): string {
+  return `mcp__${name.replace(/-/g, '_')}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const MCP_EXPOSURES: readonly McpExposureValue[] = ['codemode', 'deferred', 'direct', 'hidden'];
+
+/**
+ * Parse the platform MCP catalog. Format is identical to pi's `mcp.json`, so existing pi
+ * configurations can be copied over unchanged (change: platform-mcp-catalog).
+ *
+ * Deliberately lenient: a malformed entry lands in `errors` and the rest still load. Only the
+ * fields the platform itself needs are inspected (`command` / `url`, `exposure`, `enabled`,
+ * `description`); everything else is handed to pi untouched.
+ */
+export function parseMcpCatalog(raw: unknown): ParsedMcpCatalog {
+  const errors: string[] = [];
+  if (!isRecord(raw)) {
+    return { servers: [], errors: ['expected an object with an "mcpServers" object'] };
+  }
+  if (raw.mcpServers !== undefined && !isRecord(raw.mcpServers)) {
+    return { servers: [], errors: ['"mcpServers" must be an object'] };
+  }
+
+  const servers: McpCatalogEntry[] = [];
+  const namespaces = new Map<string, string>();
+  for (const [name, value] of Object.entries(raw.mcpServers ?? {})) {
+    if (!name.trim()) {
+      errors.push('server name must not be empty');
+      continue;
+    }
+    if (!isRecord(value)) {
+      errors.push(`server "${name}": expected an object`);
+      continue;
+    }
+    const hasCommand = typeof value.command === 'string' && value.command.length > 0;
+    const hasUrl = typeof value.url === 'string' && value.url.length > 0;
+    if (!hasCommand && !hasUrl) {
+      // A catalog entry must define a server; pi's "override only" shape (enabled/exposure)
+      // only makes sense in project mcp.json files, which the platform does not use.
+      errors.push(`server "${name}": needs "command" or "url"`);
+      continue;
+    }
+    const rawExposure = value.exposure ?? value.toolExposureDefault;
+    const exposure = rawExposure === undefined
+      ? 'codemode'
+      : rawExposure === 'codemode-deferred'
+        ? 'deferred'
+        : rawExposure;
+    if (typeof exposure !== 'string' || !MCP_EXPOSURES.includes(exposure as McpExposureValue)) {
+      errors.push(`server "${name}": unknown exposure ${JSON.stringify(rawExposure)}`);
+      continue;
+    }
+    // pi maps `-` to `_` in tool names, so `my-server` and `my_server` would collide.
+    const namespace = mcpServerNamespace(name);
+    const clash = namespaces.get(namespace);
+    if (clash) {
+      errors.push(`server "${name}": tool namespace collides with "${clash}" (both become ${namespace})`);
+      continue;
+    }
+    namespaces.set(namespace, name);
+    servers.push({
+      name,
+      config: value,
+      exposure: exposure as McpExposureValue,
+      description: typeof value.description === 'string' ? value.description : undefined,
+      enabled: value.enabled !== false,
+    });
+  }
+  return { servers, errors };
+}

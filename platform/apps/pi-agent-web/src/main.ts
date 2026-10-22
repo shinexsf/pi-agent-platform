@@ -28,6 +28,7 @@ import ChannelsView from './views/im/ChannelsView.vue';
 import ConfigView from './views/config/ConfigView.vue';
 import ModelsConfig from './views/config/ModelsConfig.vue';
 import DefaultSettings from './views/config/DefaultSettings.vue';
+import McpServersView from './views/config/McpServersView.vue';
 import SkillsConfig from './views/config/SkillsConfig.vue';
 import PromptsConfig from './views/config/PromptsConfig.vue';
 import ExtensionsConfig from './views/config/ExtensionsConfig.vue';
@@ -114,6 +115,12 @@ const baseRoutes = [
         meta: { crumbTitleFromParam: 'name', crumbTitle: '编辑 Provider' },
       },
       { path: 'settings', name: 'config-settings', component: DefaultSettings },
+      {
+        path: 'mcp',
+        name: 'config-mcp',
+        component: McpServersView,
+        meta: { crumbTitle: 'MCP' },
+      },
       {
         path: 'skills/new',
         name: 'config-skill-new',

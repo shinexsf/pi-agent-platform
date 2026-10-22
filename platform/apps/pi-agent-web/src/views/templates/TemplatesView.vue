@@ -44,7 +44,10 @@ const createConfig = ref<TemplateTargetConfig | null>(null);
 function emptyTarget(): TemplateTargetConfig {
   return {
     builtinTools: [...BASE_AGENT_CONFIG.builtinTools],
-    mcp: { enabled: BASE_AGENT_CONFIG.mcp.enabled === true },
+    mcp: {
+      enabled: BASE_AGENT_CONFIG.mcp.enabled === true,
+      servers: [...BASE_AGENT_CONFIG.mcp.servers],
+    },
     serverBuiltinTools: [...BASE_AGENT_CONFIG.serverBuiltinTools],
     capabilities: null,
     extensions: [...BASE_AGENT_CONFIG.extensions],
@@ -56,7 +59,10 @@ function emptyTarget(): TemplateTargetConfig {
 function toTarget(t: AgentTemplateDTO): TemplateTargetConfig {
   return {
     builtinTools: [...(t.config.builtinTools ?? [])],
-    mcp: { enabled: t.config.mcp?.enabled === true },
+    mcp: {
+      enabled: t.config.mcp?.enabled === true,
+      servers: [...(t.config.mcp?.servers ?? [])],
+    },
     serverBuiltinTools: [...(t.config.serverBuiltinTools ?? [])],
     capabilities:
       t.config.capabilities === null || t.config.capabilities === undefined

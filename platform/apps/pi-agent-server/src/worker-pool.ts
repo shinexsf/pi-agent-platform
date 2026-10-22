@@ -142,7 +142,14 @@ export class WorkerPool extends EventEmitter {
       stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
       // Worker process cwd = agent workspace (so plugins using process.cwd() resolve correctly).
       cwd: workspacePath ?? process.cwd(),
-      env: { ...process.env, PI_AGENT_DIR: config.agentDir, PI_AGENT_ATTACHMENTS_ROOT: config.attachmentsDir },
+      env: {
+        ...process.env,
+        PI_AGENT_DIR: config.agentDir,
+        PI_AGENT_ATTACHMENTS_ROOT: config.attachmentsDir,
+        // Platform MCP catalog — the worker reads the definitions from here and registers only
+        // the servers the agent selected (change: platform-mcp-catalog).
+        PI_SERVER_MCP_CONFIG: config.mcpConfigPath,
+      },
       // On Windows, spawning a child from a detached/GUI process would otherwise
       // pop up a new console window for the worker. Hide it; logs still go to
       // server.log via the inherited stdout / captured stderr pipe.

@@ -9,13 +9,14 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import InfoTip from '../ui/InfoTip.vue';
+import McpSelectionGroup from '../config/McpSelectionGroup.vue';
 import {
   BUILTIN_TOOL_NAMES,
-  MCP_SWITCH_HINT,
   SERVER_BUILTIN_TOOLS,
   withMcpDependencies,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
+import { useMcpCatalog } from '../../composables/useMcpCatalog';
 import type { TemplateTargetConfig } from '../../composables/useTemplates';
 
 interface CapabilityInfo {
@@ -54,9 +55,22 @@ watch(callServerEnabled, (on) => {
   if (!on) props.modelValue.capabilities = [];
 });
 
-function toggleMcp(next: boolean): void {
-  props.modelValue.mcp = { enabled: next };
+/** 平台 MCP 目录（server 定义只在 `~/.pi/server/mcp.json`）。 */
+const {
+  servers: mcpCatalog,
+  errors: mcpCatalogErrors,
+  conflicts: mcpConflicts,
+  loading: mcpCatalogLoading,
+  load: loadMcpCatalog,
+} = useMcpCatalog();
+
+function setMcpEnabled(next: boolean): void {
+  props.modelValue.mcp = { enabled: next, servers: [...props.modelValue.mcp.servers] };
   if (next) props.modelValue.builtinTools = withMcpDependencies(props.modelValue.builtinTools);
+}
+
+function setMcpServers(next: string[]): void {
+  props.modelValue.mcp = { enabled: props.modelValue.mcp.enabled, servers: [...next] };
 }
 
 function toggleCapability(method: string, checked: boolean): void {
@@ -86,6 +100,7 @@ function pruneField(
 }
 
 onMounted(async () => {
+  void loadMcpCatalog();
   await issues.loadAvailability();
   try {
     const res = await fetch('/api/capabilities');
@@ -139,19 +154,17 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- MCP -->
-    <div class="resource-group">
-      <div class="resource-group-header">
-        <span class="resource-group-title">MCP</span>
-        <InfoTip :text="MCP_SWITCH_HINT" :width="330" />
-        <span class="resource-group-count">{{ props.modelValue.mcp.enabled ? '已启用' : '未启用' }}</span>
-      </div>
-      <label class="checkbox-inline">
-        <input type="checkbox" :checked="props.modelValue.mcp.enabled"
-          @change="toggleMcp(($event.target as HTMLInputElement).checked)" />
-        <span>启用 MCP</span>
-      </label>
-    </div>
+    <!-- MCP：总开关 + 平台目录 server 勾选 -->
+    <McpSelectionGroup
+      :enabled="props.modelValue.mcp.enabled"
+      :servers="props.modelValue.mcp.servers"
+      :catalog="mcpCatalog"
+      :errors="mcpCatalogErrors"
+      :conflicts="mcpConflicts"
+      :loading="mcpCatalogLoading"
+      @update:enabled="setMcpEnabled"
+      @update:servers="setMcpServers"
+    />
 
     <!-- Server builtin tools -->
     <div class="resource-group">
@@ -370,7 +383,7 @@ onMounted(async () => {
   border-color: var(--accent);
 }
 
-.tag-check:hover {
+.tag-check:not(.checked):hover {
   border-color: var(--border-strong);
 }
 

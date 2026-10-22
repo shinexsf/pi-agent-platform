@@ -23,6 +23,11 @@ export interface ServerConfig {
   workerStopTimeoutMs: number;
   workspaceRoot: string;
   agentDir: string;
+  /**
+   * Platform MCP catalog `~/.pi/server/mcp.json` (change: platform-mcp-catalog).
+   * Server definitions live ONLY here — the DB stores just the names an agent selected.
+   */
+  mcpConfigPath: string;
   /** Directory for user-uploaded image attachments, organized as <root>/<sessionId>/<sha>.<ext>.
    *  Read tool images (live session) are NOT stored here — they're owned by the source filesystem path. */
   attachmentsDir: string;
@@ -49,6 +54,7 @@ function parseNodeEnv(raw: string | undefined): ServerConfig['nodeEnv'] {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const nodeEnv = parseNodeEnv(env.NODE_ENV);
+  const agentDir = env.PI_AGENT_DIR ?? defaultAgentDir();
 
   // Packaged mode (started by `pi-server` CLI): use absolute paths injected via env.
   // Dev mode: fall through to original env vars / defaults.
@@ -74,7 +80,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     workerStartupTimeoutMs: parseIntStrict('WORKER_STARTUP_TIMEOUT_MS', env.WORKER_STARTUP_TIMEOUT_MS, 5000), // default 5s — pi SDK load takes ~1s (auth + models). 200ms was wishful.
     workerStopTimeoutMs: 5_000,   // invariants: SIGTERM → 5s → SIGKILL
     workspaceRoot: env.WORKSPACE_ROOT ?? process.cwd(),
-    agentDir: env.PI_AGENT_DIR ?? defaultAgentDir(),
+    agentDir,
+    mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
     attachmentsDir,
   };
 }

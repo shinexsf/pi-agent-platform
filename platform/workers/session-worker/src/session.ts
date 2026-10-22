@@ -20,6 +20,7 @@ import {
   ModelRuntime,
   SessionManager,
   type InlineExtension,
+  type McpServerConfig,
   type NormalizedBuildSystemPromptOptions,
 } from '@earendil-works/pi-coding-agent';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
@@ -35,6 +36,7 @@ import type {
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 import { groupMcpTools, isMcpToolName, type McpServerGroup } from './mcp-tools.js';
 import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
+import { loadSelectedMcpServers } from './mcp-catalog.js';
 import { logger } from './logger.js';
 import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
 import { createServerTools, type CallMasterFn } from './tools.js';
@@ -489,12 +491,54 @@ export async function createSession(
   //     tool_search dependencies (a server's default `exposure: "codemode"` needs them).
   // Injection and activation share ONE list, so "injected but not whitelisted" cannot happen.
   // A legacy `'mcp'` entry in builtinTools is ignored — MCP is never enabled via the tool list.
+  const mcpSelection = agentConfig?.mcp?.enabled === true
+    ? loadSelectedMcpServers({
+        agentDir,
+        cwd: config.workspacePath,
+        selections: agentConfig.mcp?.servers,
+      })
+    : undefined;
+  const mcpActive = (mcpSelection?.servers.length ?? 0) > 0;
+  if (agentConfig?.mcp?.enabled === true && !mcpActive) {
+    logger.warn(
+      { catalogPath: mcpSelection?.catalogPath, errors: mcpSelection?.errors },
+      'mcp enabled but no server resolved; mcp stays off (select servers from the platform catalog)',
+    );
+  }
   const builtinInjection = await resolveBuiltinExtensionInjection({
     builtinTools: agentConfig?.builtinTools,
-    mcpEnabled: agentConfig?.mcp?.enabled === true,
+    mcpEnabled: mcpActive,
   });
+
+  // Registration of the SELECTED catalog servers. This has to happen while extensions load:
+  // pi's `mcp` extension reads `pi.getMcpServers()` on `session_start` and connects whatever is
+  // registered there. Inline (not builtin) because the code lives here, not in pi's dist.
+  const mcpCatalogExtension: InlineExtension | undefined = mcpActive
+    ? {
+        name: 'platform:mcp-catalog',
+        hidden: true,
+        factory: (pi) => {
+          const registered: string[] = [];
+          for (const server of mcpSelection?.servers ?? []) {
+            try {
+              pi.registerMcpServer(server.name, server.config as unknown as McpServerConfig);
+              registered.push(server.name);
+            } catch (err) {
+              // One broken definition must not take the session down with it.
+              logger.error({ err, server: server.name }, 'registerMcpServer failed; server skipped');
+            }
+          }
+          logger.info(
+            { registered, selected: agentConfig?.mcp?.servers, catalogPath: mcpSelection?.catalogPath },
+            'registered MCP servers from platform catalog',
+          );
+        },
+      }
+    : undefined;
+
   const extensionFactories: InlineExtension[] = [
     ...(takeoverExtension ? [takeoverExtension] : []),
+    ...(mcpCatalogExtension ? [mcpCatalogExtension] : []),
     ...(builtinInjection?.factories ?? []),
   ];
 

@@ -75,14 +75,18 @@ flowchart TD
 | `tool_search` | `tool-search` | 注入 `tool-search` 扩展：未对模型声明的工具（`codemode` / `deferred` 形态，例如 MCP 工具）由 BM25 按需检索加载为直接声明 |
 | `llama.cpp` | —— | **不映射**：它 `registerProvider`（模型 provider），不是工具 |
 
-### `mcp` 能力开关（与工具清单分离）
+### `mcp` 能力（独立开关 + 平台目录选 server）
 
-MCP 单独成开关（`AgentConfig.mcp.enabled`，三处 UI 渲染为「MCP 服务器工具」）：
+MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲染为「MCP」区块）：
 
-- **为什么不做成工具名**：勾 `mcp` 注册的是 `mcp__<server>__<tool>`（rea 一个 server 就 170 个），`mcp` 本身不是工具；且装载即连接 `mcp.json` 里全部 server（有副作用）。
-- **装载 = `builtin:mcp` + 依赖补齐**：`mcp.enabled=true` 时 worker 注入 `mcp`，并把 `codemode` / `tool_search` 补进注入与激活集合（`MCP_DEPENDENT_TOOLS`）——server 默认 `exposure: 'codemode'` 需要 codemode 工具，`deferred` 需要 tool_search，而平台连接前无法知道项目 mcp.json 的 exposure。日志 `builtin tools: mcp enabled; codemode+tool_search auto-enabled`。
-- **关闭不清除**：`mcp.enabled` 关掉只撤 MCP 扩展，`codemode` / `tool_search` 的用户勾选原样保留。
-- **工具可见性交给 pi**：per-server `exposure`（`direct` / `model-only` / `codemode`(默认) / `deferred` / `hidden`）决定模型怎么拿到工具；`codemode` / `deferred` 形态要 `tool_search` 或 codemode 沙箱才可达，平台不接管选择。
+- **为什么不做成工具名**：勾 `mcp` 注册的是 `mcp__<server>__<tool>`（rea 一个 server 就 170 个），`mcp` 本身不是工具。
+- **定义 vs 选择分离**（change `platform-mcp-catalog`）：server 定义只维护一份，在平台目录 `<userDataDir>/mcp.json`（默认 `~/.pi/server/mcp.json`，env `PI_SERVER_MCP_CONFIG` 可覆盖，格式与 pi 的 `mcp.json` 完全一致）。DB 只存**名字**：`mcp.servers`。
+- **按 agent 注册**：worker 在扩展装载期把选中的条目通过 `pi.registerMcpServer(name, config)` 注册，pi 内置 `mcp` 扩展在 `session_start` 连接它们。未选中的 server 不连接；单条注册失败只记 error 并跳过。
+- **装载 = `builtin:mcp` + 依赖补齐**：至少一个 server 解析成功时 worker 注入 `mcp`，并把 `codemode` / `tool_search` 补进注入与激活集合（`MCP_DEPENDENT_TOOLS`）——目录里默认 `exposure: 'codemode'` 需要 codemode 工具，`deferred` 需要 tool_search。零 server 时不装载 mcp、不补依赖，只记一条 warn。
+- **关闭保留选择**：`enabled: false` 只撤 MCP 扩展，`servers` 原样保留（选择不是授权），`codemode` / `tool_search` 的用户勾选也保留。
+- **pi 的同名 server 优先**：pi 仍会自己读 `~/.pi/agent/mcp.json` 与受信项目的 `.pi/mcp.json`；同名 server 由 pi 那份生效（平台注册被忽略）。平台把重叠名字暴露在 `GET /api/config/mcp-servers` 的 `conflicts` 并记 warn，UI 显示提示——否则「关掉却不生效」是静默 bug。
+- **旧配置的 `builtinTools: ['mcp']`**：静默忽略（debug 日志），MCP 只由 `mcp.enabled` 驱动，无自动迁移。
+- **工具可见性交给 pi**：per-server `exposure`（`codemode` 默认 / `deferred` / `direct` / `hidden`）与 `toolExposure` 决定模型怎么拿到工具。
 - **不在白名单里过滤**：MCP 工具的 `sourceInfo.source` 也是 `builtin`（扩展路径 `builtin:mcp`），所以 `setActiveToolsByName` 的白名单过滤**必须显式跳过 MCP 工具**（`isMcpToolName`），否则 `exposure: 'direct'` 的 server 会被静默停用。
 - **默认关闭**：`mcp` 缺失或 `enabled !== true` 即不装载（无全局默认层），三处 UI 默认不勾 → 存量项目零影响。
 

@@ -93,6 +93,7 @@ src/views/
   /config/models/new                 ProviderEditorView
   /config/models/:name/edit          ProviderEditorView
   /config/settings                   DefaultSettings
+  /config/mcp                        McpServersView（MCP 目录维护）
   /config/skills/:name?              SkillsConfig
   /config/skills/new                 ResourceEditorView
   /config/prompts/:name?             PromptsConfig
@@ -103,14 +104,18 @@ src/views/
 
 面包屑由路由 `meta.crumbTitle` / `meta.crumbTitleFromParam` 补充最后一段（`/config/skills/my-skill` → 配置 / Skills / my-skill）。
 
+**MCP 目录维护页（`platform-mcp-catalog`）**：`/config/mcp`（二级菜单「MCP」，`CONFIG_SECTIONS` 增补）→ `views/config/McpServersView.vue`。展示目录文件路径 + 每个 server 的卡片（名字 / exposure 徽标 / pi 同名冲突标记 / 停用标记 / command 或 url / 工具命名空间前缀），支持**新增、编辑（含改名）、删除**；编辑器分 stdio（command / args / env）与 http（url / headers）两种形态，env 与 headers 用「每行 `KEY=VALUE`」文本框。保存时**保留平台不建模的字段**（`timeout`、其它私有键、顶层 `autoEnableCodemode`），因为文件是 pi 的形状；写入走「临时文件 + rename」避免半截 JSON。改完调 `invalidateMcpCatalog()`，三处勾选面板下次读取即刷新。已运行的 worker 不热加载，提示「保存后新开会话才生效」。
+
 ### 内置工具清单与 MCP 开关（三处共用一份定义）
 
 `src/constants/builtin-tools.ts` 是唯一事实源，被两处复用：`views/agents/AgentEditorView.vue`（agent 级）与 `views/sessions/SessionDetailView.vue`（会话覆盖）；`BASE_AGENT_CONFIG` 是新建 agent 表单的起点。
 
 - **单层显式清单**：三处编辑面都没有「使用默认 / 跟随全局」复选框——打开就是生效值，不勾 = 不给。默认设置页只剩三项（默认模型 / 默认思考等级 / 启用的模型），**不再有资源默认值**。
 - **清单 = 8 个纯工具 + `codemode` + `tool_search`**（共 10 项，各自带 hint 说明副作用）。`mcp` **不在清单**。
-- **MCP 是独立开关**：渲染成单独的 `label.mcp-switch`「MCP 服务器工具」，写 `config.mcp = { enabled }`；缺失按 `{enabled:false}` 归一。
-- **依赖联动**：打开 MCP 时 `withMcpDependencies()` 把 `codemode` / `tool_search` 补进 `builtinTools`（`MCP_DEPENDENT_TOOLS`，与 worker 侧同名规则）；关掉 MCP **不**回滚这两项。
+- **MCP 是独立区块**：三处共用 `components/config/McpSelectionGroup.vue`（单一实现，样式靠 scoped 保证三处一致）——一个总开关 + 平台目录 server 勾选，写 `config.mcp = { enabled, servers }`；缺失按 `{enabled:false, servers:[]}` 归一。
+- **server 列表来自平台目录**：`GET /api/config/mcp-servers`（`composables/useMcpCatalog.ts`，模块级缓存一次）。目录里已不存在的勾选值渲染黄标幽灵项 + 「清理无效项」；目录解析错误与 pi 同名冲突在区块下方提示（pi 优先，平台开关对它们无效）。
+- **关闭即清空**：关掉总开关会同时把 `servers` 清空（开关就是生效条件，保留无效选择会让人误以为还在连）；关掉 MCP **不**回滚 `codemode` / `tool_search`。
+- **依赖联动**：打开 MCP 时 `withMcpDependencies()` 把 `codemode` / `tool_search` 补进 `builtinTools`（`MCP_DEPENDENT_TOOLS`，与 worker 侧同名规则）；加载时若 `mcp.enabled` 也已补齐，避免「显示未勾、实际生效」；关掉 MCP **不**回滚这两项。
 - **每个资源分组带「全选 / 清空」**；全选 = **展开成当前所有项的显式清单**（不存 `*` 特例），页面文案提示"后续新增资源不会自动加入"。
 - **无效项标注**：`composables/useConfigIssues.ts` 基于 `GET /api/config/{extensions,skills,prompts,capabilities}` 与模型列表计算，列表里的失效值渲染黄标 + 原因 tooltip +「清理无效项」；保存响应里的 `issues[]` 同步汇总到顶部横幅；`capabilities === null` 不标注，模型不可用只标不自动替换。
 

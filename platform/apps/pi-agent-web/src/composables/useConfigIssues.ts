@@ -7,6 +7,7 @@
  * - Prompt GET /api/config/prompts      → [{ name }]
  * - 授权   GET /api/capabilities        → { modules: [{ capabilities: [{ method }] }] }
  * - 模型   GET /api/models              → [{ provider, modelId }]
+ * - MCP    GET /api/config/mcp-servers  → { servers: [{ name }] }（平台目录）
  *
  * 规则表本身在 `@pi-agent-platform/shared-types` 的 `findConfigIssues`，服务端保存时用同一份
  * 函数（服务端只校验它权威掌握的清单），所以两边不会给出互相矛盾的颜色。
@@ -54,6 +55,8 @@ const KNOWN_FIELD = (available: ConfigAvailability, field: IssueField): string[]
       return available.tools;
     case 'serverBuiltinTools':
       return available.serverTools;
+    case 'mcp.servers':
+      return available.mcpServers;
     default:
       return undefined;
   }
@@ -67,12 +70,13 @@ export function useConfigIssues(): ConfigIssuesApi {
 
   async function loadAvailability(): Promise<void> {
     try {
-      const [extRes, skillsRes, promptsRes, capsRes, modelsRes] = await Promise.all([
+      const [extRes, skillsRes, promptsRes, capsRes, modelsRes, mcpRes] = await Promise.all([
         fetch('/api/config/extensions'),
         fetch('/api/config/skills'),
         fetch('/api/config/prompts'),
         fetch('/api/capabilities'),
         fetch('/api/models'),
+        fetch('/api/config/mcp-servers'),
       ]);
       const next: ConfigAvailability = { ...available.value };
       if (extRes.ok) {
@@ -97,6 +101,10 @@ export function useConfigIssues(): ConfigIssuesApi {
         next.models = ((await modelsRes.json()) as Array<{ provider: string; modelId: string }>).map(
           (m) => `${m.provider}/${m.modelId}`,
         );
+      }
+      if (mcpRes.ok) {
+        const data = (await mcpRes.json()) as { servers?: Array<{ name: string }> };
+        next.mcpServers = (data.servers ?? []).map((s) => s.name);
       }
       available.value = next;
     } catch {

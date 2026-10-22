@@ -8,14 +8,13 @@
  *    `builtin:<ext>` (see workers/session-worker/src/builtin-extensions.ts)
  *
  * MCP is NOT in this list any more (change: mcp-as-first-class-capability). It is a capability
- * switch (`AgentConfig.mcp.enabled` / `defaultMcp`) rendered as its own toggle next to the list,
- * because enabling it connects every server in mcp.json on session start and registers tools
- * named `mcp__<server>__<tool>` — none of which is a tool you pick by name.
+ * (`AgentConfig.mcp`) rendered as its own block: a switch plus per-agent server selection from the
+ * platform catalog `~/.pi/server/mcp.json` (change: platform-mcp-catalog), because enabling it
+ * registers tools named `mcp__<server>__<tool>` — none of which is a tool you pick by name.
  *
  * Dependency rule: enabling MCP turns on codemode + tool_search, because a server hands its
- * tools to the model according to its `exposure` in mcp.json — `codemode` (the default) needs
- * the codemode tool, `deferred` needs tool_search, and the platform cannot know a project's
- * exposures before connecting. Turning MCP off leaves those two selections untouched.
+ * tools to the model according to its `exposure` — `codemode` (the default) needs the codemode
+ * tool, `deferred` needs tool_search. Turning MCP off leaves those two selections untouched.
  */
 
 export interface BuiltinToolOption {
@@ -71,7 +70,7 @@ export const BASE_AGENT_CONFIG = {
   extensions: [] as string[],
   skills: [] as string[],
   prompts: [] as string[],
-  mcp: { enabled: false },
+  mcp: { enabled: false, servers: [] as string[] },
   serverBuiltinTools: ['sendFileToUser'],
   capabilities: null as string[] | null,
 };
@@ -84,7 +83,7 @@ export const MCP_DEPENDENT_TOOLS: readonly string[] = ['codemode', 'tool_search'
 
 /** Text shown next to the MCP switch in all three config surfaces. */
 export const MCP_SWITCH_HINT =
-  '装载 pi 内置 mcp 扩展：会话启动即连接 mcp.json 里的全部 server（工具名为 mcp__<server>__<tool>）。开启后会自动勾选 codemode 与 tool_search，否则默认 exposure 下的 mcp 工具对模型不可见';
+  'MCP 的 server 定义集中在平台目录 ~/.pi/server/mcp.json（格式同 pi 的 mcp.json），这里勾选本配置要用哪几个。会话启动时 worker 只注册勾选的 server（工具名 mcp__<server>__<tool>）。开启后会自动勾选 codemode 与 tool_search：默认 exposure 是 codemode，没有它们模型看不到 server 的工具。关掉开关会清空 server 勾选。';
 
 /** Add the MCP dependencies to a tool selection (idempotent). */
 export function withMcpDependencies(selected: readonly string[]): string[] {

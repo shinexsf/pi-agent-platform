@@ -13,17 +13,18 @@ import type { AgentDTO } from '@pi-agent-platform/shared-types';
 import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import InfoTip from '../../components/ui/InfoTip.vue';
+import McpSelectionGroup from '../../components/config/McpSelectionGroup.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
 import {
   BASE_AGENT_CONFIG,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
-  MCP_SWITCH_HINT,
   withMcpDependencies,
   SERVER_BUILTIN_TOOLS,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
+import { useMcpCatalog } from '../../composables/useMcpCatalog';
 import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import {
   applyTemplate,
@@ -195,6 +196,7 @@ function capabilitiesSummary(items: string[] | null): string {
 }
 
 onMounted(async () => {
+  void loadMcpCatalog();
   try {
     const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes, capsRes] = await Promise.all([
       fetch('/api/models'),
@@ -227,7 +229,7 @@ onMounted(async () => {
           systemPrompt: resolved.systemPrompt ?? '',
           appendSystemPrompt: resolved.appendSystemPrompt ?? '',
           builtinTools: [...resolved.builtinTools],
-          mcp: { enabled: resolved.mcp.enabled },
+          mcp: { enabled: resolved.mcp.enabled, servers: [...resolved.mcp.servers] },
           serverBuiltinTools: [...resolved.serverBuiltinTools],
           capabilities: resolved.capabilities,
           extensions: [...resolved.extensions],
@@ -235,6 +237,11 @@ onMounted(async () => {
           prompts: [...resolved.prompts],
         },
       };
+      // 生效值回显：MCP 开着就一定带着 codemode/tool_search（worker 强制补齐，这里先对齐，
+      // 否则页面显示未勾选、实际生效却已启用）。
+      if (form.value.config.mcp.enabled) {
+        form.value.config.builtinTools = withMcpDependencies(form.value.config.builtinTools);
+      }
       setCrumbName(routeId.value, agent.name);
     }
   } catch (err) {
@@ -319,16 +326,26 @@ function toggleCapability(method: string, checked: boolean): void {
 const mcpEnabled = computed(() => form.value.config.mcp.enabled === true);
 
 /**
+ * 平台 MCP 目录（server 定义只在 `~/.pi/server/mcp.json`，这里只勾名字）。
+ */
+const {
+  servers: mcpCatalog,
+  errors: mcpCatalogErrors,
+  conflicts: mcpConflicts,
+  loading: mcpCatalogLoading,
+  load: loadMcpCatalog,
+} = useMcpCatalog();
+
+/**
  * MCP is a capability, not a tool: the switch writes `config.mcp.enabled` and, when turned on,
  * ticks codemode + tool_search (a server's default `exposure: codemode` needs them). Turning it
  * off leaves those selections untouched. The worker enforces the same dependency, so a hand-made
  * API payload cannot produce a half-working config.
  */
-function setMcpEnabled(next: boolean): void {
-  form.value.config.mcp = { enabled: next };
-  if (!next) return;
+watch(mcpEnabled, (on) => {
+  if (!on) return;
   form.value.config.builtinTools = withMcpDependencies(form.value.config.builtinTools);
-}
+});
 </script>
 
 <template>
@@ -515,24 +532,16 @@ function setMcpEnabled(next: boolean): void {
               </div>
             </div>
 
-            <!-- MCP capability -->
-            <div class="resource-group">
-              <div class="resource-group-header">
-                <span class="resource-group-title">MCP</span>
-                <InfoTip :text="MCP_SWITCH_HINT" :width="340" />
-                <span class="resource-group-count">{{ mcpEnabled ? '已启用' : '未启用' }}</span>
-              </div>
-              <template v-if="isView">
-                <div class="resource-default">{{ mcpEnabled ? '已启用' : '未启用' }}</div>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline">
-                  <input type="checkbox" :checked="mcpEnabled"
-                    @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" />
-                  <span>启用 MCP</span>
-                </label>
-              </template>
-            </div>
+            <!-- MCP：总开关 + 平台目录 server 勾选 -->
+            <McpSelectionGroup
+              v-model:enabled="form.config.mcp.enabled"
+              v-model:servers="form.config.mcp.servers"
+              :catalog="mcpCatalog"
+              :errors="mcpCatalogErrors"
+              :conflicts="mcpConflicts"
+              :loading="mcpCatalogLoading"
+              :disabled="isView"
+            />
 
             <!-- Extensions -->
             <div class="resource-group">
@@ -885,7 +894,7 @@ function setMcpEnabled(next: boolean): void {
   border-color: var(--accent);
 }
 
-.tag-check:hover {
+.tag-check:not(.checked):hover {
   border-color: var(--border-strong);
 }
 

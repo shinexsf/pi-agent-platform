@@ -22,8 +22,9 @@
  *   === 'builtin'` (getSyntheticPathSource), so the existing whitelist filter
  *   (`sourceInfo.source === 'builtin'`) governs extension tools too — codemode/tool_search
  *   are NOT treated as "always-on non-builtin tools".
- * - `mcp` connects servers on `session_start` (empty/missing `mcp.json` loads clean:
- *   no tools, no errors/warnings).
+ * - `mcp` connects servers on `session_start`; only the servers this session registered
+ *   (`pi.registerMcpServer()`, see mcp-catalog.ts) are connected. A missing/empty catalog is fine:
+ *   no tools, no errors — and this module is not reached at all unless a server resolved.
  * - `pi-mcp-adapter` (non-replaceable) wins over `builtin:mcp` via omitReplacedExtensions:
  *   the builtin is dropped with a warning, never both connected.
  *
@@ -54,10 +55,12 @@ const TOOL_TO_EXTENSION: Readonly<Record<string, string>> = {
 /**
  * Tools that `mcp.enabled` brings along.
  *
- * An mcp server's tools reach the model according to its `exposure` in mcp.json:
+ * An mcp server's tools reach the model according to its `exposure` in the catalog:
  * - `codemode` (default) → needs the codemode tool;
  * - `deferred` → needs tool_search.
- * We cannot know a project's exposures before connecting, so enabling mcp always brings both.
+ * The catalog is read per session (mcp-catalog.ts), so the caller only reaches this module when at
+ * least one server resolved; we still bring both, because a single agent may select servers with
+ * different exposures.
  * They stay independently selectable when mcp is off.
  */
 const MCP_DEPENDENT_TOOLS: readonly string[] = ['codemode', 'tool_search'];
@@ -66,7 +69,7 @@ const MCP_DEPENDENT_TOOLS: readonly string[] = ['codemode', 'tool_search'];
 export interface BuiltinExtensionRequest {
   /** Tool whitelist (`AgentConfig.builtinTools`). A legacy `'mcp'` entry is ignored. */
   builtinTools?: readonly string[] | null;
-  /** `AgentConfig.mcp.enabled` — the only switch that loads the `mcp` built-in extension. */
+  /** `AgentConfig.mcp.enabled` AND at least one catalog server resolved for this session. */
   mcpEnabled?: boolean;
 }
 
@@ -76,17 +79,6 @@ interface PiBuiltinExtension {
   factory: ExtensionFactory;
   replaceable?: boolean;
 }
-
-/**
- * Extensions implied by selecting `mcp`.
- *
- * An mcp server's tools reach the model according to its `exposure` in mcp.json:
- * - `codemode` (default) → needs the codemode tool;
- * - `deferred` → needs tool_search.
- * We cannot know a project's exposures before connecting, so `mcp` always brings both along.
- * (codemode / tool_search remain independently selectable without mcp.)
- */
-const MCP_IMPLIED_TOOLS: readonly string[] = ['codemode', 'tool_search'];
 
 /** What the session loader needs to load the selected built-in extensions. */
 export interface BuiltinExtensionInjection {
@@ -141,7 +133,8 @@ async function loadBuiltinTable(): Promise<Map<string, PiBuiltinExtension> | und
  * - `builtinTools` names codemode / tool_search (tools, not capabilities); a legacy `'mcp'`
  *   entry is dropped with a debug log — enabling MCP is `mcp.enabled`'s job now.
  * - `mcpEnabled` loads the `mcp` extension AND its dependencies (codemode + tool_search),
- *   because a server's default `exposure: "codemode"` leaves its tools unreachable otherwise.
+ *   because a server's default `exposure: "codemode"` (or `deferred`) leaves its tools
+ *   unreachable otherwise. The caller passes true only when a catalog server actually resolved.
  *
  * Returns `undefined` when nothing needs injecting (no tool extension names, mcp off, or the pi
  * table could not be loaded) — callers then behave exactly as before.

@@ -18,6 +18,14 @@ import type { ServerConfig } from '../config.js';
 import { uploadSingleExtension, extractExtensionNames, readSettings } from '../services/extension-utils.js';
 import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
 import { childLogger } from '../logger.js';
+import {
+  McpCatalogError,
+  createMcpServer,
+  deleteMcpServer,
+  readMcpCatalog,
+  toMcpCatalogResponse,
+  updateMcpServer,
+} from '../services/mcp-catalog.js';
 
 const logger = childLogger('config');
 
@@ -369,6 +377,81 @@ export function createConfigRouter(config: ServerConfig) {
 
     await writeJson(configPath, merged);
     return c.json({ ok: true });
+  });
+
+  // ========== MCP catalog ==========
+
+  // GET /api/config/mcp-servers
+  // Platform-owned MCP catalog (change: platform-mcp-catalog). Returns per-entry errors plus
+  // names that pi's own mcp.json also defines (pi wins those, so turning them off here has no
+  // effect). Writes go through POST/DELETE below; the file stays pi-shaped and the config page
+  // never invents fields it does not model.
+  router.get('/mcp-servers', (c) => {
+    const catalog = readMcpCatalog({
+      mcpConfigPath: config.mcpConfigPath,
+      agentDir: config.agentDir,
+    });
+    if (catalog.errors.length > 0) {
+      logger.warn({ path: catalog.path, errors: catalog.errors }, 'mcp catalog has invalid entries');
+    }
+    if (catalog.conflicts.length > 0) {
+      logger.warn(
+        { path: catalog.path, conflicts: catalog.conflicts },
+        'mcp catalog defines servers that pi\'s own mcp.json also defines; pi wins those',
+      );
+    }
+    return c.json(toMcpCatalogResponse(catalog));
+  });
+
+  // POST /api/config/mcp-servers — add a server to the platform catalog.
+  router.post('/mcp-servers', async (c) => {
+    const body = (await c.req.json()) as { name?: string; config?: Record<string, unknown> };
+    try {
+      if (!body.name) return c.json({ error: 'Missing required field: name' }, 400);
+      if (!body.config || typeof body.config !== 'object') {
+        return c.json({ error: 'Missing required field: config' }, 400);
+      }
+      createMcpServer({ mcpConfigPath: config.mcpConfigPath, name: body.name, config: body.config });
+      logger.info({ name: body.name, path: config.mcpConfigPath }, 'mcp server added to catalog');
+      return c.json({ ok: true, name: body.name });
+    } catch (err) {
+      if (err instanceof McpCatalogError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  // POST /api/config/mcp-servers/:name — replace a definition (rename allowed via body.name).
+  router.post('/mcp-servers/:name', async (c) => {
+    const name = c.req.param('name');
+    const body = (await c.req.json()) as { name?: string; config?: Record<string, unknown> };
+    try {
+      if (!body.config || typeof body.config !== 'object') {
+        return c.json({ error: 'Missing required field: config' }, 400);
+      }
+      const nextName = updateMcpServer({
+        mcpConfigPath: config.mcpConfigPath,
+        name,
+        input: { name: body.name, config: body.config },
+      });
+      logger.info({ from: name, to: nextName, path: config.mcpConfigPath }, 'mcp server updated in catalog');
+      return c.json({ ok: true, name: nextName });
+    } catch (err) {
+      if (err instanceof McpCatalogError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+  });
+
+  // DELETE /api/config/mcp-servers/:name — remove a definition.
+  router.delete('/mcp-servers/:name', (c) => {
+    const name = c.req.param('name');
+    try {
+      deleteMcpServer({ mcpConfigPath: config.mcpConfigPath, name });
+      logger.info({ name, path: config.mcpConfigPath }, 'mcp server removed from catalog');
+      return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof McpCatalogError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
   });
 
   // ========== Skills ==========

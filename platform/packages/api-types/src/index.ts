@@ -118,6 +118,32 @@ export interface SessionContextDTO {
   } | null;
 }
 
+/** One server in the platform MCP catalog (`~/.pi/server/mcp.json`). */
+export interface McpCatalogServerDTO {
+  /** Server name — the key in `mcpServers`, also the tool namespace (`mcp__<name>__*`). */
+  name: string;
+  /** pi-shaped server config (command/args/env or url/headers), passed to `pi.registerMcpServer()`. */
+  config: Record<string, unknown>;
+  /** Effective exposure (`codemode` unless the entry says otherwise). */
+  exposure: 'codemode' | 'deferred' | 'direct' | 'hidden';
+  description?: string;
+}
+
+/**
+ * Response of `GET /api/config/mcp-servers` (change: platform-mcp-catalog).
+ *
+ * `errors` carries per-entry problems so one broken server does not hide the rest.
+ * `conflicts` names servers that pi's own `mcp.json` also defines — pi wins those, so
+ * turning them off in the platform has no effect and the UI must say so.
+ */
+export interface McpCatalogResponseDTO {
+  /** Absolute path of the catalog file that was read. */
+  path: string;
+  servers: McpCatalogServerDTO[];
+  errors: string[];
+  conflicts: string[];
+}
+
 /** Full session info returned by GET /api/sessions/:id/session-info. */
 export interface SessionInfoDTO {
   sessionId: string;

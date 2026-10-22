@@ -10,16 +10,17 @@ import type { SessionDTO, AgentDTO } from '@pi-agent-platform/shared-types';
 import EditorPage from '../../components/layout/primitives/EditorPage.vue';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import InfoTip from '../../components/ui/InfoTip.vue';
+import McpSelectionGroup from '../../components/config/McpSelectionGroup.vue';
 import { toast } from '../../composables/useFeedback';
 import { setCrumbName } from '../../composables/breadcrumbNames';
 import {
   BASE_AGENT_CONFIG,
   BUILTIN_TOOL_NAMES,
-  MCP_SWITCH_HINT,
   SERVER_BUILTIN_TOOLS,
   withMcpDependencies,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
+import { useMcpCatalog } from '../../composables/useMcpCatalog';
 import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import {
   applyTemplate,
@@ -73,7 +74,7 @@ const thinkingLevel = ref('');
 // 资源清单一律是显式数组（change: explicit-agent-config）：打开编辑页显示的是"生效值"
 // （session 有 key 用 session 的，否则用 agent 的归一结果），保存即把七项固化到 session 行。
 const builtinTools = ref<string[]>([...BASE_AGENT_CONFIG.builtinTools]);
-const mcp = ref<{ enabled: boolean }>({ enabled: false });
+const mcp = ref<{ enabled: boolean; servers: string[] }>({ enabled: false, servers: [] });
 const serverBuiltinTools = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinTools]);
 // callServer 方法级授权：null = 走全局策略（唯一保留的 tri-state）、[] = 全禁、数组 = 白名单
 const capabilities = ref<string[] | null>(null);
@@ -113,16 +114,24 @@ const builtinToolCount = computed(() => BUILTIN_TOOLS.length);
 
 const mcpEnabled = computed(() => mcp.value.enabled === true);
 
+/** 平台 MCP 目录（server 定义只在 `~/.pi/server/mcp.json`）。 */
+const {
+  servers: mcpCatalog,
+  errors: mcpCatalogErrors,
+  conflicts: mcpConflicts,
+  loading: mcpCatalogLoading,
+  load: loadMcpCatalog,
+} = useMcpCatalog();
+
 /**
  * MCP is a capability, not a tool: the switch writes `config.mcp.enabled` and, when turned on,
  * ticks codemode + tool_search (a server's default `exposure: codemode` needs them). Turning it
  * off leaves those selections untouched. The worker enforces the same dependency.
  */
-function setMcpEnabled(next: boolean): void {
-  mcp.value = { enabled: next };
-  if (!next) return;
+watch(mcpEnabled, (on) => {
+  if (!on) return;
   builtinTools.value = withMcpDependencies(builtinTools.value);
-}
+});
 
 // available resources
 const availableSkills = ref<{ name: string }[]>([]);
@@ -165,7 +174,7 @@ async function loadTemplates(): Promise<void> {
 function currentTemplateTarget() {
   return {
     builtinTools: builtinTools.value,
-    mcp: { enabled: mcp.value.enabled === true },
+    mcp: { enabled: mcp.value.enabled === true, servers: [...mcp.value.servers] },
     serverBuiltinTools: serverBuiltinTools.value,
     capabilities: capabilities.value,
     extensions: extensions.value,
@@ -265,7 +274,10 @@ onMounted(async () => {
       (sc[key as string] !== undefined ? sc[key as string] : agentCfg[key]) as typeof agentCfg[K];
 
     builtinTools.value = [...(pick('builtinTools') as string[])];
-    mcp.value = { enabled: (pick('mcp') as { enabled?: boolean } | null)?.enabled === true };
+    mcp.value = {
+      enabled: (pick('mcp') as { enabled?: boolean } | null)?.enabled === true,
+      servers: [...(((pick('mcp') as { servers?: string[] } | null)?.servers) ?? [])],
+    };
     serverBuiltinTools.value = [...(pick('serverBuiltinTools') as string[])];
     extensions.value = [...(pick('extensions') as string[])];
     skills.value = [...(pick('skills') as string[])];
@@ -274,12 +286,15 @@ onMounted(async () => {
     // 缺 key（存量）→ 用 agent 的（控制面同款 fallback），保存后固化为 session 级。
     const caps = sc.capabilities as string[] | null | undefined;
     capabilities.value = caps === undefined ? agentCfg.capabilities : (caps === null ? null : [...caps]);
+    // 生效值回显（同 worker 强制规则）
+    if (mcp.value.enabled) builtinTools.value = withMcpDependencies(builtinTools.value);
   } catch (err) {
     loadError.value = `加载失败：${(err as Error).message}`;
   } finally {
     loading.value = false;
   }
   await issues.loadAvailability();
+  void loadMcpCatalog();
   await loadTemplates();
 });
 
@@ -295,7 +310,7 @@ async function save(): Promise<void> {
     body.config = {
       ...(session.value?.config ?? {}),
       builtinTools: [...builtinTools.value],
-      mcp: { enabled: mcp.value.enabled },
+      mcp: { enabled: mcp.value.enabled, servers: [...mcp.value.servers] },
       serverBuiltinTools: [...serverBuiltinTools.value],
       capabilities: capabilities.value,
       extensions: [...extensions.value],
@@ -557,24 +572,16 @@ function workerUptime(ms: number): string {
               </div>
             </div>
 
-            <!-- MCP capability -->
-            <div class="sd-resource-group">
-              <div class="sd-resource-header">
-                <span class="sd-resource-title">MCP</span>
-                <InfoTip :text="MCP_SWITCH_HINT" :width="340" />
-                <span class="sd-resource-count">{{ mcpEnabled ? '已启用' : '未启用' }}</span>
-              </div>
-              <template v-if="isView">
-                <span class="tag" :class="{ 'tag-default': !mcpEnabled }">{{ mcpEnabled ? '已启用' : '未启用' }}</span>
-              </template>
-              <template v-else>
-                <label class="checkbox-inline">
-                  <input type="checkbox" :checked="mcpEnabled"
-                    @change="setMcpEnabled(($event.target as HTMLInputElement).checked)" />
-                  <span>启用 MCP</span>
-                </label>
-              </template>
-            </div>
+            <!-- MCP：总开关 + 平台目录 server 勾选 -->
+            <McpSelectionGroup
+              v-model:enabled="mcp.enabled"
+              v-model:servers="mcp.servers"
+              :catalog="mcpCatalog"
+              :errors="mcpCatalogErrors"
+              :conflicts="mcpConflicts"
+              :loading="mcpCatalogLoading"
+              :disabled="isView"
+            />
 
             <!-- Server builtin tools -->
             <div class="sd-resource-group">
@@ -936,7 +943,7 @@ function workerUptime(ms: number): string {
 .tag-check { display: inline-flex; align-items: center; height: 26px; padding: 0 8px; font-size: 0.72rem; font-weight: 550; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; transition: all 120ms; user-select: none; }
 .tag-check input { display: none; }
 .tag-check.checked { color: var(--accent-ink); background: var(--accent-soft); border-color: var(--accent); }
-.tag-check:hover { border-color: var(--border-strong); }
+.tag-check:not(.checked):hover { border-color: var(--border-strong); }
 .tag-check.locked { cursor: default; opacity: 0.85; }
 .tag-check .tag-dep { margin-left: 4px; font-size: 0.64rem; opacity: 0.75; }
 
