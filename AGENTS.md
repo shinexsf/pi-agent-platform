@@ -82,6 +82,7 @@ pnpm stop:server       # 停止（只 kill 3000 端口那一个 PID；停其他�
 - `public/web` / `public/ide` 不存在时 server 启动会跳过静态挂载 —— 首次 build 后需重启一次 server
 - 改 `ide-bridge` 的 method 契约需与 Kotlin 侧同步（即使 Kotlin 代码没改）
 - 只有打包态（`pi-server` CLI / `pnpm pack:cli`）才需要 dist 产物，见 `doc/architecture/current/pi-agent-server_packaging.md`
+- **新增/改动跨包 runtime import（`@pi-agent-platform/*`）或打包脚本 → 必须跑一次 `pnpm pack:cli`**：它内置 `scripts/check-packaged.mjs` 静态自检（产物完整性 / channels manifest / manifest 指向 / 模块说明符 / 未声明依赖），dev 态永远暴露不了这类问题（tsx + pnpm symlink 会静默解析成功）；自检不过不产 tgz，启动与功能验证交给部署测试环境
 
 ## 必读
 

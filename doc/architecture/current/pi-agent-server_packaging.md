@@ -25,17 +25,37 @@ package/
     ├── server/               # 编译后 server（含 im-gateway / channels / public SPA）
     │   ├── index.js
     │   ├── public/{ide,web}/  # Vue 3 SPA 构建产物
-    │   └── channels/         # IM 渠道包（manifest + channel-{wechat,qq}/dist/）
-    └── worker/               # 编译后 worker
-        └── index.js
+    │   └── channels/         # IM 渠道包（manifest + channel-{wechat,qq}/dist/，不含 admin/__tests__/*.d.ts/*.map）
+    ├── worker/               # 编译后 worker
+    │   └── index.js
+    └── node_modules/@pi-agent-platform/   # 5 个 workspace 运行时包（见下）
+        └── {shared-types,channel-types,api-types,ipc-protocol,sdk-integration}/
 ```
 
 **不含**：
-- `node_modules/`（依赖由 npm install 时装）
+- 第三方 `node_modules/`（依赖由 npm install 时装；`dist/node_modules` 里只有我们自己编译的 workspace 包）
 - `*.tgz`（产物）
 - `data.db*`（运行时数据）
 - `logs/`（运行时日志）
 - 参考项目源码 / 私人文档（不随仓库发布）
+- 渠道包的 `admin/`、`__tests__/`、`*.d.ts`、`*.map`（web 半部由 Vite 从 `src` 打进 SPA，server 从不加载）
+
+## workspace 运行时包
+
+`@pi-agent-platform/*` 这 5 个包在 dev 态由 tsx 直跑 TS 源码解析，`tsc`（`moduleResolution: bundler`）会把裸包名 specifier
+原样留在产物 JS 里。因此它们**必须随 tarball 发布**，按 npm 目录结构放在
+`dist/node_modules/@pi-agent-platform/<pkg>/`，且 manifest 需改写：
+
+```diff
+- { "exports": { ".": "./src/index.ts" } }   # workspace/dev 形态
++ { "exports": { ".": "./dist/index.js" } }  # 打包形态（丢 types 条件：不带 .d.ts）
+```
+
+由 `build-cli.mjs` 的 `copyWorkspaceRuntimePackages()`（step 5c）生成。
+**不用 esbuild 内联**：`dist/{server,worker,channels}` 大量用 `import.meta.url` 推导 channels 目录、public 目录、
+worker 入口候选路径，内联会移动这些锚点；发真模块可让打包态与 dev 态解析语义一致。
+
+新增跨包 runtime import 时必须确认对应包在 `RUNTIME_PACKAGES` 列表里（缺失会被静态自检拦下）。
 
 ## 构建流水线
 
@@ -46,21 +66,44 @@ pnpm pack:cli
 # = node scripts/build-cli.mjs
 ```
 
-**9 步**：
+**10 步**：
 
 1. 编译 CLI 自己（`tsc` 产出 `packages/cli/dist/{bin,daemon,paths,env,logger}.js`）
 2. 编译 workspace（`pnpm -r build`：server + worker + channels + SPA）
 3. 拷贝 `channels/shared/` 到 `cli/dist/server/channels/shared/`（plain JS，无 TS 编译）
 4. SPA 构建（`pnpm build:ide` + `pnpm build:web`，copy 到 `server/public/`）
-5. 清空 `worker/` + `vendor/`，copy `server/dist/` 到 `cli/dist/server/`
+5. 清空 `worker/` + `vendor/` + `channels/` + `node_modules/`，copy `server/dist/` 到 `cli/dist/server/`
+5b. 重拷 `channels/shared/`（step 5 被清掉）
+5c. 打包 workspace 运行时包到 `cli/dist/node_modules/@pi-agent-platform/`（manifest 路径改写）
 6. 拷贝 `server/public/{ide,web}/` 到 `cli/dist/server/public/`
 7. 拷贝 `worker/dist/` 到 `cli/dist/worker/`
-8. 拷贝 `channels/{manifest.json,<name>/dist/}` 到 `cli/dist/server/channels/`
+8. 拷贝 `channels/{manifest.json,<name>/dist/}` 到 `cli/dist/server/channels/`（排除 admin/__tests__/d.ts/map）
 9. 扫描 `channels/*/package.json` 的 `dependencies`，合并去重写入 `cli/package.json`
+9b. **产物静态自检**（[`scripts/check-packaged.mjs`](../../../platform/scripts/check-packaged.mjs)），不过则 exit 1、不产 tgz
+10. `pnpm pack` 在 `packages/cli/` 下产 `pi-server-X.Y.Z.tgz`
 
-最后跑 `pnpm pack` 在 `packages/cli/` 下产 `pi-server-X.Y.Z.tgz`。
+构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（plain Node.js + ESM）
 
-构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（~250 行 plain Node.js + ESM）
+## 产物静态自检
+
+`scripts/check-packaged.mjs`（零新依赖，`--dist` / `--json` 可选）在 `pnpm pack` 前跑，秒级、无副作用。
+存在理由：workspace 包漏发这类问题在 dev 态**没有任何信号**（tsx + pnpm symlink + bundler resolution 三层掩盖），
+唯一暴露路径是「装进干净目录再启动」；静态自检把同一个信号提前到构建期。
+
+| 规则 | 查什么 |
+|---|---|
+| `A.artifact` | `bin/pi-server.js`、`dist/bin.js`、`server/index.js`、`worker/index.js`、`channels/manifest.json`、`public/{web,ide}/index.html` + `assets` 至少一个 `.js`、5 个 workspace 包齐全 |
+| `B.channel` | `manifest.json` 每个渠道 → `server/channels/<name>/dist/index.js` 存在 |
+| `C.manifest` | cli `bin`/`main`、workspace 包 `main`/`exports` 目标文件存在 |
+| `D.relative` | 产物内相对导入指向存在的文件 |
+| `D.workspace` | `@pi-agent-platform/*` 必须解析到产物内目录（回落 monorepo symlink 也算失败） |
+| `D.undeclared` | 其他裸包必须在 `packages/cli/package.json` 声明 |
+| `E.sanity` | <40 个 `.js` 或 <150 个说明符 → 失败（防空跑绿灯） |
+
+**不覆盖**（交部署环境的自动化测试）：`exports` 条件差异（import vs require）、npm 与 pnpm 解析差异、
+native binding 加载、运行期 `import.meta.url` 锚点是否指向正确目录、功能正确性。
+
+**约束**：改动跨包 runtime import 或打包脚本 → 必须跑一次 `pnpm pack:cli`（见根 `AGENTS.md`）。
 
 ## 部署与启动
 

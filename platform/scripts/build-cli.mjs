@@ -43,6 +43,83 @@ function log(msg) {
   process.stdout.write(`[build-cli] ${msg}\n`);
 }
 
+/**
+ * Workspace runtime packages (`@pi-agent-platform/*`) are consumed as raw TS in
+ * dev (tsx) and compiled by tsc with `moduleResolution: bundler`, so the emitted
+ * server/worker/channel JS still contains bare `@pi-agent-platform/shared-types`
+ * imports. A packaged install has no workspace `node_modules`, so those imports
+ * MUST resolve from inside the tarball: ship each package's compiled output under
+ * `dist/node_modules/@pi-agent-platform/<pkg>` with a rewritten manifest
+ * (`./src/index.ts` → `./dist/index.js`).
+ *
+ * Why not bundle them with esbuild: server/worker/channel dists resolve several
+ * paths from `import.meta.url` (channels dir, public dir, worker entry); inlining
+ * would move those anchors. Shipping real modules keeps dev and packaged
+ * resolution semantics identical.
+ */
+const RUNTIME_PACKAGES = [
+  'shared-types',
+  'channel-types',
+  'api-types',
+  'ipc-protocol',
+  'sdk-integration',
+];
+
+function remapExportPath(p) {
+  return p.replace(/^\.\/src\//, './dist/').replace(/\.ts$/, '.js');
+}
+
+function remapExportsValue(value) {
+  if (typeof value === 'string') return remapExportPath(value);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        // Drop `types` conditions: the tarball ships no .d.ts, so a `types`
+        // condition would advertise a .js file as type declarations.
+        .filter(([k]) => k !== 'types')
+        .map(([k, v]) => [k, remapExportsValue(v)]),
+    );
+  }
+  return value;
+}
+
+async function copyWorkspaceRuntimePackages() {
+  const targetRoot = path.join(CLI_DIST, 'node_modules', '@pi-agent-platform');
+  rmSync(targetRoot, { recursive: true, force: true });
+  for (const dirName of RUNTIME_PACKAGES) {
+    const pkgDir = path.join(PLATFORM_DIR, 'packages', dirName);
+    const pkgJsonPath = path.join(pkgDir, 'package.json');
+    const distDir = path.join(pkgDir, 'dist');
+    if (!existsSync(pkgJsonPath)) {
+      log(`  skip (no package.json): ${pkgDir}`);
+      continue;
+    }
+    if (!existsSync(path.join(distDir, 'index.js'))) {
+      process.stderr.write(
+        `[build-cli] missing ${path.join(distDir, 'index.js')} — did 'pnpm -r build' compile the workspace packages?\n`,
+      );
+      process.exit(1);
+    }
+    const srcPkg = JSON.parse(await readFile(pkgJsonPath, 'utf8'));
+    const outDir = path.join(targetRoot, srcPkg.name.replace(/^@pi-agent-platform\//, ''));
+    mkdirSync(outDir, { recursive: true });
+    cpSync(distDir, path.join(outDir, 'dist'), { recursive: true });
+
+    // Dev resolution points at ./src/*.ts (tsx); the packaged copy must point at
+    // compiled JS, so the manifest is rewritten rather than shipped verbatim.
+    const manifest = {
+      name: srcPkg.name,
+      version: srcPkg.version,
+      type: srcPkg.type ?? 'module',
+      private: true,
+    };
+    if (srcPkg.main) manifest.main = remapExportPath(srcPkg.main);
+    if (srcPkg.exports) manifest.exports = remapExportsValue(srcPkg.exports);
+    writeFileSync(path.join(outDir, 'package.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+    log(`  packaged ${srcPkg.name} → ${outDir}`);
+  }
+}
+
 function run(cmd, args, opts = {}) {
   const wantedCwd = opts.cwd ?? PLATFORM_DIR;
   log(`$ ${cmd} ${args.join(' ')}  (cwd=${wantedCwd})`);
@@ -103,7 +180,7 @@ async function main() {
 
   log('step 5/10: clear aggregated subdirs and copy server dist');
   // Clear subdirs that will be re-created, but NOT CLI's own dist/ (step 1 compiled bin.js)
-  for (const sub of ['server', 'worker', 'vendor', 'channels']) {
+  for (const sub of ['server', 'worker', 'vendor', 'channels', 'node_modules']) {
     const dir = path.join(CLI_DIST, sub);
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true });
@@ -138,6 +215,9 @@ async function main() {
     cpSync(sharedSrc, sharedOutDir, { recursive: true });
   }
 
+  log('step 5c/10: package workspace runtime packages into dist/node_modules');
+  await copyWorkspaceRuntimePackages();
+
   log('step 6/10: copy SPA public to cli/dist/server/public');
   mkdirSync(path.join(CLI_DIST, 'server', 'public'), { recursive: true });
   for (const spa of ['ide', 'web']) {
@@ -170,11 +250,20 @@ async function main() {
 
   const manifestRaw = JSON.parse(await readFile(MANIFEST, 'utf8'));
   const channelNames = Array.isArray(manifestRaw.channels) ? manifestRaw.channels : [];
+  // 渠道包 dist 里有两类东西运行期用不到：
+  //  - admin/    web 前端半部（Vite 从 src 打包进 SPA），server 从不 import
+  //  - __tests__ / *.d.ts / *.map
+  // 它们进了 tarball 不但白占体积，还会让静态自检把「admin 引 .vue」误判成断裂。
+  const skipChannelArtifact = (srcPath) => {
+    const segments = srcPath.split(/[\\/]/);
+    if (segments.includes('__tests__') || segments.includes('admin')) return false;
+    return !/\.(d\.ts|map)$/.test(srcPath);
+  };
   for (const name of channelNames) {
     const src = path.join(CHANNELS_DIR, name, 'dist');
     const dst = path.join(channelsOut, name, 'dist');
     if (existsSync(src)) {
-      cpSync(src, dst, { recursive: true });
+      cpSync(src, dst, { recursive: true, filter: (p) => skipChannelArtifact(p) });
       log(`  copied ${src} → ${dst}`);
     } else {
       process.stderr.write(`[build-cli] channel dist not found: ${src}\n`);
@@ -207,6 +296,19 @@ async function main() {
   cliPkg.dependencies = sortedDeps;
   writeFileSync(cliPkgPath, JSON.stringify(cliPkg, null, 2) + '\n', 'utf8');
   log(`  updated ${cliPkgPath} (${Object.keys(sortedDeps).length} deps)`);
+
+  log('step 9b/10: static packaged check（产物自洽性，失败则不产 tgz）');
+  try {
+    await run('node', [path.join(PLATFORM_DIR, 'scripts', 'check-packaged.mjs'), '--dist', CLI_DIST]);
+  } catch {
+    const stale = path.join(CLI_DIR, `pi-server-${cliPkg.version}.tgz`);
+    if (existsSync(stale)) {
+      process.stderr.write(
+        `[build-cli] 产物自检未通过；上次留下的 ${stale} 未被更新，请勿使用\n`,
+      );
+    }
+    process.exit(1);
+  }
 
   log('step 10/10: pnpm pack (produce tarball, runs inside cli dir)');
   // Run `pnpm pack` directly (no --filter) so the tarball is produced in CLI_DIR,
