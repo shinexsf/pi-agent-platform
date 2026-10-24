@@ -14,9 +14,17 @@ export type {
   ToolCallDTO,
   RuntimeConfig,
   ConfigIssue,
+  SessionRunState,
 } from '@pi-agent-platform/shared-types';
 
-import type { AgentDTO, AgentTemplateDTO, AgentConfig, SessionDTO, MessageDTO } from '@pi-agent-platform/shared-types';
+import type {
+  AgentDTO,
+  AgentTemplateDTO,
+  AgentConfig,
+  SessionDTO,
+  MessageDTO,
+  SessionRunState,
+} from '@pi-agent-platform/shared-types';
 
 // ---------- Agents ----------
 
@@ -116,7 +124,22 @@ export interface SessionContextDTO {
     contextWindow: number;
     percent: number | null;
   } | null;
+  /**
+   * Runtime run state (change: session-streaming-runtime, design D3).
+   *
+   * Carried on the context payload so a freshly loaded chat page knows whether a
+   * turn is already in flight (the phase-2 `session_snapshot` frame arrives only
+   * after the stream connects). Optional for forward compatibility.
+   */
+  run?: SessionRunState;
 }
+
+/**
+ * Runtime run state of a session (change: session-streaming-runtime).
+ *
+ * Defined in `@pi-agent-platform/shared-types` (single source of truth) and
+ * re-exported above; this file only declares the DTO that embeds it.
+ */
 
 /** One server in the platform MCP catalog (`~/.pi/server/mcp.json`). */
 export interface McpCatalogServerDTO {

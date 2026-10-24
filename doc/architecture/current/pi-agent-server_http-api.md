@@ -27,7 +27,7 @@
 | `/api/sessions/:id` | POST | 更新（title 走改名同步语义，见下）|
 | `/api/sessions/:id/archive` | POST | 归档（软删除：DB status='archived'，sessions row 保留，可从历史重开）|
 | `/api/sessions/:id/delete` | POST | **硬删除**：DB row + pi session 文件 + attachment 子目录全部级联清掉 |
-| `/api/sessions/:id/messages` | GET | 历史消息列表（master 直接读 `pi_session_path` jsonl 文件，不走 IPC）|
+| `/api/sessions/:id/messages` | GET | 历史消息列表（master 直接读 `pi_session_path` jsonl 文件，不走 IPC）；`?limit=&before=` 分页，见下 |
 | **`/api/sessions/:id/context`** | **GET** | **★ 统一 context 端点**(commands + models + session metadata + systemPrompt + contextUsage)|
 
 ## 会话交互（核心）
@@ -156,28 +156,53 @@ interface SessionContextDTO {
 | Worker pool 容量满 | API 返回 503 + `{ error, code: 'capacity_exceeded' }` |
 | 系统错误 | API 返回 500 + JSON |
 
+## 历史消息分页（`GET /api/sessions/:id/messages`）
+
+| 参数 | 说明 |
+|---|---|
+| （无） | **全量**（向后兼容：IDE / IM 等旧客户端语义不变） |
+| `limit` | 尾部窗口大小，默认 50，可选 1–200 |
+| `before` | 游标：返回**结束于**该行号的上一窗（上一页的 `nextBefore`） |
+
+响应新增（仅分页请求携带）：`hasMore: boolean`、`nextBefore: number`（下一页游标）。
+
+窗口选取：从文件尾**按行回溯**计数（用 `"type":"message"` 子串筛行，不 JSON.parse），只对窗口内的行完整解析；`messageCount` = 窗口内 message 行数。
+**页首对齐**：窗口起点向前回退到最近的 `user` 消息，保证一次工具调用的 call/result 不被切到两页；窗口内没有 user 消息时以窗口起点为页首（一串工具链是一整块不可分页单位）。
+
 ## SSE 协议
 
+事件分为三类：**连接/快照**、**消息增量**、**运行态**。
+
 ```
-event: message_update
-data: {"type":"message_update","delta":"..."}
+event: connected
+data: {"sessionId":"..."}
+
+event: session_snapshot                      ← 新连接首帧：权威运行态（刷新/重连后立刻知道是否在跑）
+data: {"run":{"status":"idle|running","startedAt":1234,"pendingSteer":0,"pendingFollowUp":0}}
+
+event: message_update                        ← 节流后的消息增量（worker 侧 60ms 合并）
+data: {"messageId":"...","role":"assistant","content":"...","blocks":[...],"usage":{...}}
 
 event: message_end
-data: {"type":"message_end","content":"..."}
+data: {"messageId":"...","role":"assistant","content":"...","usage":{...},"durationMs":1234}
 
 event: tool_call
-data: {"type":"tool_call","name":"read","args":{...}}
+data: {"messageId":"...","toolCalls":[{"id":"call_x","name":"read","args":{...}}]}
 
 event: tool_result
-data: {"type":"tool_result","output":"..."}
+data: {"toolCallId":"call_x","content":"...","isError":false,"durationMs":42}
 
-event: agent_end
-data: {"type":"agent_end"}
+event: agent_start / agent_end / agent_settled   ← 运行态三段：开始 / 本轮结束 / 完全静默
+data: {}
 
 event: session_disposed
-data: {"reason":"worker-death"}   ← session 对象终态（close/崩溃/超时/LRU/delete），随后**服务端关流**
+reason: worker-death                       ← session 对象终态（close/崩溃/超时/LRU/delete），随后**服务端关流**
 ```
 
+> **流式渲染契约**：`message_update` 是**累积式**的（worker 维护 running total，客户端直接覆盖而非追加）；`blocks` 可选，携带未闭合块的 `open` 标记，供客户端只重渲染未闭合块、其余命中缓存。
+>
+> **`run` 字段三处一致**：`session_snapshot` 帧、`GET /api/sessions/:id`、`GET /api/sessions/:id/context` 都带同一份 `run`；客户端以 SSE 帧为准、HTTP 为初值。
+>
 > `session_info_changed` **不出现在此流**——它是 master 内部消费事件（写 `sessions.title` 后过滤，见 `routes/events.ts`），客户端契约不变。
 >
 > **订阅与终态**（core-session-refactor）：订阅经 `Session.subscribe`（`track()` 锚定无 worker 对象，绝不因开流而 spawn）。worker 死 → registry dispose → 下发 `session_disposed` 后关流；客户端（原生 EventSource）**自动重连**并经 `track()` 挂到下一个 Session 对象，消息流恢复。

@@ -1,3 +1,16 @@
+/**
+ * Colour theme (light / dark) — single global preference.
+ *
+ * The palette lives in `style.css` (`:root` = light, `html[data-theme="dark"]` =
+ * dark), so applying a theme is one attribute on `<html>`. Everything else
+ * follows: components read CSS variables, Tailwind v4 exposes a `dark` variant
+ * via `@custom-variant dark`, `useMermaid` watches the same attribute through a
+ * MutationObserver, and `meta[name="theme-color"]` is kept in sync for the
+ * mobile browser chrome.
+ *
+ * Persistence: `localStorage['pi-agent-platform:theme']`; first visit follows the
+ * OS preference.
+ */
 import { ref, watch } from 'vue';
 
 type Theme = 'light' | 'dark';
@@ -27,6 +40,9 @@ export function useTheme() {
     theme,
     toggle: () => {
       theme.value = theme.value === 'light' ? 'dark' : 'light';
+    },
+    setTheme: (next: Theme) => {
+      theme.value = next;
     },
   };
 }

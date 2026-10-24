@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   MessageDeltaDTO,
+  MessageUsageDTO,
   MessageRole,
   RuntimeConfig,
   ToolCallDTO,
@@ -236,12 +237,103 @@ class DeltaAccumulator {
   }
 }
 
+/** How often coalesced `message_update` snapshots are flushed (change: session-streaming-runtime).
+ *  pi emits one `message_update` per provider chunk, each carrying the FULL accumulated
+ *  text, so forwarding them 1:1 costs O(n²) bytes and O(n²) client parse work.
+ *  Coalescing keeps only the newest snapshot per messageId inside this window. */
+const MESSAGE_UPDATE_FLUSH_MS = 60;
+
+/**
+ * Coalesces `message_update` deltas per messageId.
+ *
+ * Contract (spec `session-stream-protocol`): payloads stay "cumulative full text", so
+ * dropping intermediate snapshots loses nothing — the newest one already contains them.
+ * The FIRST delta of a message is sent immediately (no visible first-token delay) and
+ * every non-update event flushes the pending bucket first, so the last characters are
+ * never stuck behind the timer.
+ */
+class DeltaThrottle {
+  private pending = new Map<string, MessageDeltaDTO>();
+  private timer: NodeJS.Timeout | null = null;
+  /** messageIds whose first delta has already been sent. */
+  private started = new Set<string>();
+
+  constructor(private readonly send: (delta: MessageDeltaDTO) => void) {}
+
+  push(delta: MessageDeltaDTO): void {
+    if (!this.started.has(delta.messageId)) {
+      // First delta for this message: flush anything queued, then send right away.
+      this.started.add(delta.messageId);
+      this.flush();
+      this.send(delta);
+      return;
+    }
+    this.pending.set(delta.messageId, delta);
+    if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.flush();
+      }, MESSAGE_UPDATE_FLUSH_MS);
+    }
+  }
+
+  /** Send every queued snapshot now (order preserved per messageId). */
+  flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.pending.size === 0) return;
+    const queued = [...this.pending.values()];
+    this.pending.clear();
+    for (const delta of queued) this.send(delta);
+  }
+
+  /** Forget a finished message so a re-used id starts fresh again. */
+  release(messageId: string): void {
+    this.pending.delete(messageId);
+    this.started.delete(messageId);
+  }
+
+  /** Flush and drop the timer (called when the session is disposed). */
+  dispose(): void {
+    this.flush();
+  }
+}
+
+/**
+ * Extract pi-ai `Usage` into our DTO. Returns undefined when the message carries none
+ * (user / toolResult messages) so clients can distinguish "no data" from "zero cost".
+ */
+function extractUsage(raw: unknown): MessageUsageDTO | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const u = raw as Record<string, unknown>;
+  if (typeof u.input !== 'number' && typeof u.output !== 'number') return undefined;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const cost = (u.cost && typeof u.cost === 'object' ? u.cost : {}) as Record<string, unknown>;
+  return {
+    input: num(u.input),
+    output: num(u.output),
+    cacheRead: num(u.cacheRead),
+    cacheWrite: num(u.cacheWrite),
+    ...(typeof u.reasoning === 'number' ? { reasoning: u.reasoning } : {}),
+    totalTokens: num(u.totalTokens),
+    cost: {
+      input: num(cost.input),
+      output: num(cost.output),
+      cacheRead: num(cost.cacheRead),
+      cacheWrite: num(cost.cacheWrite),
+      total: num(cost.total),
+    },
+  };
+}
+
 /**
  * Convert a pi SDK event into a simplified delta DTO.
  * `stableMessageId` is the worker-assigned id kept across start/update/end for one message.
  * Returns null if the event carries no useful payload.
  */
-function toDelta(event: Record<string, unknown>, stableMessageId: string | null): { kind: WorkerEventKind; delta: MessageDeltaDTO } | null {
+function toDelta(event: Record<string, unknown>, stableMessageId: string | null, startedAt?: number | null): { kind: WorkerEventKind; delta: MessageDeltaDTO } | null {
   const type = event.type as string | undefined;
   if (!type) return null;
 
@@ -271,6 +363,9 @@ function toDelta(event: Record<string, unknown>, stableMessageId: string | null)
       // toolCall as failed on the toolResult message_end event without
       // subscribing to the separate `tool_result` SSE event.
       isError: typeof msg.isError === 'boolean' ? msg.isError : undefined,
+      // Usage is assistant-only in practice (pi-ai `Usage`); toolResult/user messages
+      // have none, so the field stays undefined rather than zero-filled.
+      usage: role === 'assistant' ? extractUsage(msg.usage) : undefined,
     };
   };
 
@@ -280,7 +375,12 @@ function toDelta(event: Record<string, unknown>, stableMessageId: string | null)
     case 'message_end': {
       const msg = (event.message as Record<string, unknown> | undefined) ?? {};
       const kind: WorkerEventKind = type === 'message_end' ? 'message_end' : 'message_update';
-      return { kind, delta: fromMessage(msg) };
+      const delta = fromMessage(msg);
+      // Wall-clock per-message duration, only meaningful once the message ends.
+      if (kind === 'message_end' && typeof startedAt === 'number') {
+        delta.durationMs = Math.max(0, Date.now() - startedAt);
+      }
+      return { kind, delta };
     }
     case 'tool_execution_start':
       return {
@@ -317,6 +417,8 @@ function toDelta(event: Record<string, unknown>, stableMessageId: string | null)
               args: {},
               result: extractText(toolResultContent),
               isError: Boolean((event as { isError?: unknown }).isError),
+              // pi measures `execute()` with a monotonic clock; absent when the tool never ran.
+              ...(typeof event.durationMs === 'number' ? { durationMs: event.durationMs } : {}),
             },
           ],
         },
@@ -762,6 +864,14 @@ export async function createSession(
   // Worker-assigned message ids (stable across start/update/end for one message).
   let messageCounter = 0;
   let currentMessageId: string | null = null;
+  /** Wall-clock start of the message being produced (for assistant `durationMs`). */
+  let messageStartedAt: number | null = null;
+
+  // Coalesce `message_update` at the source: one event stream feeds SSE *and* the IM
+  // gateway, so thinning here benefits every consumer (spec `session-stream-protocol`).
+  const throttle = new DeltaThrottle((delta) => {
+    emit({ event: 'message_update', data: delta });
+  });
 
   const unsubscribe = realSession.subscribe((event: unknown) => {
     const e = event as { type?: string; message?: { role?: string } };
@@ -778,6 +888,30 @@ export async function createSession(
       return;
     }
 
+    // Lifecycle events carry no message delta. Forwarded under pi's own names
+    // (agent_start / agent_settled) so clients get an authoritative
+    // running/idle signal instead of guessing from message events (design D2).
+    if (e.type === 'agent_start') {
+      messageStartedAt = Date.now();
+      throttle.flush();
+      emit({ event: 'agent_start', data: { startedAt: messageStartedAt } });
+      return;
+    }
+    if (e.type === 'agent_settled') {
+      messageStartedAt = null;
+      throttle.flush();
+      emit({
+        event: 'agent_settled',
+        data: { aborted: Boolean((e as { aborted?: boolean }).aborted) },
+      });
+      return;
+    }
+    // turn_start only refreshes the wall clock used for assistant `durationMs`.
+    if (e.type === 'turn_start') {
+      messageStartedAt = Date.now();
+      return;
+    }
+
     const mapped = mapEventType(e.type);
     if (!mapped) return;
 
@@ -791,22 +925,39 @@ export async function createSession(
     // Assign a fresh id on message_start; reuse it for update/end of the same message.
     if (e.type === 'message_start') {
       currentMessageId = `msg-${++messageCounter}`;
+      messageStartedAt = Date.now();
     }
 
-    const dto = toDelta(event as Record<string, unknown>, currentMessageId);
+    const dto = toDelta(event as Record<string, unknown>, currentMessageId, messageStartedAt);
     if (!dto) return;
 
     if (mapped === 'message_update') {
       acc.upsert(dto.delta.messageId, dto.delta);
+      throttle.push(dto.delta); // first delta immediate, rest coalesced
+      return;
     }
+
+    // Every other event is a flush boundary: queued text must reach the client
+    // before the event that closes it (no lost tail characters).
+    throttle.flush();
     if (mapped === 'message_end') {
       acc.finish(dto.delta.messageId);
+      throttle.release(dto.delta.messageId);
       currentMessageId = null;
     }
     emit({ event: mapped, data: dto.delta });
   });
 
-  const adapter = new PiSessionAdapter(realSession as unknown as AgentSessionLike, unsubscribe, runtime, takeoverState);
+  const adapter = new PiSessionAdapter(
+    realSession as unknown as AgentSessionLike,
+    () => {
+      // Flush pending snapshots before detaching so nothing is dropped on dispose.
+      throttle.dispose();
+      unsubscribe();
+    },
+    runtime,
+    takeoverState,
+  );
   const piPath = realSession.sessionManager.getSessionFile();
   if (!piPath) {
     throw new Error('pi SDK returned no session file path');

@@ -5,7 +5,11 @@
 :root {
   color-scheme: light;
   --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* Platform-guaranteed fallbacks: Windows ships Consolas, macOS ships
+     SFMono/Menlo/Monaco, most Linux distros ship DejaVu Sans Mono or Liberation
+     Mono. Nothing is bundled — every OS lands on its own native coding font. */
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SFMono-Regular", Menlo,
+    Monaco, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace;
   --bg: #f4f6f9;
   --surface: #ffffff;
   --surface-raised: #ffffff;
@@ -15,6 +19,7 @@
   --text-secondary: #58647a;
   --text-tertiary: #657188;
   --border: #dfe4ec;
+  --border-subtle: #e8ecf3;
   --border-strong: #cbd3df;
   --accent: #315fda;
   --accent-hover: #244fc3;
@@ -26,6 +31,8 @@
   --warning-soft: #fff4df;
   --danger: #c43d4f;
   --danger-hover: #a92f40;
+  /* Text sitting on a --danger fill (white passes AA on #c43d4f: 5.07:1). */
+  --on-error: #ffffff;
   --danger-soft: #fff0f2;
   --focus: #7ea0ff;
   --shadow-soft: 0 12px 30px -22px rgba(31, 45, 70, 0.42);
@@ -33,6 +40,19 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* Code surfaces: must read as "a different material" from the page, without
+     becoming a dark block on a white page. */
+  --code-bg: #e9eef6;
+  --code-inline-bg: #e2e8f2;
+  --code-border: #d9e0ea;
+  /* Syntax colours (highlight.js token classes, see the .hljs-* block below). */
+  --hl-key: #8b3ecb;
+  --hl-string: #0d7a42;
+  --hl-number: #b3550a;
+  --hl-comment: #7b8698;
+  --hl-builtin: #1c62c4;
+  --hl-attr: #b32f68;
+  --hl-meta: #5f6b7d;
   /* 顶栏高度契约：单行、不因导航项折行而变高（design.md D1） */
   --app-header-h: 56px;
 }
@@ -48,6 +68,7 @@ html[data-theme="dark"] {
   --text-secondary: #aeb9ca;
   --text-tertiary: #8591a5;
   --border: #293344;
+  --border-subtle: #212a39;
   --border-strong: #39465b;
   --accent: #7f9dff;
   --accent-hover: #9bb2ff;
@@ -59,10 +80,96 @@ html[data-theme="dark"] {
   --warning-soft: #3b2a14;
   --danger: #ff8291;
   --danger-hover: #ff9daa;
+  --on-error: #1a0b0f;
   --danger-soft: #421d25;
   --focus: #92acff;
   --shadow-soft: 0 16px 34px -24px rgba(0, 0, 0, 0.82);
   --shadow-raised: 0 30px 72px -34px rgba(0, 0, 0, 0.86);
+  --code-bg: #070b12;
+  --code-inline-bg: #1b2433;
+  --code-border: #232c3b;
+  --hl-key: #c792ea;
+  --hl-string: #79d493;
+  --hl-number: #f0b072;
+  --hl-comment: #6b7688;
+  --hl-builtin: #82aaff;
+  --hl-attr: #f78fb3;
+  --hl-meta: #93a0b4;
+}
+
+/* ---------------------------------------------------------------------------
+ * highlight.js tokens
+ * ---------------------------------------------------------------------------
+ * MarkdownView already runs highlight.js and emits `<span class="hljs-keyword">`
+ * etc.; without these rules the tokens have no colour at all (that was the
+ * "code blocks aren't highlighted" bug). Only the token classes actually used by
+ * the `common` bundle are styled here — no need to ship a full hljs theme.
+ */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-name {
+  color: var(--hl-key);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hl-number);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: var(--hl-builtin);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--hl-attr);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-pseudo {
+  color: var(--hl-builtin);
+}
+
+.hljs-meta,
+.hljs-params,
+.hljs-punctuation {
+  color: var(--hl-meta);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
 }
 
 * {

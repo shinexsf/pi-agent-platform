@@ -26,6 +26,25 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilities/registry.js';
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
+import type { SessionRunState } from '@pi-agent-platform/shared-types';
+
+/**
+ * Idle run state. Shared (frozen by convention) so responses for sessions without a
+ * live Session object — placeholder, worker dead, archived — report "idle" instead of
+ * omitting the field.
+ */
+export const IDLE_RUN_STATE: SessionRunState = Object.freeze({
+  status: 'idle',
+  startedAt: null,
+  pendingSteer: 0,
+  pendingFollowUp: 0,
+}) as SessionRunState;
+
+/** Current run state for a session id (copy — callers may embed it in a response). */
+export function runStateOf(sessionId: string): SessionRunState {
+  const live = registry?.get(sessionId);
+  return live ? { ...live.run } : { ...IDLE_RUN_STATE };
+}
 
 const logger = childLogger('session');
 
@@ -329,6 +348,14 @@ export class Session {
   piSessionPath?: string;
   /** Owning agent (set at spawn; resolves ctx.agentId for rowless placeholders). */
   agentId?: string;
+  /**
+   * Runtime run state (change: session-streaming-runtime).
+   *
+   * The single source of truth for "is a turn running right now": updated from the
+   * worker event stream in `deliver()` (below) and read by REST routes + the SSE
+   * `session_snapshot` frame. Never derived from the DB.
+   */
+  run: SessionRunState = { ...IDLE_RUN_STATE };
 
   private readonly listeners = new Map<(event: WorkerEvent) => void, ((reason: string) => void) | undefined>();
   private disposed = false;
@@ -375,6 +402,7 @@ export class Session {
    *  listener total — avoids EventEmitter max-listener churn). */
   deliver(event: WorkerEvent): void {
     if (this.disposed) return;
+    this.trackRunState(event);
     for (const [listener] of this.listeners) {
       try {
         listener(event);
@@ -384,10 +412,43 @@ export class Session {
     }
   }
 
+  /** Fold lifecycle events into `run` (see SessionRunState). */
+  private trackRunState(event: WorkerEvent): void {
+    switch (event.event) {
+      case 'agent_start': {
+        const startedAt = (event.data as { startedAt?: unknown } | undefined)?.startedAt;
+        this.run = {
+          ...this.run,
+          status: 'running',
+          startedAt: typeof startedAt === 'number' ? startedAt : Date.now(),
+        };
+        break;
+      }
+      case 'agent_settled':
+        // Authoritative end of a run: status back to idle, counters cleared.
+        this.run = { ...IDLE_RUN_STATE };
+        break;
+      case 'queue_update': {
+        const data = event.data as { steering?: unknown[]; followUp?: unknown[] } | undefined;
+        this.run = {
+          ...this.run,
+          pendingSteer: Array.isArray(data?.steering) ? data.steering.length : 0,
+          pendingFollowUp: Array.isArray(data?.followUp) ? data.followUp.length : 0,
+        };
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   /** Terminal state: notify every subscriber and clear them. */
   notifyDisposed(reason: string): void {
     if (this.disposed) return;
     this.disposed = true;
+    // A dead worker is never "running": force idle so clients never hang in a
+    // spinner waiting for a settle event that will not come.
+    this.run = { ...IDLE_RUN_STATE };
     for (const [, onDispose] of this.listeners) {
       try {
         onDispose?.(reason);

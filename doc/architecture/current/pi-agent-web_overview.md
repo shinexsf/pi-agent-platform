@@ -127,6 +127,54 @@ src/views/
 
 会话信息面板（`components/chat/SessionInfoModal.vue`，IDE 端 `apps/pi-agent-ide/src/components/SessionInfoModal.vue` 同构）按 `resources` 分区渲染：SKILLS / EXTENSIONS / TOOLS / **MCP**。MCP 区按 server 分组（`mcpServers`，工具多时默认收起，标题显示 `<server> N 工具（M 未加载）`）；TOOLS 区不出现 `mcp__*`，badge 语义：`builtin`（pi 核心工具与 codemode/tool_search）、扩展名（`mcp` / `npm:xxx`）、`platform`（worker 注册的 `sendFileToUser` 等）。`deferred` / `hidden` 工具默认折叠，可展开。
 
+### 对话页布局 v3（`session-streaming-runtime`）
+
+单会话单页、**桌面优先**（移动端不投入，未来由 App 接管）：
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 状态栏（整页宽、左右贴边；标题左、连接点/关闭右）          │ 48px
+├─────────────────────────────────────────────────────┤
+│                        ┌ 860px 内容列 ┐      ▏轨道   │
+│                        │ 消息流（滚动）│      ▏☰ 运行 │
+│                        │──────────────│      ▏◔ 上下文│
+│                        │ SteerSubBar  │      ▏ⓘ 信息 │
+│                        │ InputBox     │      ▏      │
+│                        └──────────────┘      ▏      │
+└─────────────────────────────────────────────────────┘
+```
+
+- **状态栏不受内容列约束**：`.chat-header` 横跨整页，内部 `.header-inner` **无 max-width**，元素贴左右边（原先误用 860 居中，会让标题不贴左、关闭钮不贴右）。
+- **内容列 860px**：`.messages-column` / `.chat-footer` / 抽屉槽三者对齐；输入框**停靠**在消息流底部（不是固定到视口底）。
+- **右侧 icon 轨道**（`.chat-rail`，`ChatView.vue` 内联）：绝对定位 `right:6px`、起始于状态栏下方、`opacity:.38`（非激活半透明）、hover 或展开时为 1；三个入口 = 运行状态 / 上下文 / 会话信息。
+- **抽屉**（`.chat-drawer`，同上内联）：默认 380px、`right:44px`（给轨道留槽）、覆盖在内容上方（**不挤压 860 读宽**）；`z-index` 轨道 30 > 抽屉 20，所以抽屉打开时仍能切 tab；关闭靠抽屉 ✕ 或再点同一轨道钮（不做遮罩：遮罩会盖住正文）。
+- **抽屉宽度可拖拽**：左边缘 6px `.drawer-resize` 手柄（`col-resize`），范围 280–760px，松手后写入 `localStorage['pi-agent:chat-drawer-width']`。
+- **会话信息在抽屉内渲染**（不再是 modal）：`SessionInfoModal.vue` 支持 `embedded` 属性——`embedded` 时只输出滚动内容，外壳/关闭钮/宽度由抽屉提供。
+- **运行态权威源**：`composables/useSessionRun.ts` + SSE `session_snapshot` / `agent_start` / `agent_settled` / `session_disposed`，`isRunning = run.running || sending`（`sending` 只是乐观 UI）。刷新页面即从快照恢复「停止」按钮与 typing 指示。
+
+### 工具卡片（`components/chat/tool-blocks/`）
+
+- 注册表 `registry.ts#resolveToolBlock(name)` → **按工具名**绑定卡片组件（`read`→ReadCard、`edit`→EditCard、`bash`/`shell`/`powershell`→BashCard、`grep`/`find`/`ls`→SearchCard、`write`→WriteCard、`fetch`/`web_*`→FetchCard）；无专用卡的回落 `DefaultCard`。**没有 kind 分类**——分类只对一方工具可知，三方工具和未来的用户脚本都只能按名字匹配（`mcp__*` 按前缀规则走 `DefaultCard`，名字原样展示，不拆命名空间）。
+- 共享卡壳 `ToolCard.vue` 负责：图标 + 工具名（mono）+ 单行摘要 + 耗时 + 状态胶囊；失败默认展开、流式强制展开、结算自动收起、手动开关 pinned；拖拽选择文字不触发折叠；工具返回的图片统一在卡下方渲染。
+- 卡片外观按原型：头部 `--surface-hover` 底 + 胶囊状态（`ok`/`bad`/`run`），正文 mono 12px 最高 340px 滚动，页脚 11.5px 细线分隔。
+- **各卡 body 不同**（这也是"按名分派"的意义）：`BashCard` 终端风（`$` 提示行 + 输出区 + 流式块光标）；`ReadCard` 行号行槽（pi 已自带行号时不自加，`[N more lines …]` 提示单独成行不占行号）；`SearchCard` 将 `path:line:snippet` 拆为文件/行号/片段三列；`EditCard` 统一 diff（`-` 红 / `+` 绿）并汇总 `-n +n`；`WriteCard` 新内容整段标绿；`FetchCard` = url + 文本输出；`DefaultCard` = 参数 + 结果原文。
+- 用量：`InputBox` 的 `.usage-chip` 展示最近一条 assistant 消息的 `usage`（`85↑ 17↓ · 16.9k cache`），历史回放无该字段→不显示。
+
+### 历史分页（`session-streaming-runtime`）
+
+`useSSE` 每次 `HISTORY_PAGE_SIZE=50` 拉最后一页（`?limit=`），滚到顶部（<120px）触发 `loadOlder()`（`?before=nextBefore`）；`MessageList` 用「scrollHeight/scrollTop 锚点」在 prepend 后复原阅读位置，顶部提示 `Loading earlier messages…` / `Scroll up to load earlier messages`。服务端分页契约见 [pi-agent-server_http-api.md](pi-agent-server_http-api.md)。
+
+### Mermaid 与 Markdown 渲染（`components/chat/MarkdownView.vue` + `composables/useMermaid.ts`）
+
+- **主题从 CSS 变量推导，不写死颜色**：`readTheme()` 读 `--bg-primary` / `--text-primary` / `--bg-secondary` / `--border`，派生出 mermaid 的 `surface0/1/2`、`text`、`subtext`、`line`、`accent`、`muted` 后写进 `themeVariables`；`data-mode` 变化即对全部图重新 `render`（切主题不用刷新），配色永远跟着界面走。
+- **`flowchart.htmlLabels: false`**：用 SVG `<text>` 而不是 `foreignObject`。JCEF / 离线环境下 `htmlLabels` 内部的 `<div>` 会把节点撑宽，导致布局和连线错位。
+- **`vector-effect: non-scaling-stroke`**（对所有 svg 图形元素）：缩放后 1px 连接线不会因亚像素而消失——这是「线不见了」最常见的真因。
+- **`.mermaid-canvas` 是无限画布**，不是缩放适配：图保持 intrinsic size，只用一个 `translate3d() scale()` 组合变换（高度按拟合尺寸写内联）。滚轮缩放 0.2–4（以光标为锚点）、拖拽平移、双击复位、点击激活（未激活时滚轮交还页面滚动）；`MessageList` 自己的滚轮劫持已加 `if (e.defaultPrevented) return` 守卫，否则一次滚轮会同时缩放图和滚列表。
+- **流式期间显示源码**：fence 未闭合时渲染 `<pre class="mermaid-src">`（可选中复制），闭合后才调 mermaid；状态由 `data-mermaid-state` 表达（`waiting` / `pending` / `rendering` / `ready` / `error`）。半截代码反复 render 会闪烁并报错。
+- **放大**：`Teleport` 到 body 的全屏面板，同样是无限画布（拖拽 + 滚轮 + 双指捏合），彻底不再有滚动条。
+- **Markdown 其余部分**：表格加边框 + 斑马纹、hljs token 颜色全部走主题变量、代码块用专用 `--code-bg`（不跟随正文 hover 色）。
+- **IDE SPA 是同一实现的副本**：`apps/pi-agent-ide/src/composables/useMermaid.ts` + `components/MarkdownView.vue` 里的 `.mermaid-*` 样式块，差异只有 CSS 变量（IDE 侧用 `--bg-primary` / `--text-primary` / `--border` / `--link`）。改 web 侧渲染逻辑时**必须同步 ide 侧**——历史上「web 修了 ide 没修」已经出现两次（工具滚轮、历史分页）。
+
 ## 组件结构
 
 ### 导航与外壳

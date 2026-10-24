@@ -78,8 +78,11 @@ onUnmounted(() => {
       :sending="sse.sending.value"
       :agent-id="agentId"
       :file-attachments-by-msg="sse.fileAttachmentsByMsg.value"
+      :has-more="sse.historyHasMore.value"
+      :loading-older="sse.loadingOlder.value"
       @retry="(text: string, aid: string) => sse.retry(text, aid)"
       @dismiss-error="(id: string) => sse.clearError(id)"
+      @load-older="sse.loadOlder"
     />
     <SteerSubBar
       :steering="sse.steeringQueue.value"

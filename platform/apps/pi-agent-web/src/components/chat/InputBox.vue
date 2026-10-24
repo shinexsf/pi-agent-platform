@@ -22,6 +22,7 @@
 import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import type { SlashCommand, ModelInfo } from '../../composables/useSSE'
 import { useSSE } from '../../composables/useSSE'
+import type { MessageUsageDTO } from '@pi-agent-platform/shared-types'
 import type { UploadedAttachment } from '../../composables/useAttachments'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import ModelSelector from './ModelSelector.vue'
@@ -48,6 +49,12 @@ const props = defineProps<{
   agentId: string
   disabled?: boolean
   sending: boolean
+  /**
+   * Usage of the latest assistant message (change: session-streaming-runtime, 9.4).
+   * Rendered as a compact `in/out · cache` chip ONLY when the worker reported it —
+   * history replay carries no usage, so the chip simply does not exist there.
+   */
+  usage?: MessageUsageDTO | null
   /** Per-tab attachment handler injected by App.vue (Option A — cache 直传). */
   attachmentsUploader: {
     uploadImage: (file: File) => Promise<UploadedAttachment | null>
@@ -608,29 +615,27 @@ onUnmounted(() => {
 <style scoped>
 .input-wrapper {
   position: relative;
-  /* 会话区背景现在是 --bg（浅灰），输入框用 --surface 白底才浮得出来、
-   * 像可输入的控件；之前是白卡片上的透明框。 */
+  /* Composer styled after the session-page prototype: a single rounded box
+     with a strong border, the textarea borderless inside it, and a solid
+     accent send button. */
   background: var(--surface);
-  /* 用 var(--border) 代替硬编码 #26282C（暗色灰 900）——后者在亮色白底
-   * 上像"贴了一条黑边"。hover 状态由 --border 自身的暗色 → 亮色变化
-   * 体现（IDE 注入的 light --border 是 #e1e4e8 → #d0d7de）。 */
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
   overflow: hidden;
-  min-height: 96px;
+  min-height: 92px;
   max-height: 360px;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  /* 底部贴边：只留 4px，输入框尽量靠近视口底部 */
-  margin: 8px 8px 4px;
-  transition: border-color 0.12s, background-color 0.12s;
+  margin: 8px 0 0;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 .input-wrapper:hover {
-  border-color: var(--text-secondary);
+  border-color: var(--text-tertiary);
 }
 .input-wrapper:focus-within {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .input-pills {
@@ -647,17 +652,21 @@ onUnmounted(() => {
   flex: 1;
   width: 100%;
   min-height: 60px; /* ~3 lines @ 20px line-height */
-  padding: 8px 10px 2px;
+  padding: 10px 12px 2px;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.55;
   resize: none;
   overflow-y: auto;
   display: block;
+}
+
+.input-textarea::placeholder {
+  color: var(--text-tertiary);
 }
 
 .input-textarea:disabled {
@@ -697,16 +706,15 @@ onUnmounted(() => {
 .input-toolbar {
   display: flex;
   align-items: center;
-  padding: 2px 8px 3px;
-  /* no border-top: toolbar visually merges with textarea above */
+  padding: 4px 10px 8px;
   flex-shrink: 0;
-  gap: 8px;
+  gap: 10px;
 }
 
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
 }
@@ -714,18 +722,21 @@ onUnmounted(() => {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .toolbar-icon-btn {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 3px;
+  font-size: 15px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
   line-height: 1;
 }
 .toolbar-icon-btn:hover {
@@ -740,35 +751,48 @@ onUnmounted(() => {
 .send-btn,
 .abort-btn,
 .steer-btn {
-  background: transparent;
-  color: var(--text-secondary);
   border: none;
-  padding: 4px 10px;
   cursor: pointer;
-  font-size: 13px;
-  border-radius: 4px;
+  border-radius: 8px;
   flex-shrink: 0;
+  display: grid;
+  place-items: center;
 }
-.send-btn:hover:not(:disabled),
-.abort-btn:hover,
-.steer-btn:hover {
-  color: var(--accent);
-  background: var(--surface-hover);
+
+.send-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 12px;
+  background: var(--accent);
+  color: #fff;
 }
+
+.send-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
 .send-btn:disabled {
-  opacity: 0.4;
+  background: var(--surface-hover);
+  color: var(--text-tertiary);
   cursor: not-allowed;
 }
+
 .abort-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 11px;
   color: var(--danger);
-  font-weight: 500;
-  padding: 4px 8px;
-  margin-left: -6px;  /* 抵消 toolbar 的 gap */
+  background: var(--danger-soft);
 }
+
 .steer-btn {
+  height: 30px;
+  padding: 0 8px;
+  font-size: 13px;
   color: var(--accent);
-  font-size: 14px;
-  padding: 4px 6px;
+  background: var(--accent-soft);
   position: relative;
 }
 .steer-btn:hover::after {

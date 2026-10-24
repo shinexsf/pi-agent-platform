@@ -60,6 +60,16 @@ function dispatchContext(ctx: SessionContextDTO) {
   }
 }
 
+/** Page size for `GET /:id/messages` (server clamps to 200). */
+const HISTORY_PAGE_SIZE = 50
+
+/** Shape of `GET /api/sessions/:id/messages` (tail window + paging metadata). */
+type MessagesPage = {
+  messages: MessageDTO[]
+  hasMore?: boolean
+  nextBefore?: number
+}
+
 export function useSSE(options: UseSSEOptions) {
   const bridge = useIdeBridge()
   const connected = ref(false)
@@ -340,11 +350,60 @@ export function useSSE(options: UseSSEOptions) {
     }
   }
 
+  // ---------- history paging (change: session-streaming-runtime, group 10) ----------
+  /** Cursor for the next (older) page; `null` when the first page is everything. */
+  const historyCursor = ref<number | null>(null)
+  const historyHasMore = ref(false)
+  const loadingOlder = ref(false)
+
+  async function fetchMessagePage(before?: number): Promise<MessagesPage | null> {
+    const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_SIZE) })
+    if (before !== undefined) qs.set('before', String(before))
+    try {
+      const res = await fetch(`/api/sessions/${options.sessionId}/messages?${qs.toString()}`)
+      if (!res.ok) return null
+      return (await res.json()) as MessagesPage
+    } catch (err) {
+      console.warn('[SSE] fetchMessagePage failed:', err)
+      return null
+    }
+  }
+
+  /**
+   * Prepend one older page (scroll-up paging).
+   *
+   * Each page is merged on its own before prepending: the server aligns page
+   * starts to a user message, so a call/result pair is never split across pages.
+   */
+  async function loadOlder() {
+    if (!historyHasMore.value || loadingOlder.value) return
+    const cursor = historyCursor.value
+    if (cursor === null) return
+    loadingOlder.value = true
+    try {
+      const data = await fetchMessagePage(cursor)
+      if (!data) return
+      historyHasMore.value = data.hasMore === true
+      historyCursor.value = typeof data.nextBefore === 'number' ? data.nextBefore : null
+      messages.value = [...mergeToolResultsIntoCalls(data.messages), ...messages.value]
+    } finally {
+      loadingOlder.value = false
+    }
+  }
+
+  /**
+   * Load the newest page (tail window) and remember the cursor for older ones.
+   * The server returns `hasMore` + `nextBefore`; the IDE used to ignore both and
+   * fetch without `limit`, so a long session silently showed only its last 50
+   * messages with no way to reach the rest.
+   */
   async function loadHistory() {
     try {
-      const res = await fetch(`/api/sessions/${options.sessionId}/messages`)
+      const res = await fetch(`/api/sessions/${options.sessionId}/messages?limit=${HISTORY_PAGE_SIZE}`)
       if (!res.ok) return
-      const data = (await res.json()) as { messages: MessageDTO[] }
+      const data = (await res.json()) as MessagesPage
+      historyHasMore.value = data.hasMore === true
+      historyCursor.value = typeof data.nextBefore === 'number' ? data.nextBefore : null
       // Merge standalone toolResult messages into their parent assistant's
       // matching toolCall, then drop the toolResult entries. Mirrors
       // mergeToolResultToAssistant used in the streaming path.
@@ -625,10 +684,13 @@ export function useSSE(options: UseSSEOptions) {
     streamingBehavior,
     contextCache,
     fileAttachmentsByMsg,
+    historyHasMore,
+    loadingOlder,
     // methods
     subscribe,
     unsubscribe,
     loadHistory,
+    loadOlder,
     loadContext,
     loadAgentDefaults,
     registerContextHandler,

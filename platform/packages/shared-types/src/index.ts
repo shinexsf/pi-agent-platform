@@ -272,6 +272,24 @@ export interface SessionDTO {
   worker: WorkerSummary | null;
   /** Runtime model provider (e.g. "anthropic"). Together with `model`, fully identifies the runtime model. */
   currentProvider?: string;
+  /**
+   * Runtime run state (change: session-streaming-runtime).
+   *
+   * Server query endpoints (list / get / context) always populate this; it is declared
+   * optional so row-shaped responses from other endpoints stay valid.
+   */
+  run?: SessionRunState;
+}
+
+/** Authoritative "is a turn running right now" signal, maintained server-side. */
+export interface SessionRunState {
+  status: 'idle' | 'running';
+  /** Epoch ms when the current run started; null when idle. */
+  startedAt: number | null;
+  /** Steering messages queued for the current run. */
+  pendingSteer: number;
+  /** Follow-up messages queued for the current run. */
+  pendingFollowUp: number;
 }
 
 // ---------- Message ----------
@@ -285,6 +303,12 @@ export interface ToolCallDTO {
   /** Tool execution result, flattened to string (text blocks joined). */
   result?: string;
   isError?: boolean;
+  /**
+   * Tool execution wall time in ms, from pi's monotonic `tool_execution_end.durationMs`.
+   * Undefined for history replay (the JSONL does not store it) — clients MUST render
+   * "no data" rather than 0.
+   */
+  durationMs?: number;
   /** Image blocks attached to a toolResult message (e.g. read-tool returned an image).
    *  Carried onto the assistant's toolCall via `mergeToolResultsIntoCalls` in useSSE.
    *  Distinct from user-pasted images (which live on the assistant's sibling user message),
@@ -324,6 +348,35 @@ export interface MessageDTO {
    *  Same shape for both paths — single render path in `<MessageItem>` / `<ImageGrid>`. */
   images?: Array<{ mimeType: string; data: string; sha256?: string }>;
   timestamp: number; // epoch ms
+  /**
+   * Model usage for this assistant message (change: session-streaming-runtime).
+   * Realtime stream only: history replay leaves it undefined (pi's JSONL does not
+   * carry usage), and clients MUST NOT be fed a zero-filled placeholder.
+   */
+  usage?: MessageUsageDTO;
+  /**
+   * Wall-clock duration of this assistant message (epoch delta from message start
+   * to message end). Realtime only; undefined for history replay.
+   */
+  durationMs?: number;
+}
+
+/** Model usage/segment costs reported by pi-ai (`Usage`). */
+export interface MessageUsageDTO {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Thinking tokens (subset of `output`); undefined when the provider doesn't report it. */
+  reasoning?: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
 }
 
 /** Lightweight DTO sent over SSE for incremental updates.
@@ -348,6 +401,10 @@ export interface MessageDeltaDTO {
    *  toolCall as failed without subscribing to the separate `tool_result`
    *  SSE event. Undefined for non-toolResult messages. */
   isError?: boolean;
+  /** Model usage for this assistant message (realtime stream only). */
+  usage?: MessageUsageDTO;
+  /** Wall-clock duration of this assistant message in ms (set on `message_end`). */
+  durationMs?: number;
 }
 
 // ---------- RuntimeConfig (used by worker to create pi AgentSession) ----------

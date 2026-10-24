@@ -52,9 +52,9 @@ const ringOffset = computed<string>(() => {
 const ringColor = computed<string>(() => {
   const u = usage.value
   if (!u || u.percent === null) return 'var(--text-secondary)'
-  if (u.percent >= 90) return 'var(--tool-error-text, #b71c1c)'
-  if (u.percent >= 70) return 'var(--tool-running-text, #e65100)'
-  return 'var(--user-bubble-bg, #3577E9)'
+  if (u.percent >= 90) return 'var(--danger)'
+  if (u.percent >= 70) return 'var(--warning)'
+  return 'var(--accent)'
 })
 
 // ── Tooltip ──
@@ -266,8 +266,8 @@ onBeforeUnmount(() => {
 .context-tip {
   position: fixed;
   transform: translate(-50%, -100%);
-  background: var(--bg-primary, #1f2125);
-  border: 1px solid var(--border, #3a3d42);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px 10px;
   font-size: 11px;
@@ -284,7 +284,7 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   margin-bottom: 4px;
   padding-bottom: 4px;
-  border-bottom: 1px solid var(--border, #3a3d42);
+  border-bottom: 1px solid var(--border);
 }
 
 .context-tip-row {
@@ -304,6 +304,6 @@ onBeforeUnmount(() => {
 }
 
 .context-tip-warn {
-  color: var(--tool-error-text, #e5484d);
+  color: var(--danger);
 }
 </style>

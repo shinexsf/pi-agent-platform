@@ -9,11 +9,15 @@ const props = defineProps<{
   sending?: boolean
   agentId?: string
   fileAttachmentsByMsg?: Map<string, Array<{ attId: string; name: string; type: string }>>
+  /** Older pages still exist server-side (change: session-streaming-runtime, 10.5). */
+  hasMore?: boolean
+  loadingOlder?: boolean
 }>()
 
 const emit = defineEmits<{
   retry: [userMessageText: string, agentId: string]
   dismissError: [messageId: string]
+  loadOlder: []
 }>()
 
 const messagesEl = ref<HTMLElement | null>(null)
@@ -25,16 +29,47 @@ const autoScroll = ref(true)
  *  scroll in the direction the wheel / trackpad pushes. */
 const SCROLL_LINES_PER_TICK = 5
 
+/** Distance from the top under which we start pulling the previous page. */
+const LOAD_OLDER_THRESHOLD = 120
+
+/**
+ * Scroll anchor for prepended pages: without it, every older page would shift the
+ * content the user is reading down by its own height (jumpy history).
+ */
+let prependAnchor: { height: number; top: number } | null = null
+
 function onScroll() {
   const el = messagesEl.value
   if (!el) return
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
   autoScroll.value = distance < 50
+  if (el.scrollTop < LOAD_OLDER_THRESHOLD && props.hasMore && !props.loadingOlder) {
+    prependAnchor = { height: el.scrollHeight, top: el.scrollTop }
+    emit('loadOlder')
+  }
 }
+
+/** After a prepend, keep the previously visible content at the same offset. */
+watch(
+  () => props.messages.length,
+  () => {
+    const el = messagesEl.value
+    if (!el || !prependAnchor) return
+    const anchor = prependAnchor
+    prependAnchor = null
+    nextTick(() => {
+      el.scrollTop = el.scrollHeight - anchor.height + anchor.top
+    })
+  },
+)
 
 function onWheel(e: WheelEvent) {
   const el = messagesEl.value
   if (!el) return
+  // A child already consumed the wheel (e.g. a mermaid diagram in zoom mode):
+  // respect it, otherwise the list scrolls by deltaY * SCROLL_LINES_PER_TICK and
+  // fights the child for the same gesture.
+  if (e.defaultPrevented) return
   // If the wheel target is inside a scrollable child (e.g. .tool-result-block,
   // .arg-value-expanded, <pre>), let the browser handle it natively so the
   // inner scrollable gets the wheel event. Only intercept when the outer
@@ -114,6 +149,8 @@ watch(
       <!-- 内容列：768 居中限宽（可读宽度不变）；滚动容器本身全宽，
            所以滚动条紧贴窗口右缘而不是长在内容列边上。 -->
       <div class="messages-column">
+        <div v-if="loadingOlder" class="loading-older">Loading earlier messages…</div>
+        <div v-else-if="hasMore" class="load-older-hint">Scroll up to load earlier messages</div>
         <div v-if="messages.length === 0" class="empty-state">
           Send a message to start the conversation.
         </div>
@@ -141,6 +178,14 @@ watch(
 </template>
 
 <style scoped>
+.loading-older,
+.load-older-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  padding: 8px 0 10px;
+}
+
 .message-list-wrapper {
   position: relative;
   flex: 1;
@@ -160,7 +205,7 @@ watch(
 /* 消息内容列 —— 768 居中，行宽与输入框一致；原 .message-list 的 padding 移到这里 */
 .messages-column {
   width: 100%;
-  max-width: 768px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 12px 16px;
   display: flex;

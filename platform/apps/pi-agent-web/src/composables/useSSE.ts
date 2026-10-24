@@ -19,6 +19,7 @@
 import { ref, computed } from 'vue'
 import type { MessageDTO, MessageDeltaDTO } from '@pi-agent-platform/shared-types'
 import type { SessionContextDTO, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types'
+import { useSessionRun, type SessionSnapshotFrame } from './useSessionRun'
 
 export interface UseSSEOptions {
   sessionId: string
@@ -51,6 +52,9 @@ export interface ErrorContext {
 // ThinkingSelector) need to subscribe to the same context independently. Each
 // useSSE() call returns a thin wrapper around these shared refs.
 const contextCache = ref<SessionContextDTO | null>(null)
+
+/** Page size for `GET /:id/messages` (server clamps to 200). */
+const HISTORY_PAGE_SIZE = 50
 const contextHandlers = new Map<ContextField, (value: any, ctx: SessionContextDTO) => void>()
 
 function dispatchContext(ctx: SessionContextDTO) {
@@ -68,6 +72,13 @@ export function useSSE(options: UseSSEOptions) {
   // ── Steer mode (per D8 / C2: only 'steer'; no follow-up) ──
   const steeringQueue = ref<string[]>([])
   const streamingBehavior = ref<'steer'>('steer')
+
+  /**
+   * Authoritative run state (change: session-streaming-runtime). Fed by
+   * `session_snapshot` / `agent_start` / `agent_settled` / `session_disposed`.
+   * `sending` below stays as optimistic UI; when both are known this wins.
+   */
+  const run = useSessionRun()
 
   // ── Pending user message dedup (multi-device support) ──
   // When user sends from this client, we optimistically append a user bubble
@@ -123,6 +134,11 @@ export function useSSE(options: UseSSEOptions) {
       if (delta.stopReason) existing.stopReason = delta.stopReason
       if (delta.toolCallId) existing.toolCallId = delta.toolCallId
       if (delta.toolName) existing.toolName = delta.toolName
+      // Usage / wall time arrive only on the live stream (pi's JSONL does not
+      // persist them), so they are copied onto the message here rather than in
+      // the history path (9.1 / 9.4 render only when present).
+      if (delta.usage) existing.usage = delta.usage
+      if (typeof delta.durationMs === 'number') existing.durationMs = delta.durationMs
     } else {
       const msg: MessageDTO = {
         id: delta.messageId,
@@ -136,6 +152,8 @@ export function useSSE(options: UseSSEOptions) {
         model: delta.model,
         provider: delta.provider,
         stopReason: delta.stopReason,
+        usage: delta.usage,
+        durationMs: delta.durationMs,
         timestamp: Date.now(),
       }
       messages.value.push(msg)
@@ -159,6 +177,11 @@ export function useSSE(options: UseSSEOptions) {
           } else if (delta.toolCalls?.[0] && typeof delta.toolCalls[0].isError === 'boolean') {
             tc.isError = delta.toolCalls[0].isError
           }
+          // Tool wall time rides on the tool_result delta (9.1). The whole
+          // toolCalls array is also copied below when the worker sends it.
+          if (typeof delta.durationMs === 'number') tc.durationMs = delta.durationMs
+          const incoming = delta.toolCalls?.find((t) => t.id === delta.toolCallId)
+          if (incoming && typeof incoming.durationMs === 'number') tc.durationMs = incoming.durationMs
           return
         }
       }
@@ -284,6 +307,38 @@ export function useSSE(options: UseSSEOptions) {
       clearConnectionError()
     })
 
+    // Run-state frames (change: session-streaming-runtime). The server writes one
+    // snapshot right after `connected`, so a mid-run page load learns the state
+    // without relying on the context fetch having landed first.
+    eventSource.addEventListener('session_snapshot', (e) => {
+      try {
+        run.applySnapshot(JSON.parse((e as MessageEvent).data) as SessionSnapshotFrame)
+      } catch (err) {
+        console.error('[SSE] failed to parse session_snapshot:', err)
+      }
+    })
+
+    eventSource.addEventListener('agent_start', (e) => {
+      let startedAt: number | undefined
+      try {
+        startedAt = (JSON.parse((e as MessageEvent).data) as { startedAt?: number }).startedAt
+      } catch {
+        /* payload is optional */
+      }
+      run.markStart(startedAt)
+    })
+
+    eventSource.addEventListener('agent_settled', () => {
+      run.markSettled()
+      sending.value = false
+    })
+
+    eventSource.addEventListener('session_disposed', () => {
+      // Worker gone: never leave the UI claiming a run is active.
+      run.markDisposed()
+      sending.value = false
+    })
+
     eventSource.addEventListener('message_update', (e) => {
       try {
         const delta: MessageDeltaDTO = JSON.parse((e as MessageEvent).data)
@@ -324,6 +379,10 @@ export function useSSE(options: UseSSEOptions) {
       try {
         const data = JSON.parse((e as MessageEvent).data) as { steering?: string[]; followUp?: string[] }
         steeringQueue.value = data.steering ?? []
+        run.setPending({
+          steer: data.steering?.length ?? 0,
+          followUp: data.followUp?.length ?? 0,
+        })
       } catch (err) {
         console.error('[SSE] failed to parse queue_update:', err)
       }
@@ -354,11 +413,35 @@ export function useSSE(options: UseSSEOptions) {
     }
   }
 
+  // ---------- history paging (change: session-streaming-runtime, group 10) ----------
+  /** Cursor for the next (older) page; `null` when the first page is everything. */
+  const historyCursor = ref<number | null>(null)
+  const historyHasMore = ref(false)
+  const loadingOlder = ref(false)
+
+  async function fetchMessagePage(before?: number): Promise<{
+    messages: MessageDTO[]
+    hasMore?: boolean
+    nextBefore?: number
+  } | null> {
+    const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_SIZE) })
+    if (before !== undefined) qs.set('before', String(before))
+    try {
+      const res = await fetch(`/api/sessions/${options.sessionId}/messages?${qs.toString()}`)
+      if (!res.ok) return null
+      return (await res.json()) as { messages: MessageDTO[]; hasMore?: boolean; nextBefore?: number }
+    } catch (err) {
+      console.warn('[SSE] fetchMessagePage failed:', err)
+      return null
+    }
+  }
+
   async function loadHistory() {
     try {
-      const res = await fetch(`/api/sessions/${options.sessionId}/messages`)
-      if (!res.ok) return
-      const data = (await res.json()) as { messages: MessageDTO[] }
+      const data = await fetchMessagePage()
+      if (!data) return
+      historyHasMore.value = data.hasMore === true
+      historyCursor.value = typeof data.nextBefore === 'number' ? data.nextBefore : null
       // Merge standalone toolResult messages into their parent assistant's
       // matching toolCall, then drop the toolResult entries. Mirrors
       // mergeToolResultToAssistant used in the streaming path.
@@ -377,6 +460,33 @@ export function useSSE(options: UseSSEOptions) {
       }
     } catch (err) {
       console.warn('[SSE] loadHistory failed:', err)
+    }
+  }
+
+  /**
+   * Load one older page and prepend it (scroll-up paging, 10.5).
+   *
+   * Each page is merged on its own before prepending: the server aligns page
+   * starts to a user message, so a call/result pair is never split across pages,
+   * and already-merged messages are not re-merged.
+   */
+  async function loadOlder(): Promise<void> {
+    if (loadingOlder.value || !historyHasMore.value || historyCursor.value === null) return
+    loadingOlder.value = true
+    try {
+      const data = await fetchMessagePage(historyCursor.value)
+      if (!data) return
+      const older = mergeToolResultsIntoCalls(data.messages)
+      messages.value = [...older, ...messages.value]
+      historyHasMore.value = data.hasMore === true
+      historyCursor.value = typeof data.nextBefore === 'number' ? data.nextBefore : null
+      for (const msg of older) {
+        if (msg.role === 'user' && msg.content?.includes('<file ') && !msg.images?.length && !fileAttachmentsByMsg.value.has(msg.id)) {
+          fetchUserMessageAttachments(msg)
+        }
+      }
+    } finally {
+      loadingOlder.value = false
     }
   }
 
@@ -435,6 +545,9 @@ export function useSSE(options: UseSSEOptions) {
       if (!res.ok) throw new Error(`context ${res.status}`)
       const data = (await res.json()) as SessionContextDTO
       contextCache.value = data
+      // Seed run state from the payload (covers the reload-mid-run case before the
+      // SSE snapshot lands — the two agree, so applying both is idempotent).
+      run.applyContextRun(data.run)
       dispatchContext(data)
     } catch (err) {
       console.warn('[SSE] loadContext failed:', err)
@@ -639,10 +752,15 @@ export function useSSE(options: UseSSEOptions) {
     streamingBehavior,
     contextCache,
     fileAttachmentsByMsg,
+    /** Authoritative run state (see useSessionRun). */
+    run,
+    historyHasMore,
+    loadingOlder,
     // methods
     subscribe,
     unsubscribe,
     loadHistory,
+    loadOlder,
     loadContext,
     loadAgentDefaults,
     registerContextHandler,

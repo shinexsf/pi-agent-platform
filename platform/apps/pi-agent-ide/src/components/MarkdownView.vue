@@ -97,7 +97,7 @@ const {
   zoom: mermaidZoom,
   zoomScale: mermaidZoomScale,
   zoomPercent: mermaidZoomPercent,
-  zoomWidth: mermaidZoomWidth,
+  zoomStage: mermaidZoomStage,
   closeZoom: closeMermaidZoom,
   zoomIn: mermaidZoomIn,
   zoomOut: mermaidZoomOut,
@@ -174,8 +174,9 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
         <div class="mermaid-zoom-body">
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div
+            ref="mermaidZoomStage"
             class="mermaid-zoom-stage"
-            :style="{ width: mermaidZoomWidth }"
+            title="拖拽移动 · 滚轮缩放 · 双击复位"
             v-html="mermaidZoom?.svg ?? ''"
           />
         </div>
@@ -324,14 +325,58 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
   background: var(--hover-bg);
 }
 .markdown-body :deep(.mermaid-canvas) {
-  display: flex;
-  justify-content: center;
-  overflow-x: auto;
-  cursor: zoom-in;
+  /* Infinite canvas: the diagram keeps its intrinsic size and is moved by a
+     transform, so nothing is ever shrunk below its designed size (that is what
+     used to render 14px labels at 5px and eat 1px connectors). No scrollbars —
+     drag to pan, wheel to zoom, double-click to re-fit. Height is set inline by
+     the renderer from the fitted size. */
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: pan-y;
+  border-radius: 4px;
+}
+.markdown-body :deep(.mermaid-canvas[data-dragging='true']) {
+  cursor: grabbing;
 }
 .markdown-body :deep(.mermaid-canvas svg) {
-  max-width: 100%;
+  max-width: none;
+  width: auto;
   height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* Without this a 1px connector becomes sub-pixel when the SVG is scaled down and
+   simply disappears — the classic "lines are missing" mermaid symptom. */
+.markdown-body :deep(.mermaid-canvas svg path),
+.markdown-body :deep(.mermaid-canvas svg line),
+.markdown-body :deep(.mermaid-canvas svg polyline),
+.markdown-body :deep(.mermaid-canvas svg rect),
+.markdown-body :deep(.mermaid-canvas svg polygon),
+.markdown-body :deep(.mermaid-canvas svg circle),
+.markdown-body :deep(.mermaid-canvas svg ellipse),
+.markdown-body :deep(.mermaid-zoom-stage svg path),
+.markdown-body :deep(.mermaid-zoom-stage svg line),
+.markdown-body :deep(.mermaid-zoom-stage svg polyline) {
+  vector-effect: non-scaling-stroke;
+}
+/* Streaming: show the source (readable, copyable) instead of an empty box. */
+.markdown-body :deep(.mermaid-block[data-mermaid-state='waiting'] .mermaid-canvas) {
+  display: none;
+}
+.markdown-body :deep(.mermaid-block[data-mermaid-state='waiting'] .mermaid-src) {
+  display: block;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.75;
 }
 /* Keep a stable footprint while the diagram is still pending/rendering so the
    message doesn't jump when the SVG lands (streaming tail). */
@@ -455,23 +500,32 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
 }
 .mermaid-zoom-body {
   flex: 1;
-  overflow: auto;
-  padding: 16px;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
 }
 .mermaid-zoom-stage {
-  /* width is driven inline (naturalWidth x scale); growing the box — rather
-     than transform: scale — keeps the overflow scrollable to every edge.
-     `margin: 0 auto` centres while it fits and collapses to 0 once it doesn't
-     (a flex `justify-content: center` would clip the left edge permanently). */
-  margin: 0 auto;
-  transition: width 0.12s ease-out;
+  /* Infinite canvas: fills the panel, pans by drag, zooms by wheel. No
+     scrollbars and no inline sizing — the SVG keeps its intrinsic size and only
+     a transform moves it. */
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  border-radius: 6px;
+  background: var(--hover-bg);
+}
+.mermaid-zoom-stage[data-dragging='true'] {
+  cursor: grabbing;
 }
 .mermaid-zoom-stage :deep(svg) {
   /* !important is required: mermaid stamps `style="max-width: <natural>px"`
      inline on the <svg>, which otherwise wins over any stylesheet rule. */
-  width: 100% !important;
   max-width: none !important;
-  height: auto;
-  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 </style>

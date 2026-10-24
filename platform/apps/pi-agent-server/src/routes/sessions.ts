@@ -18,7 +18,7 @@ import type { WorkerPool } from '../worker-pool.js';
 import type { AttachmentStore } from '../services/attachment-store.js';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo, SessionInfoDTO } from '@pi-agent-platform/api-types';
 import { listAvailableModels } from '../model-registry.js';
-import { sessionRegistry } from '../services/session.js';
+import { sessionRegistry, runStateOf } from '../services/session.js';
 import { renameSession as renameSessionOp } from '../services/session-ops.js';
 import { resolvePrompt } from '../prompt-resolver.js';
 import { normalizePath } from '../utils/normalize-path.js';
@@ -68,7 +68,7 @@ export function createSessionsRouter(
         // The Session object is the authority for the runtime value (worker
         // alive ⇒ tracked; dead ⇒ disposed ⇒ row value below, same as before).
         const thinkingLevel = sessionRegistry().get(s.id)?.thinkingLevel ?? s.thinkingLevel ?? null;
-        return { ...s, worker: workerPool.toSummary(s.id), thinkingLevel };
+        return { ...s, worker: workerPool.toSummary(s.id), thinkingLevel, run: runStateOf(s.id) };
       });
       return c.json({ sessions: list, total, page, pageSize });
   });
@@ -79,7 +79,7 @@ export function createSessionsRouter(
     const session = sessionRepo.get(id);
     if (!session) return c.json({ error: 'Session not found' }, 404);
     const agent = agentRepo.get(session.agentId);
-    return c.json({ ...session, agentName: agent?.name ?? null, worker: workerPool.toSummary(id) });
+    return c.json({ ...session, agentName: agent?.name ?? null, worker: workerPool.toSummary(id), run: runStateOf(id) });
   });
 
   // GET /api/sessions/:id/context — unified context endpoint.
@@ -117,6 +117,8 @@ export function createSessionsRouter(
         currentModel: computeCurrentModel(session, live?.model),
         currentThinkingLevel: computeCurrentThinkingLevel(session, live?.thinkingLevel),
         contextUsage: contextUsage ?? null,
+        // Run state for the context endpoint (see SessionRunState).
+        run: runStateOf(id),
         // Cached at createSession time (see cacheSystemPrompt in services/session)
         // on the Session object. Avoids re-fetching the full system prompt string
         // over IPC on every context call.
@@ -134,6 +136,7 @@ export function createSessionsRouter(
       currentModel: computeCurrentModel(session, null),
       currentThinkingLevel: computeCurrentThinkingLevel(session, null),
       contextUsage: null,
+      run: runStateOf(id),
     });
   });
 
@@ -216,6 +219,54 @@ export function createSessionsRouter(
       const content = await fs.readFile(session.piSessionPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
+      // ---------- paging (change: session-streaming-runtime, group 10) ----------
+      // `limit` alone  → tail window (the LAST `limit` entries + page-start alignment)
+      // `before=<idx>` → the window ending at that cursor (scroll-up paging)
+      // neither        → full response (back-compat for IDE / IM consumers)
+      const rawLimit = c.req.query('limit');
+      const rawBefore = c.req.query('before');
+      const paging = rawLimit !== undefined || rawBefore !== undefined;
+      const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : NaN;
+      const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 200) : 50;
+      const beforeIdx = rawBefore ? Number.parseInt(rawBefore, 10) : NaN;
+      const endExclusive = Number.isFinite(beforeIdx)
+        ? Math.min(Math.max(beforeIdx, 0), lines.length)
+        : lines.length;
+
+      // A line is a message entry when pi wrote a `message` record on it. The
+      // substring test is far cheaper than JSON.parse and is only used to pick the
+      // window; window lines are still parsed properly below.
+      const isMessageLine = (line: string): boolean => line.includes('"type":"message"');
+
+      let startIdx = 0;
+      let hasMore = false;
+      if (paging) {
+        let collected = 0;
+        let i = endExclusive - 1;
+        for (; i >= 0; i -= 1) {
+          const line = lines[i];
+          if (line === undefined || !isMessageLine(line)) continue;
+          collected += 1;
+          if (collected >= limit) break;
+        }
+        startIdx = Math.max(i, 0);
+        // 10.3: a page must not start inside a call/result pair, so back up to the
+        // nearest user message. If the window holds no user message the window start
+        // stays as-is (a long tool chain is one unbreakable page).
+        let aligned = -1;
+        for (let j = startIdx - 1; j >= 0; j -= 1) {
+          const line = lines[j];
+          if (line !== undefined && isMessageLine(line) && line.includes('"role":"user"')) {
+            aligned = j;
+            break;
+          }
+        }
+        if (aligned >= 0) startIdx = aligned;
+        hasMore = startIdx > 0;
+      }
+
+      const windowLines = paging ? lines.slice(startIdx, endExclusive) : lines;
+
       const messages: Array<{
         id: string;
         parentId?: string;
@@ -233,7 +284,7 @@ export function createSessionsRouter(
         timestamp: number;
       }> = [];
 
-      for (const line of lines) {
+      for (const line of windowLines) {
         try {
           const entry = JSON.parse(line) as {
             type?: string;
@@ -367,8 +418,11 @@ export function createSessionsRouter(
 
       return c.json({
         sessionId: id,
-        messageCount: messages.length,
+        messageCount: paging ? windowLines.filter(isMessageLine).length : messages.length,
         messages,
+        // Paging metadata: `hasMore` + the cursor to pass as `before` for the
+        // next (older) page. Absent on full responses so old clients are unaffected.
+        ...(paging && { hasMore, nextBefore: startIdx }),
       });
     } catch (err) {
       const e = err as NodeJS.ErrnoException;

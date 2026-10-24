@@ -14,7 +14,31 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
+import type { SessionRunState } from '@pi-agent-platform/shared-types';
 import { sessionRegistry } from '../services/session.js';
+import type { Session } from '../services/session.js';
+
+/**
+ * `session_snapshot` payload: the run-state subset a late subscriber needs.
+ * Deliberately does NOT include the in-flight message body — replaying a partial
+ * stream is out of scope (see proposal Non-goals).
+ */
+interface SessionSnapshotData {
+  running: boolean;
+  startedAt: number | null;
+  pendingSteer: number;
+  pendingFollowUp: number;
+}
+
+function snapshotOf(session: Session): SessionSnapshotData {
+  const run: SessionRunState = session.run;
+  return {
+    running: run.status === 'running',
+    startedAt: run.startedAt,
+    pendingSteer: run.pendingSteer,
+    pendingFollowUp: run.pendingFollowUp,
+  };
+}
 
 export function createEventsRouter() {
   const router = new Hono();
@@ -51,6 +75,10 @@ export function createEventsRouter() {
           // Terminal: tell the client, then close so EventSource reconnects.
           // Guarded — the stream may already be gone (client aborted first).
           try {
+            // A dead worker cannot be running: clear the client's run state before
+            // closing, otherwise a reconnecting client would re-learn idle only
+            // from the next snapshot.
+            void stream.writeSSE({ event: 'session_snapshot', data: JSON.stringify(snapshotOf(session)) });
             void stream.writeSSE({ event: 'session_disposed', data: JSON.stringify({ reason }) });
           } catch {
             /* stream already closed */
@@ -58,6 +86,11 @@ export function createEventsRouter() {
           finish();
         },
       );
+
+      // Snapshot AFTER subscribing and in the SAME tick: no event can interleave, so a
+      // client connecting mid-run learns the authoritative run state without missing
+      // anything that follows. `connected` already told it the stream is alive.
+      void stream.writeSSE({ event: 'session_snapshot', data: JSON.stringify(snapshotOf(session)) });
 
       // Block until client disconnects (abort) OR the session object is
       // disposed (worker death / delete / timeout / LRU).

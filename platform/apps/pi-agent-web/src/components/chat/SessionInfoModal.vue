@@ -10,6 +10,12 @@ import MarkdownView from './MarkdownView.vue'
 
 const props = defineProps<{
   sessionId: string
+  /**
+   * Render as a plain panel instead of a modal: the chat page hosts session info
+   * inside its resizable drawer, so the backdrop / close button / fixed sizing
+   * must not come from here.
+   */
+  embedded?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -141,9 +147,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click="onBackdropClick">
-    <div class="modal-panel" @click.stop>
-      <div class="modal-header">
+  <div
+    :class="embedded ? 'info-embedded' : 'modal-backdrop'"
+    @click="embedded ? undefined : onBackdropClick"
+  >
+    <div :class="embedded ? 'info-embedded-panel' : 'modal-panel'" @click.stop>
+      <div v-if="!embedded" class="modal-header">
         <h3 class="modal-title">Session Info</h3>
         <button class="close-btn" @click="emit('close')">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -329,6 +338,12 @@ onUnmounted(() => {
 .close-btn:hover { background: var(--surface-hover, #f5f5f5); color: var(--text, #1a1a1a); }
 .modal-body { flex: 1; overflow-y: auto; padding: 20px; }
 
+/* Embedded mode: the chat page's drawer owns the chrome (border, position,
+   width, close button), so this component only supplies the scrolling body. */
+.info-embedded { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.info-embedded-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.info-embedded .modal-body { padding: 12px 14px 18px; }
+
 .loading-state { display: flex; align-items: center; gap: 8px; color: var(--text-secondary, #666); font-size: 13px; padding: 32px 0; justify-content: center; }
 .spinner { width: 16px; height: 16px; border: 2px solid var(--border, #e5e5e5); border-top-color: var(--text-secondary, #666); border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -350,7 +365,7 @@ onUnmounted(() => {
 .info-row { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.6; }
 .info-label { color: var(--text-secondary, #666); min-width: 60px; flex-shrink: 0; }
 .info-value { color: var(--text, #1a1a1a); word-break: break-all; }
-.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px; }
+.mono { font-family: var(--font-mono); font-size: 11px; }
 .cwd-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 500; }
 .badge.active { background: #E8F5E9; color: #1B5E20; }
@@ -359,17 +374,17 @@ onUnmounted(() => {
 .sp-content { border: 1px solid var(--border, #e5e5e5); border-radius: 6px; overflow: hidden; max-height: 400px; overflow-y: auto; }
 .sp-md { padding: 12px; background: var(--surface-subtle, #f9f9f9); }
 .sp-md :deep(.markdown-body) { font-size: 11px; line-height: 1.5; color: var(--text, #1a1a1a); background: transparent; padding: 0; margin: 0; }
-.sp-preview { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px; line-height: 1.5; color: var(--text-secondary, #666); padding: 8px 12px; background: var(--surface-subtle, #f9f9f9); border-radius: 6px; max-height: 80px; overflow: hidden; cursor: pointer; }
+.sp-preview { font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text-secondary, #666); padding: 8px 12px; background: var(--surface-subtle, #f9f9f9); border-radius: 6px; max-height: 80px; overflow: hidden; cursor: pointer; }
 .sp-preview:hover { color: var(--text, #1a1a1a); }
 
 .res-list { display: flex; flex-direction: column; gap: 2px; }
 .res-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 12px; line-height: 1.5; cursor: pointer; transition: background-color 0.1s; }
 .res-item:hover { background: var(--surface-hover, #f5f5f5); }
 .res-item.expanded { flex-wrap: wrap; background: var(--surface-hover, #f5f5f5); }
-.res-name { color: var(--text, #1a1a1a); font-weight: 500; flex-shrink: 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px; }
+.res-name { color: var(--text, #1a1a1a); font-weight: 500; flex-shrink: 0; font-family: var(--font-mono); font-size: 11px; }
 .res-desc { color: var(--text-secondary, #666); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .res-full { color: var(--text, #1a1a1a); width: 100%; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
-.res-path { color: var(--text-secondary, #666); width: 100%; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 10px; opacity: 0.7; }
+.res-path { color: var(--text-secondary, #666); width: 100%; font-family: var(--font-mono); font-size: 10px; opacity: 0.7; }
 .res-meta { width: 100%; margin-top: 2px; }
 .src-tag { flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 500; white-space: nowrap; }
 .src-tag.builtin { background: #E8F5E9; color: #1B5E20; }
@@ -381,7 +396,7 @@ onUnmounted(() => {
 .mcp-group + .mcp-group { margin-top: 2px; }
 .mcp-group-head { cursor: pointer; }
 .mcp-count { font-variant-numeric: tabular-nums; }
-.mcp-tools { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px dashed var(--border-color, #e0e0e0); }
+.mcp-tools { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px dashed var(--border); }
 /* Registered but not loaded yet (tool_search hasn't pulled it in) */
 .res-item.lazy .res-name, .res-item.lazy .res-desc { opacity: 0.55; }
 .empty-state { color: var(--text-secondary, #666); font-size: 12px; padding: 8px 0; }

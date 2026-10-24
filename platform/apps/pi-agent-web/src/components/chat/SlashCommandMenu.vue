@@ -192,11 +192,11 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 .slash-name {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
 }
 .slash-hint {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-secondary);
 }

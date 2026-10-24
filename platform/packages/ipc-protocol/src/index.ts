@@ -61,6 +61,10 @@ export type WorkerEventKind =
   | 'tool_call'
   | 'tool_result'
   | 'agent_end'
+  /** A run started (pi-native `agent_start`). data: `{ startedAt: number }`. */
+  | 'agent_start'
+  /** A run settled (pi-native `agent_settled`). data: `{ aborted: boolean }`. */
+  | 'agent_settled'
   | 'queue_update'
   | 'error'
   /** pi-native session display name changed (data: { name }) — master-internal,
