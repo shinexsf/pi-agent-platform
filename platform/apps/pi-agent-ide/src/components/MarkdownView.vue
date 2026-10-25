@@ -40,10 +40,23 @@ const mdOptions: Options = {
     // that `useMermaid` upgrades to a real SVG after the DOM settles (the source
     // is kept in a hidden <pre> so Copy / the enlarged view can reuse it).
     if (lang.toLowerCase() === 'mermaid') {
-      return '<div class="mermaid-block" data-mermaid-state="pending">'
-        + '<span class="mermaid-label">mermaid</span>'
-        + '<button class="mermaid-copy" type="button">Copy</button>'
-        + '<button class="mermaid-zoom" type="button">放大</button>'
+      // Toolbar mirrors the familiar diagram-viewer layout: 图表 / 代码 on the
+      // left, zoom + 全屏 + 下载 on the right. Zoom is button/double-click only —
+      // the inline canvas never swallows the page's wheel.
+      return '<div class="mermaid-block" data-mermaid-state="pending" data-mermaid-view="chart">'
+        + '<div class="mermaid-bar">'
+        + '<div class="mermaid-tabs">'
+        + '<button class="mermaid-view is-active" type="button" data-view="chart">图表</button>'
+        + '<button class="mermaid-view" type="button" data-view="code">代码</button>'
+        + '</div>'
+        + '<div class="mermaid-tools">'
+        + '<button class="mermaid-btn mermaid-out" type="button" title="缩小 20%">缩小</button>'
+        + '<button class="mermaid-btn mermaid-in" type="button" title="放大 25%">放大</button>'
+        + '<button class="mermaid-btn mermaid-fit" type="button" title="适应宽度">适应</button>'
+        + '<button class="mermaid-btn mermaid-download" type="button" title="下载 SVG">下载</button>'
+        + '<button class="mermaid-btn mermaid-full" type="button" title="全屏">全屏</button>'
+        + '</div>'
+        + '</div>'
         + '<div class="mermaid-canvas"></div>'
         + `<pre class="mermaid-src" hidden>${md.utils.escapeHtml(str)}</pre>`
         + '</div>'
@@ -83,17 +96,19 @@ const html = computed(() => md.render(props.source ?? ''))
 /**
  * Click delegate for the whole rendered tree:
  * - `.code-copy-btn` — highlight.js code block copy
- * - `.mermaid-copy` / `.mermaid-zoom` — mermaid block toolbar
- * - the rendered diagram itself — opens the enlarged view
+ * - mermaid toolbar — 图表/代码、缩放、适应、下载、全屏
  * Markdown links (auto-linked URLs and `[label](url)`) flow through normal
  * browser navigation — no override. File open is exclusively driven by
  * `@file` mentions (see FileSearchMenu).
  */
 const rootEl = ref<HTMLElement | null>(null)
 const {
-  copySource: copyMermaidSource,
   findBlock: findMermaidBlock,
   openZoom: openMermaidZoom,
+  zoomBlock: zoomMermaidBlock,
+  fitBlock: fitMermaidBlock,
+  setBlockView: setMermaidView,
+  downloadBlock: downloadMermaidBlock,
   zoom: mermaidZoom,
   zoomScale: mermaidZoomScale,
   zoomPercent: mermaidZoomPercent,
@@ -127,26 +142,28 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
     return
   }
 
-  const mermaidCopyBtn = target.closest('button.mermaid-copy') as HTMLButtonElement | null
-  if (mermaidCopyBtn) {
+  const mermaidViewBtn = target.closest('button.mermaid-view[data-view]') as HTMLButtonElement | null
+  if (mermaidViewBtn) {
     e.preventDefault()
-    const block = findMermaidBlock(mermaidCopyBtn)
-    if (block) await copyMermaidSource(mermaidCopyBtn, block)
+    const block = findMermaidBlock(mermaidViewBtn)
+    const view = mermaidViewBtn.dataset.view === 'code' ? 'code' : 'chart'
+    setMermaidView(block, view)
     return
   }
 
-  const mermaidZoomBtn = target.closest('button.mermaid-zoom') as HTMLButtonElement | null
-  if (mermaidZoomBtn) {
+  const mermaidTool = target.closest(
+    'button.mermaid-in, button.mermaid-out, button.mermaid-fit, button.mermaid-download, button.mermaid-full',
+  ) as HTMLButtonElement | null
+  if (mermaidTool) {
     e.preventDefault()
-    const block = findMermaidBlock(mermaidZoomBtn)
-    if (block) openMermaidZoom(block)
+    const block = findMermaidBlock(mermaidTool)
+    if (!block) return
+    if (mermaidTool.classList.contains('mermaid-in')) zoomMermaidBlock(block, 1.25)
+    else if (mermaidTool.classList.contains('mermaid-out')) zoomMermaidBlock(block, 1 / 1.25)
+    else if (mermaidTool.classList.contains('mermaid-fit')) fitMermaidBlock(block)
+    else if (mermaidTool.classList.contains('mermaid-download')) downloadMermaidBlock(block)
+    else openMermaidZoom(block)
     return
-  }
-
-  // Clicking the diagram itself opens the enlarged view.
-  if (target.closest('.mermaid-canvas svg')) {
-    const block = findMermaidBlock(target)
-    if (block) openMermaidZoom(block)
   }
 }
 </script>
@@ -318,23 +335,76 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
 .markdown-body :deep(.mermaid-block) {
   position: relative;
   margin: 10px 0;
-  padding: 10px;
-  padding-top: 30px; /* room for the label + toolbar */
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--hover-bg);
+  overflow: hidden;
+}
+/* Toolbar strip: 图表/代码 tabs on the left, zoom/fullscreen/download on the right. */
+.markdown-body :deep(.mermaid-bar) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--hover-bg);
+}
+.markdown-body :deep(.mermaid-tabs) {
+  display: flex;
+  gap: 2px;
+}
+.markdown-body :deep(.mermaid-view) {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.markdown-body :deep(.mermaid-view.is-active) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.markdown-body :deep(.mermaid-tools) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.markdown-body :deep(.mermaid-btn) {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  line-height: 20px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.markdown-body :deep(.mermaid-btn:hover) {
+  background: var(--bg-primary);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 .markdown-body :deep(.mermaid-canvas) {
   /* Infinite canvas: the diagram keeps its intrinsic size and is moved by a
      transform, so nothing is ever shrunk below its designed size (that is what
-     used to render 14px labels at 5px and eat 1px connectors). No scrollbars —
-     drag to pan, wheel to zoom, double-click to re-fit. Height is set inline by
-     the renderer from the fitted size. */
+     used to render 14px labels at 5px and eat 1px connectors). No scrollbars and
+     no wheel handling — zoom comes from the toolbar / double-click, drag pans.
+     Height is set inline by the renderer from the fitted size. */
   position: relative;
   overflow: hidden;
   cursor: grab;
   touch-action: pan-y;
+  margin: 6px;
   border-radius: 4px;
+}
+.markdown-body :deep(.mermaid-canvas[hidden]) {
+  display: none;
 }
 .markdown-body :deep(.mermaid-canvas[data-dragging='true']) {
   cursor: grabbing;
@@ -345,6 +415,13 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
   height: auto;
   user-select: none;
   -webkit-user-drag: none;
+}
+/* mermaid 12's `neo` look stamps a light drop-shadow on every node; on a dark
+   page that reads as a white glow. The SVG carries its own <style>, so this
+   override (not just inline-style cleanup) is what guarantees flat shapes. */
+.markdown-body :deep(.mermaid-canvas svg *),
+.markdown-body :deep(.mermaid-zoom-stage svg *) {
+  filter: none !important;
 }
 /* Without this a 1px connector becomes sub-pixel when the SVG is scaled down and
    simply disappears — the classic "lines are missing" mermaid symptom. */
@@ -384,47 +461,18 @@ async function onLinkClick(e: MouseEvent): Promise<void> {
 .markdown-body :deep(.mermaid-block[data-mermaid-state='rendering'] .mermaid-canvas) {
   min-height: 40px;
 }
-.markdown-body :deep(.mermaid-label) {
-  position: absolute;
-  top: 6px;
-  left: 10px;
-  font-size: 11px;
-  line-height: 20px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  color: var(--text-secondary);
-  opacity: 0.75;
-  pointer-events: none;
-  user-select: none;
-}
-.markdown-body :deep(.mermaid-copy),
-.markdown-body :deep(.mermaid-zoom) {
-  position: absolute;
-  top: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+/* Code view: the same source the renderer consumed, monospace and copyable. */
+.markdown-body :deep(.mermaid-block[data-mermaid-view='code'] .mermaid-src) {
+  display: block;
+  margin: 0;
+  padding: 10px 12px;
   background: transparent;
   color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.markdown-body :deep(.mermaid-copy) {
-  right: 54px;
-}
-.markdown-body :deep(.mermaid-zoom) {
-  right: 6px;
-}
-.markdown-body :deep(.mermaid-block:hover .mermaid-copy),
-.markdown-body :deep(.mermaid-block:hover .mermaid-zoom) {
-  opacity: 1;
-}
-.markdown-body :deep(.mermaid-copy:hover),
-.markdown-body :deep(.mermaid-zoom:hover) {
-  background: var(--link);
-  color: #fff;
-  border-color: var(--link);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .markdown-body :deep(.mermaid-error) {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;

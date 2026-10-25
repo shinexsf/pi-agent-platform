@@ -170,8 +170,10 @@ src/views/
 - **`flowchart.htmlLabels: false`**：用 SVG `<text>` 而不是 `foreignObject`。JCEF / 离线环境下 `htmlLabels` 内部的 `<div>` 会把节点撑宽，导致布局和连线错位。
 - **`vector-effect: non-scaling-stroke`**（对所有 svg 图形元素）：缩放后 1px 连接线不会因亚像素而消失——这是「线不见了」最常见的真因。
 - **`.mermaid-canvas` 是无限画布**，不是缩放适配：图保持 intrinsic size，只用一个 `translate3d() scale()` 组合变换（高度按拟合尺寸写内联）。滚轮缩放 0.2–4（以光标为锚点）、拖拽平移、双击复位、点击激活（未激活时滚轮交还页面滚动）；`MessageList` 自己的滚轮劫持已加 `if (e.defaultPrevented) return` 守卫，否则一次滚轮会同时缩放图和滚列表。
+- **viewBox 必须按真实内容重算**（`expandViewBoxToContent()`）：mermaid 用自己的文本度量算 viewBox，中文宽字形低估、`foreignObject` 里 HTML 标签只按估算方块给尺寸，于是真实内容溢出 viewBox，**SVG 会把溢出部分裁掉**（默认 `overflow: hidden`）——表现为「图右边/下边被切一块」，且只发生在部分图上（取决于标签内容）。修法：`normalizeSvg()` 里遍历所有图形 + `text` + `foreignObject` 内层（用 `scrollWidth/offsetWidth` 经 `getScreenCTM` 换算成用户单位）求包围盒并集，撑到 viewBox + 4px 内边距，再 `overflow: visible` 兜底。扩展量记在 `data-viewBoxGrown`（如 `80x30`）供排查。
 - **流式期间显示源码**：fence 未闭合时渲染 `<pre class="mermaid-src">`（可选中复制），闭合后才调 mermaid；状态由 `data-mermaid-state` 表达（`waiting` / `pending` / `rendering` / `ready` / `error`）。半截代码反复 render 会闪烁并报错。
 - **放大**：`Teleport` 到 body 的全屏面板，同样是无限画布（拖拽 + 滚轮 + 双指捏合），彻底不再有滚动条。
+- **工具条文案**：内嵌卡片用文字按钮 `缩小 / 放大 / 适应 / 下载 / 全屏`（`缩小`/`放大` 带 title 说明步进 20%/25%），全屏浮层空间充裕才用符号。
 - **Markdown 其余部分**：表格加边框 + 斑马纹、hljs token 颜色全部走主题变量、代码块用专用 `--code-bg`（不跟随正文 hover 色）。
 - **IDE SPA 是同一实现的副本**：`apps/pi-agent-ide/src/composables/useMermaid.ts` + `components/MarkdownView.vue` 里的 `.mermaid-*` 样式块，差异只有 CSS 变量（IDE 侧用 `--bg-primary` / `--text-primary` / `--border` / `--link`）。改 web 侧渲染逻辑时**必须同步 ide 侧**——历史上「web 修了 ide 没修」已经出现两次（工具滚轮、历史分页）。
 

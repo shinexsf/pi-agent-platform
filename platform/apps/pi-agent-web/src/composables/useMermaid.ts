@@ -61,6 +61,37 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * Blend `color` toward `base` by `amount` (0 = pure base, 1 = pure color).
+ * Used to give the diagrams a light accent tint: a diagram that is entirely the
+ * page's own surface colour reads as "unstyled", while mermaid's built-in
+ * palettes (forest etc.) don't follow the app theme at all. A tint of the brand
+ * accent sits in the middle and stays correct in both palettes.
+ */
+function mixColor(color: string, base: string, amount: number): string {
+  const parse = (value: string): [number, number, number] | null => {
+    const hex = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1]
+    if (hex) {
+      const raw = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
+      return [
+        parseInt(raw.slice(0, 2), 16),
+        parseInt(raw.slice(2, 4), 16),
+        parseInt(raw.slice(4, 6), 16),
+      ]
+    }
+    const rgb = value.match(/rgba?\(([^)]+)\)/i)?.[1]
+    if (!rgb) return null
+    const parts = rgb.split(',').map((part) => parseFloat(part.trim()))
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0]
+  }
+  const from = parse(color)
+  const to = parse(base)
+  if (!from || !to) return base
+  const channel = (a: number, b: number): string =>
+    Math.round(a + (b - a) * (1 - amount)).toString(16).padStart(2, '0')
+  return `#${channel(from[0], to[0])}${channel(from[1], to[1])}${channel(from[2], to[2])}`
+}
+
+/**
  * Mermaid measures label boxes on a `<canvas>`, where the CSS-wide `inherit`
  * keyword is meaningless — passing it makes mermaid mis-measure its nodes.
  * Resolve the page's concrete stack once instead.
@@ -94,45 +125,51 @@ function diagramThemeVariables(theme: MermaidTheme): Record<string, string> {
   const text2 = read('--text-2', theme === 'dark' ? '#b3bfd1' : '#4a5670')
   const border = read('--border', theme === 'dark' ? '#293344' : '#dfe4ec')
   const accent = read('--accent', '#315fda')
+  // Accent tint over the neutral palette (dark mode needs a stronger mix to stay
+  // visible against `--surface-raised`).
+  const nodeFill = mixColor(accent, surfaceRaised, theme === 'dark' ? 0.18 : 0.10)
+  const nodeStroke = mixColor(accent, border, theme === 'dark' ? 0.5 : 0.45)
+  const clusterFill = mixColor(accent, surfaceSubtle, theme === 'dark' ? 0.1 : 0.05)
+  const line = theme === 'dark' ? '#6b8bbd' : '#8fa0bd'
   return {
     darkMode: String(theme === 'dark'),
     background: surface,
     fontFamily: resolveDiagramFont(),
     fontSize: '14px',
-    mainBkg: surfaceRaised,
-    primaryColor: surfaceRaised,
+    mainBkg: nodeFill,
+    primaryColor: nodeFill,
     primaryTextColor: text,
-    primaryBorderColor: border,
-    secondaryColor: surfaceHover,
+    primaryBorderColor: nodeStroke,
+    secondaryColor: mixColor(accent, surfaceHover, theme === 'dark' ? 0.12 : 0.07),
     secondaryTextColor: text,
-    secondaryBorderColor: border,
+    secondaryBorderColor: nodeStroke,
     tertiaryColor: surfaceSubtle,
     tertiaryTextColor: text,
-    tertiaryBorderColor: border,
-    nodeBorder: border,
+    tertiaryBorderColor: nodeStroke,
+    nodeBorder: nodeStroke,
     nodeTextColor: text,
     textColor: text,
     titleColor: text,
-    lineColor: text2,
+    lineColor: line,
     edgeLabelBackground: surface,
-    clusterBkg: surfaceSubtle,
-    clusterBorder: border,
+    clusterBkg: clusterFill,
+    clusterBorder: nodeStroke,
     labelBackground: surface,
     // Sequence / class / state diagrams share these slot names.
-    actorBkg: surface,
-    actorBorder: border,
+    actorBkg: nodeFill,
+    actorBorder: nodeStroke,
     actorTextColor: text,
-    signalColor: text2,
+    signalColor: line,
     signalTextColor: text2,
-    noteBkg: surfaceHover,
-    noteBorder: border,
+    noteBkg: mixColor(accent, surfaceHover, theme === 'dark' ? 0.12 : 0.07),
+    noteBorder: nodeStroke,
     noteTextColor: text,
-    labelBoxBkg: surface,
-    labelBoxBorder: border,
+    labelBoxBkg: nodeFill,
+    labelBoxBorder: nodeStroke,
     labelTextColor: text,
     loopTextColor: text,
     activationBkg: surfaceHover,
-    activationBorderColor: border,
+    activationBorderColor: nodeStroke,
     sequenceNumberColor: theme === 'dark' ? '#0d1119' : '#ffffff',
     pie1: accent,
     pie2: surfaceHover,
@@ -216,25 +253,36 @@ export interface PanZoomHandle {
   fit: () => void
   setScale: (scale: number) => void
   zoomBy: (factor: number) => void
+  getScale: () => number
+  fitScale: () => number
   destroy: () => void
 }
 
 /**
- * Infinite-canvas interaction for a diagram: no scrollbars, drag to pan, wheel
- * to zoom (anchored at the cursor), double-click to re-fit.
+ * Infinite-canvas interaction for a diagram: no scrollbars; the content keeps
+ * its intrinsic size and is only moved/scaled by a transform. Shrinking an SVG
+ * through `max-width` also shrinks its text and hairlines — a 2173px diagram in
+ * a 780px column rendered 14px labels at 5px and made edges disappear.
  *
- * The content keeps its intrinsic size and is only moved/scaled by a transform.
- * That matters because shrinking an SVG through `max-width` also shrinks its
- * text and its hairlines — a 2173px diagram in a 780px column rendered 14px
- * labels at 5px and made edges disappear. Here the geometry is untouched; the
- * reader zooms in instead.
+ * Input model (deliberately split in two, per the reference UX):
+ * - inline cards: **no wheel handling at all** — zoom via toolbar buttons or a
+ *   double-click toggle, drag to pan. Hijacking the wheel inside a message makes
+ *   the page feel broken the moment a diagram is under the cursor.
+ * - fullscreen: the overlay owns the screen, so a plain wheel zooms.
  */
 export function mountPanZoom(
   viewport: HTMLElement,
   content: HTMLElement | SVGElement,
   naturalWidth: number,
   naturalHeight: number,
-  opts: { maxFitScale?: number; wheelAlways?: boolean; onScale?: (scale: number) => void } = {},
+  opts: {
+    maxFitScale?: number
+    /** `none` (inline cards), `active` (click-to-enable) or `always` (overlay). */
+    wheel?: 'none' | 'active' | 'always'
+    /** Double-click behaviour: re-fit, or toggle between fit and a readable zoom. */
+    dblclick?: 'fit' | 'toggle'
+    onScale?: (scale: number) => void
+  } = {},
 ): PanZoomHandle {
   const natW = naturalWidth > 0 ? naturalWidth : 800
   const natH = naturalHeight > 0 ? naturalHeight : 400
@@ -262,15 +310,31 @@ export function mountPanZoom(
     y = (h - natH * scale) / 2
     apply()
   }
-  const fit = (): void => {
+  const fitScale = (): number => {
     const { w, h } = box()
     const target = Math.min(opts.maxFitScale ?? 1, w / natW, h / natH)
-    scale = Math.max(PAN_MIN_SCALE, Math.min(PAN_MAX_SCALE, target))
+    return Math.max(PAN_MIN_SCALE, Math.min(PAN_MAX_SCALE, target))
+  }
+  // Reader zoom is stored as a multiplier *over* fit, not an absolute scale.
+  // Absolute scale broke when the column changed width after the reader had
+  // zoomed or panned: the stale scale kept the diagram wider than the box and
+  // `overflow: hidden` sliced nodes off the right/bottom edge.
+  let userZoom = 1
+  let lastWidth = 0
+  const clampScale = (value: number): number => Math.max(PAN_MIN_SCALE, Math.min(PAN_MAX_SCALE, value))
+  const applyFitWithZoom = (): void => {
+    scale = clampScale(fitScale() * userZoom)
+    center()
+  }
+  const fit = (): void => {
+    userZoom = 1
+    scale = fitScale()
     center()
   }
   const zoomAt = (factor: number, px: number, py: number): void => {
-    const next = Math.max(PAN_MIN_SCALE, Math.min(PAN_MAX_SCALE, scale * factor))
+    const next = clampScale(scale * factor)
     if (next === scale) return
+    userZoom = next / fitScale()
     // Keep the point under the cursor anchored while the scale changes.
     x = px - ((px - x) * next) / scale
     y = py - ((py - y) * next) / scale
@@ -309,12 +373,13 @@ export function mountPanZoom(
     delete viewport.dataset.dragging
     viewport.releasePointerCapture?.(e.pointerId)
   }
-  // Wheel zooms only when the reader clearly means it: Ctrl/Command (the
-  // standard zoom gesture) or after clicking into the canvas. A plain wheel
-  // still scrolls the conversation — hijacking it unasked traps the page inside
-  // a big diagram, which is worse than the extra keystroke.
+  // Wheel zooms only where it is asked for: never on inline cards, always in
+  // the fullscreen overlay. `active` (click into the canvas first) stays
+  // available for callers that want the old middle ground.
+  const wheelMode = opts.wheel ?? 'active'
   const onWheel = (e: WheelEvent): void => {
-    if (!(opts.wheelAlways || e.ctrlKey || e.metaKey || active)) return
+    if (wheelMode === 'none') return
+    if (!(wheelMode === 'always' || e.ctrlKey || e.metaKey || active)) return
     e.preventDefault()
     interacted = true
     const rect = viewport.getBoundingClientRect()
@@ -323,6 +388,21 @@ export function mountPanZoom(
   }
   const onDoubleClick = (e: MouseEvent): void => {
     e.preventDefault()
+    if (opts.dblclick === 'toggle') {
+      const base = fitScale()
+      // Second double-click returns to fit; first one lands on a readable zoom
+      // (roughly 1.8x fit) without needing the toolbar.
+      if (scale > base * 1.05) {
+        interacted = true
+        fit()
+      } else {
+        interacted = true
+        const target = Math.min(PAN_MAX_SCALE, Math.max(base * 1.8, 0.6))
+        const { w, h } = box()
+        zoomAt(target / scale, w / 2, h / 2)
+      }
+      return
+    }
     fit()
   }
   viewport.addEventListener('pointerdown', onPointerDown)
@@ -344,15 +424,40 @@ export function mountPanZoom(
   // it, also re-fit: the mount-time measurement can run before layout, when the
   // viewport still reports 0 width.
   let interacted = false
+  // Safety net: when the observed size is final on the very first callback, a
+  // mount-time fit that ran against a 0-width box would never be corrected and
+  // the diagram would sit at natural size, clipped inside the card.
+  const lateFit = setTimeout(() => {
+    if (content.style.transform) return
+    userZoom = 1
+    applyFitWithZoom()
+  }, 400)
   const observer = typeof ResizeObserver !== 'undefined'
     ? new ResizeObserver(() => {
-        if (interacted) center()
-        else fit()
+        // 代码视图 hides the canvas; a 0×0 box would clamp the scale to the
+        // minimum and the diagram would come back tiny.
+        if (!viewport.clientWidth || !viewport.clientHeight) return
+        // A column that changed substantially (drawer opened, window resized,
+        // panel splitter) invalidates the reader's zoom ratio — keeping it would
+        // leave nodes clipped off the edges. Small jitter (scrollbar, sub-pixel)
+        // keeps the zoom.
+        const width = viewport.clientWidth
+        if (lastWidth && Math.abs(width - lastWidth) / lastWidth > 0.15) userZoom = 1
+        lastWidth = width
+        applyFitWithZoom()
       })
     : null
   observer?.observe(viewport)
 
   fit()
+  // The first measurement can land before the column has its final width
+  // (streaming insertion, drawer animation); re-fit once the frame settles.
+  if (typeof requestAnimationFrame !== 'undefined') {
+    requestAnimationFrame(() => {
+      if (!viewport.clientWidth || !viewport.clientHeight) return
+      if (!interacted) applyFitWithZoom()
+    })
+  }
 
   return {
     fit,
@@ -364,7 +469,10 @@ export function mountPanZoom(
       const { w, h } = box()
       zoomAt(factor, w / 2, h / 2)
     },
+    getScale: () => scale,
+    fitScale,
     destroy: () => {
+      clearTimeout(lateFit)
       observer?.disconnect()
       document.removeEventListener('pointerdown', onDocumentPointerDown, true)
       viewport.removeEventListener('pointerdown', onPointerDown)
@@ -409,35 +517,159 @@ export function useMermaid(
    * from the viewBox, expose a horizontal scrollbar in `.mermaid-canvas` instead
    * of shrinking, and let the enlarged view handle "too big".
    */
+  /**
+   * Mermaid sizes the viewBox from its own text metrics. Those under-estimate
+   * wide glyph runs (CJK), and html labels live in a `foreignObject` whose inner
+   * div can be wider than the size mermaid declared — in both cases the real
+   * content sticks out of the viewBox, and an SVG clips whatever falls outside
+   * it. That is the "diagram cut off at the right edge" bug.
+   *
+   * Measure what is actually laid out and grow the viewBox to cover it.
+   * Returns the new box, or null when the original one was already big enough.
+   */
+  function expandViewBoxToContent(
+    svg: SVGSVGElement,
+    dims: number[],
+  ): { x: number; y: number; w: number; h: number } | null {
+    const vbX = dims[0] ?? 0
+    const vbY = dims[1] ?? 0
+    const vbW = dims[2] ?? 0
+    const vbH = dims[3] ?? 0
+    let minX = vbX
+    let minY = vbY
+    let maxX = vbX + vbW
+    let maxY = vbY + vbH
+    const grow = (x: number, y: number, w: number, h: number): void => {
+      if (!Number.isFinite(x) || !Number.isFinite(y) || w <= 0 || h <= 0) return
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x + w)
+      maxY = Math.max(maxY, y + h)
+    }
+    const ctm = svg.getScreenCTM()
+    // screen px per user unit (handles nested scaling)
+    const userPerScreen = ctm ? Math.hypot(ctm.a, ctm.b) || 1 : 1
+
+    for (const el of Array.from(
+      svg.querySelectorAll<SVGGraphicsElement>(
+        'rect, circle, ellipse, polygon, path, line, text, image, foreignObject',
+      ),
+    )) {
+      if (el.closest('defs, clipPath, marker, pattern, mask, symbol')) continue
+      let bb: DOMRect | null = null
+      try {
+        bb = el.getBBox()
+      } catch {
+        bb = null
+      }
+      if (bb) grow(bb.x, bb.y, bb.width, bb.height)
+    }
+    // html labels: the declared foreignObject box is only mermaid's estimate
+    for (const fo of Array.from(svg.querySelectorAll('foreignObject'))) {
+      const inner = fo.firstElementChild as HTMLElement | null
+      if (!inner) continue
+      let bb: DOMRect | null = null
+      try {
+        bb = (fo as unknown as SVGGraphicsElement).getBBox()
+      } catch {
+        bb = null
+      }
+      const baseX = bb ? bb.x : Number(fo.getAttribute('x') ?? 0)
+      const baseY = bb ? bb.y : Number(fo.getAttribute('y') ?? 0)
+      const needW = (inner.scrollWidth || inner.offsetWidth) / userPerScreen
+      const needH = (inner.scrollHeight || inner.offsetHeight) / userPerScreen
+      grow(baseX, baseY, Math.max(bb?.width ?? 0, needW), Math.max(bb?.height ?? 0, needH))
+    }
+
+    const PAD = 4
+    const x = Math.floor(minX - PAD)
+    const y = Math.floor(minY - PAD)
+    const w = Math.ceil(maxX - minX + PAD * 2)
+    const h = Math.ceil(maxY - minY + PAD * 2)
+    if (w <= Math.ceil(vbW) + 2 && h <= Math.ceil(vbH) + 2) return null
+    svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`)
+    svg.style.overflow = 'visible'
+    return { x, y, w, h }
+  }
+
   function normalizeSvg(canvas: HTMLElement): void {
     const svg = canvas.querySelector('svg')
     if (!svg) return
     const dims = (svg.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number)
     const w = dims.length === 4 ? dims[2] ?? Number.NaN : Number.NaN
     const h = dims.length === 4 ? dims[3] ?? Number.NaN : Number.NaN
-    if (Number.isFinite(w) && w > 0) {
-      svg.setAttribute('width', String(Math.ceil(w)))
-      if (Number.isFinite(h) && h > 0) svg.setAttribute('height', String(Math.ceil(h)))
+    // An SVG clips everything outside its viewBox, so a viewBox that mermaid
+    // measured a few px too small shows up as content cut off at the right or
+    // bottom edge. Grow it to the real content box before fitting.
+    let viewW = Number(dims[2])
+    let viewH = Number(dims[3])
+    if (Number.isFinite(viewW) && Number.isFinite(viewH) && viewW > 0 && viewH > 0) {
+      const grown = expandViewBoxToContent(svg, dims)
+      if (grown) {
+        canvas.dataset.viewBoxGrown = `${Math.round(grown.w - viewW)}x${Math.round(grown.h - viewH)}`
+        viewW = grown.w
+        viewH = grown.h
+      }
+    }
+    if (Number.isFinite(viewW) && viewW > 0) {
+      svg.setAttribute('width', String(Math.ceil(viewW)))
+      if (Number.isFinite(viewH) && viewH > 0) svg.setAttribute('height', String(Math.ceil(viewH)))
     }
     svg.style.maxWidth = 'none'
     svg.style.display = 'block'
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+
+    // Mermaid 12's `neo` look (the default since 12.0) paints a drop-shadow on
+    // every node — a fixed `rgba(185,185,185,1)` halo, i.e. a white glow on a dark
+    // page. It arrives three different ways, all of which must go:
+    //   1. an inline `style="filter:url(#…-drop-shadow-small)"` on the shape,
+    //   2. a `filter="url(#…)"` attribute,
+    //   3. (the one that survives naive stripping) a stylesheet *inside the SVG*:
+    //      `#id [data-look="neo"].node rect { … filter:drop-shadow(1px 2px 2px …) }`.
+    // Removing the rules keeps downloads shadow-free too.
+    for (const styleEl of Array.from(svg.querySelectorAll('style'))) {
+      const css = styleEl.textContent ?? ''
+      if (!css.includes('drop-shadow')) continue
+      styleEl.textContent = css.replace(
+        /filter:\s*drop-shadow\((?:[^()]|\([^()]*\))*\)\s*;?/g,
+        '',
+      )
+    }
+    for (const el of Array.from(svg.querySelectorAll<SVGElement>('*'))) {
+      if (el.style.filter) el.style.removeProperty('filter')
+      const attr = el.getAttribute('filter')
+      if (attr) el.removeAttribute('filter')
+    }
 
     // Infinite canvas instead of a scrollbar: the diagram keeps its intrinsic
     // size and the reader drags / wheel-zooms. The viewport height follows the
     // fitted size (capped) so a small diagram doesn't sit in a 600px void.
     panZoomHandles.get(canvas)?.destroy()
     panZoomHandles.delete(canvas)
-    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+    if (Number.isFinite(viewW) && Number.isFinite(viewH) && viewW > 0 && viewH > 0) {
       const maxH = Math.min(Math.round(window.innerHeight * 0.62), 620)
-      const columnWidth = canvas.clientWidth || w
-      const fitScale = Math.max(0.15, Math.min(1, columnWidth / w, maxH / h))
-      canvas.style.height = `${Math.max(120, Math.min(maxH, Math.round(h * fitScale)))}px`
+      const columnWidth = canvas.clientWidth || viewW
+      const fitScale = Math.max(0.15, Math.min(1, columnWidth / viewW, maxH / viewH))
+      canvas.style.height = `${Math.max(120, Math.min(maxH, Math.round(viewH * fitScale)))}px`
+      canvas.dataset.naturalWidth = String(Math.ceil(viewW))
+      canvas.dataset.naturalHeight = String(Math.ceil(viewH))
       // No measuring here: `mountPanZoom` re-fits itself through its own
       // ResizeObserver the first time the viewport reports a real size, so the
       // first-paint `clientWidth === 0` case cannot pin a wrong scale.
-      panZoomHandles.set(canvas, mountPanZoom(canvas, svg, w, h))
-      canvas.title = '拖拽移动 · Ctrl/⌘+滚轮缩放 · 双击复位'
+      const block = canvas.closest<HTMLElement>('.mermaid-block')
+      panZoomHandles.set(
+        canvas,
+        mountPanZoom(canvas, svg, viewW, viewH, {
+          // Inline cards never take the wheel — the conversation must keep
+          // scrolling. Zoom lives in the toolbar / double-click instead.
+          wheel: 'none',
+          dblclick: 'toggle',
+          onScale: (next) => {
+            if (block) block.dataset.mermaidScale = String(+next.toFixed(3))
+          },
+        }),
+      )
+      canvas.title = '双击放大/还原 · 拖拽移动'
     }
 
     // Mermaid paints node/edge colours as inline `fill:#… !important`, so config
@@ -623,6 +855,56 @@ export function useMermaid(
     }, 1200)
   }
 
+  /** Toolbar zoom (inline card): no wheel involved, just buttons. */
+  function zoomBlock(block: HTMLElement | null, factor: number): void {
+    const canvas = block?.querySelector<HTMLElement>('.mermaid-canvas')
+    if (!canvas) return
+    panZoomHandles.get(canvas)?.zoomBy(factor)
+  }
+
+  function fitBlock(block: HTMLElement | null): void {
+    const canvas = block?.querySelector<HTMLElement>('.mermaid-canvas')
+    if (!canvas) return
+    panZoomHandles.get(canvas)?.fit()
+  }
+
+  /**
+   * 图表 / 代码 toggle (same affordance as the reference implementation): the
+   * source stays in the DOM either way, so switching never re-renders.
+   */
+  function setBlockView(block: HTMLElement | null, view: 'chart' | 'code'): void {
+    if (!block) return
+    const canvas = block.querySelector<HTMLElement>('.mermaid-canvas')
+    const src = block.querySelector<HTMLElement>('.mermaid-src')
+    if (canvas) canvas.hidden = view === 'code'
+    if (src) src.hidden = view !== 'code'
+    block.dataset.mermaidView = view
+    for (const btn of Array.from(block.querySelectorAll<HTMLElement>('.mermaid-view'))) {
+      btn.classList.toggle('is-active', btn.dataset.view === view)
+    }
+  }
+
+  /** Download the diagram as a standalone .svg (what viewers expect to paste). */
+  function downloadBlock(block: HTMLElement | null): void {
+    const svg = block?.querySelector<SVGSVGElement>('.mermaid-canvas svg')
+    if (!svg) return
+    const clone = svg.cloneNode(true) as SVGSVGElement
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+    const canvas = block?.querySelector<HTMLElement>('.mermaid-canvas')
+    if (canvas?.dataset.naturalWidth) clone.setAttribute('width', canvas.dataset.naturalWidth)
+    if (canvas?.dataset.naturalHeight) clone.setAttribute('height', canvas.dataset.naturalHeight)
+    const markup = new XMLSerializer().serializeToString(clone)
+    const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `mermaid-${Date.now()}.svg`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+  }
+
   function openZoom(block: HTMLElement): void {
     const canvas = block.querySelector<HTMLElement>('.mermaid-canvas')
     if (!canvas || block.dataset.mermaidState !== 'ready') return
@@ -663,7 +945,8 @@ export function useMermaid(
       maxFitScale: 4,
       // The modal owns the screen, so a plain wheel may zoom here (nothing
       // behind it should scroll while it is open).
-      wheelAlways: true,
+      wheel: 'always',
+      dblclick: 'fit',
       onScale: (next) => {
         zoomScale.value = +next.toFixed(2)
       },
@@ -762,6 +1045,11 @@ export function useMermaid(
     blockSource,
     copySource,
     openZoom,
+    // inline card controls (toolbar buttons / double-click)
+    zoomBlock,
+    fitBlock,
+    setBlockView,
+    downloadBlock,
     // zoom modal
     zoom,
     zoomStage,
