@@ -206,6 +206,8 @@ reason: worker-death                       ← session 对象终态（close/崩�
 > `session_info_changed` **不出现在此流**——它是 master 内部消费事件（写 `sessions.title` 后过滤，见 `routes/events.ts`），客户端契约不变。
 >
 > **订阅与终态**（core-session-refactor）：订阅经 `Session.subscribe`（`track()` 锚定无 worker 对象，绝不因开流而 spawn）。worker 死 → registry dispose → 下发 `session_disposed` 后关流；客户端（原生 EventSource）**自动重连**并经 `track()` 挂到下一个 Session 对象，消息流恢复。
+>
+> **客户端连接数**：web / IDE 的传输层是 SharedWorker 单流扇出（同 origin 只持 1 条 `/events`，标签页经 `MessagePort` 订阅），不再每标签页一条连接 —— 否则会被 Chromium 的每 origin 6 条 HTTP/1.1 上限拖死（详见 changelog 040）。服务端契约不变。
 
 ```mermaid
 sequenceDiagram

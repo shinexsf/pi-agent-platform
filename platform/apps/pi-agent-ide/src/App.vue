@@ -109,5 +109,7 @@ onUnmounted(() => {
   height: 100vh;
   background: var(--bg-primary);
   color: var(--text-primary);
+  position: relative;
 }
+
 </style>

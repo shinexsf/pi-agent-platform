@@ -23,14 +23,27 @@ const emit = defineEmits<{
 const messagesEl = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 
-/** Multiply per-notch scroll so chat reads like a chat, not a Telnet session.
- *  Chromium on Windows reports deltaMode=1 (LINE), 1 tick ≈ 1 line ≈ 16px.
- *  macOS natural-scroll inverts direction; user expectation is the same —
- *  scroll in the direction the wheel / trackpad pushes. */
-const SCROLL_LINES_PER_TICK = 5
+/** 滚轮一格滚多少像素。
+ *  Windows 的 Chromium 报 deltaMode=1（按行），一格通常是 3 行；macOS 触控板报
+ *  deltaMode=0（按像素）。这里统一换算成像素，让一格在所有平台都约等于 3 行正文
+ *  （≈78px）——原来直接乘 5 倍（3×5=15 行 ≈240px）就是「一次跳一大截」的原因。 */
+const WHEEL_PX_PER_LINE = 26
 
-/** Distance from the top under which we start pulling the previous page. */
+/** 距离顶部多少像素以内开始拉上一页。 */
 const LOAD_OLDER_THRESHOLD = 120
+
+/** 系统开启「减少动态效果」时不做缓动，直接跟手。 */
+const REDUCE_MOTION =
+  typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+/**
+ * 平滑滚动的目标位置。滚轮每次只改这个目标值，由一条 rAF 循环把 scrollTop
+ * 缓动过去 —— 关键在于「累加目标」而不是「每格各起一个动画」：快速连续拨轮
+ * 时新事件只是把目标推得更远，循环一直在追，不会出现每格动画互相取消导致的
+ * 卡顿/抖动（这也是之前注释里担心的那种「smooth 一拨就卡」）。
+ */
+let wheelTarget = 0
+let wheelRaf = 0
 
 /**
  * Scroll anchor for prepended pages: without it, every older page would shift the
@@ -41,12 +54,56 @@ let prependAnchor: { height: number; top: number } | null = null
 function onScroll() {
   const el = messagesEl.value
   if (!el) return
+  // 没有动画在跑的时候（拖滚动条、键盘 PageUp/PageDown、程序化滚动），
+  // 由原生滚动决定当前位置，把目标同步过来，避免下一次滚轮从旧目标跳回。
+  if (!wheelRaf) wheelTarget = el.scrollTop
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
   autoScroll.value = distance < 50
   if (el.scrollTop < LOAD_OLDER_THRESHOLD && props.hasMore && !props.loadingOlder) {
     prependAnchor = { height: el.scrollHeight, top: el.scrollTop }
     emit('loadOlder')
   }
+}
+
+/** 把滚轮增量统一换算成像素。 */
+function wheelDeltaToPx(e: WheelEvent, el: HTMLElement): number {
+  if (e.deltaMode === 1) {
+    // 按行：至少算作一整行，避免某些驱动报 0.x 时一格几乎不动
+    const lines = Math.sign(e.deltaY) * Math.max(1, Math.abs(e.deltaY))
+    return lines * WHEEL_PX_PER_LINE
+  }
+  if (e.deltaMode === 2) return e.deltaY * el.clientHeight
+  return e.deltaY
+}
+
+function stopWheelAnimation() {
+  if (wheelRaf) {
+    cancelAnimationFrame(wheelRaf)
+    wheelRaf = 0
+  }
+  const el = messagesEl.value
+  if (el) wheelTarget = el.scrollTop
+}
+
+/** 缓动循环：0.28 的系数在 60fps 下约 150ms 收敛 95%，跟手且不生硬。 */
+function easeScrollTop() {
+  const el = messagesEl.value
+  if (!el) {
+    wheelRaf = 0
+    return
+  }
+  const max = el.scrollHeight - el.clientHeight
+  if (wheelTarget > max) wheelTarget = max
+  const remaining = wheelTarget - el.scrollTop
+  if (Math.abs(remaining) < 0.5) {
+    el.scrollTop = wheelTarget
+    wheelRaf = 0
+    onScroll()
+    return
+  }
+  el.scrollTop += remaining * 0.28
+  onScroll()
+  wheelRaf = requestAnimationFrame(easeScrollTop)
 }
 
 /** After a prepend, keep the previously visible content at the same offset. */
@@ -57,8 +114,10 @@ watch(
     if (!el || !prependAnchor) return
     const anchor = prependAnchor
     prependAnchor = null
+    stopWheelAnimation()
     nextTick(() => {
       el.scrollTop = el.scrollHeight - anchor.height + anchor.top
+      wheelTarget = el.scrollTop
     })
   },
 )
@@ -89,13 +148,18 @@ function onWheel(e: WheelEvent) {
       ancestor = ancestor.parentElement
     }
   }
-  // Direct scrollTop +=: instant response, no animation queue (smooth scroll
-  // on wheel ticks makes rapid scrolling stutter as each event cancels the
-  // previous animation). Programmatic scroll (jump-to-latest, auto-follow new
-  // messages) uses scrollTo({behavior: 'smooth'}) below.
+  // 增量归一化成像素后累加到目标位置，交给 rAF 缓动；不再直接 scrollTop +=。
   e.preventDefault()
-  el.scrollTop += e.deltaY * SCROLL_LINES_PER_TICK
-  onScroll()
+  const delta = wheelDeltaToPx(e, el)
+  const max = el.scrollHeight - el.clientHeight
+  if (!wheelRaf) wheelTarget = el.scrollTop
+  wheelTarget = Math.max(0, Math.min(max, wheelTarget + delta))
+  if (REDUCE_MOTION) {
+    el.scrollTop = wheelTarget
+    onScroll()
+    return
+  }
+  if (!wheelRaf) wheelRaf = requestAnimationFrame(easeScrollTop)
 }
 
 onMounted(() => {
@@ -104,11 +168,14 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   messagesEl.value?.removeEventListener('wheel', onWheel)
+  if (wheelRaf) cancelAnimationFrame(wheelRaf)
 })
 
 function scrollToBottom(smooth = true) {
   const el = messagesEl.value
   if (!el) return
+  // 程序化滚动接管：先掐掉滚轮缓动，避免两个动画抢 scrollTop
+  stopWheelAnimation()
   el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   autoScroll.value = true
 }

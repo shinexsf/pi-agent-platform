@@ -16,10 +16,11 @@
  *   - This replaces the old per-field cache ref pattern (commandsCache/modelsCache/etc.)
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import type { MessageDTO, MessageDeltaDTO } from '@pi-agent-platform/shared-types'
 import type { SessionContextDTO, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types'
 import { useIdeBridge, onIdeBridgeReady } from './useIdeBridge'
+import { createSseTransport, type SseTransport } from './sseTransport'
 
 export interface UseSSEOptions {
   sessionId: string
@@ -62,6 +63,7 @@ function dispatchContext(ctx: SessionContextDTO) {
 
 /** Page size for `GET /:id/messages` (server clamps to 200). */
 const HISTORY_PAGE_SIZE = 50
+
 
 /** Shape of `GET /api/sessions/:id/messages` (tail window + paging metadata). */
 type MessagesPage = {
@@ -110,7 +112,7 @@ export function useSSE(options: UseSSEOptions) {
     }
   }
 
-  let eventSource: EventSource | null = null
+  let eventSource: SseTransport | null = null
 
   // ── Message delta handling ──
 
@@ -273,11 +275,22 @@ export function useSSE(options: UseSSEOptions) {
 
   function subscribe() {
     if (eventSource) return
-    eventSource = new EventSource(`/api/sessions/${options.sessionId}/events`)
+    wireVisibility()
+    eventSource = createSseTransport({ sessionId: options.sessionId })
 
     eventSource.addEventListener('connected', () => {
       connected.value = true
       clearConnectionError()
+    })
+
+    // 共享连接（SharedWorker）下，服务端的 `connected` 只发给「建立流那一刻」的
+    // 订阅者；后加入的标签页靠 EventSource 自身的 open 事件得知流是通的。
+    eventSource.addEventListener('open', () => {
+      connected.value = true
+      clearConnectionError()
+      // 重连成功：把断流期间错过的消息补回来（首次连接由 loadHistory 负责）
+      if (streamOpenedBefore) void resyncNewest()
+      streamOpenedBefore = true
     })
 
     eventSource.addEventListener('message_update', (e) => {
@@ -348,6 +361,63 @@ export function useSSE(options: UseSSEOptions) {
       eventSource = null
       connected.value = false
     }
+  }
+
+  // ── 重连后补齐 ────────────────────────────────────────────────────────────
+  // 传输层自己会重连（共享 worker 里的 EventSource 会重试），这里只在**重连
+  // 成功后**把断流期间错过的消息补回来。
+  //
+  // 不再有空闲断流：共享连接让一个 origin 只占一条流，6 条连接池上限已不成威胁，
+  // 为此维护「挂起 / 唤醒 / 胶囊」那套状态并不划算（还带来各标签页挂起态互不
+  // 一致的问题）。真要释放连接，在传输层加一个阈值即可，业务层无需知情。
+  let streamOpenedBefore = false
+  let activityWired = false
+  let disposed = false
+  /**
+   * Merge the newest history page into what we already show.
+   *
+   * Existing rows are replaced by the server copy (a tool card that finished
+   * while the stream was down stops rendering "[running]"), unseen rows append.
+   */
+  async function resyncNewest(): Promise<void> {
+    const data = await fetchMessagePage()
+    if (!data) return
+    const incoming = mergeToolResultsIntoCalls(data.messages)
+    const byId = new Map(incoming.map((m) => [m.id, m]))
+    const known = new Set(messages.value.map((m) => m.id))
+    const merged = messages.value.map((m) => byId.get(m.id) ?? m)
+    const tail = incoming.filter((m) => !known.has(m.id))
+    messages.value = tail.length > 0 ? [...merged, ...tail] : merged
+    for (const msg of tail) {
+      if (
+        msg.role === 'user' &&
+        msg.content?.includes('<file ') &&
+        !msg.images?.length &&
+        !fileAttachmentsByMsg.value.has(msg.id)
+      ) {
+        fetchUserMessageAttachments(msg)
+      }
+    }
+  }
+
+  /**
+   * 标签页从后台冻结中醒来时，幂等重挂一次共享连接 —— SharedWorker 会把长期
+   * 静默的 port 当作已回收而剪掉，重挂能把这条 port 接回去。
+   */
+  function onVisibilityChange(): void {
+    if (disposed || document.visibilityState === 'hidden') return
+    eventSource?.resubscribe?.()
+  }
+
+  /** Attach the visibility listener once; removed when the component scope dies. */
+  function wireVisibility(): void {
+    if (activityWired || typeof window === 'undefined') return
+    activityWired = true
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    onScopeDispose(() => {
+      disposed = true
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    })
   }
 
   // ---------- history paging (change: session-streaming-runtime, group 10) ----------
@@ -518,7 +588,7 @@ export function useSSE(options: UseSSEOptions) {
     // Only block if already sending AND not a new steer message
     // (This enables the "queue while working" behavior)
     // Ensure SSE is connected — EventSource may have been closed after long idle
-    if (eventSource && eventSource.readyState !== EventSource.OPEN) {
+    if (eventSource && !eventSource.open) {
       eventSource.close()
       eventSource = null
     }

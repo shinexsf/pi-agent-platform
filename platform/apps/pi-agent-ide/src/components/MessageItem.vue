@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { MessageDTO } from '@pi-agent-platform/shared-types'
 import { useIdeBridge } from '../composables/useIdeBridge'
 import { Methods } from '../bridge/methods'
@@ -122,11 +122,69 @@ function toggleArg(tcId: string, argKey: string) {
   argsExpanded.value = next
 }
 
+// ── Sticky-bottom for growing scroll boxes (tool args while streaming,
+// tool result while it arrives) ──
+// These blocks are `max-height: 300px; overflow-y: auto` and their content is
+// replaced wholesale on every delta, which resets `scrollTop` to 0 — a growing
+// output therefore looked frozen on its first line. Pin to the bottom while the
+// user hasn't scrolled up; once they scroll away, stop following until they
+// come back.
+type AutoScrollKey = string
+const autoScrollEls = new Map<AutoScrollKey, HTMLElement>()
+const autoScrollStickBottom = new Map<AutoScrollKey, boolean>()
+
+function setAutoScrollEl(key: AutoScrollKey, el: unknown): void {
+  if (el instanceof HTMLElement) autoScrollEls.set(key, el)
+  else autoScrollEls.delete(key)
+}
+
+function onAutoScroll(key: AutoScrollKey, event: Event): void {
+  const el = event.target as HTMLElement
+  autoScrollStickBottom.set(key, el.scrollHeight - el.scrollTop - el.clientHeight < 24)
+}
+
+// Cheap change signal: total length of every arg value + result on this message.
+watch(
+  () => {
+    let n = 0
+    for (const tc of props.message.toolCalls ?? []) {
+      n += tc.result?.length ?? 0
+      n += JSON.stringify(tc.args ?? {}).length
+    }
+    return n
+  },
+  async () => {
+    if (!isStreaming.value) return
+    await nextTick()
+    for (const [key, el] of autoScrollEls) {
+      if (autoScrollStickBottom.get(key) === false) continue
+      el.scrollTop = el.scrollHeight
+    }
+  },
+)
+
 /** Return the first non-empty line of a multi-line string for collapsed preview. */
 function firstNonEmptyLine(s: string): string {
   const lines = s.replace(/^\s+|\s+$/g, '').split('\n')
   for (const line of lines) {
     if (line.trim().length > 0) return line
+  }
+  return ''
+}
+
+/**
+ * Last non-empty line — used by the collapsed result preview.
+ *
+ * A long tool output (400 lines of `seq`, a build log) collapsed to a
+ * head-preview always reads as "it stopped on its first line": during a live
+ * run the interesting end of the output is the *newest* line, not the first one.
+ * Showing the tail makes the collapsed row act like a progress ticker.
+ */
+function lastNonEmptyLine(s: string): string {
+  const lines = s.replace(/^\s+|\s+$/g, '').split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i] ?? ''
+    if (line.trim().length > 0) return line.trimEnd()
   }
   return ''
 }
@@ -403,6 +461,8 @@ function toolIcon(name: string): string {
               <pre
                 v-else
                 class="arg-value-expanded"
+                :ref="(el: unknown) => setAutoScrollEl(`${tc.id}.arg.${arg.key}`, el)"
+                @scroll="onAutoScroll(`${tc.id}.arg.${arg.key}`, $event)"
                 @click="toggleArg(tc.id, arg.key)"
               >{{ arg.value }}</pre>
             </template>
@@ -420,11 +480,13 @@ function toolIcon(name: string): string {
             @click="toggleToolResult(tc.id)"
           >
             <span class="tool-result-toggle">▶</span>
-            {{ flattenForPreview(tc.result) }}
+            <span class="tool-result-tail">…</span>{{ lastNonEmptyLine(tc.result) }}
           </div>
           <div
             v-else
             class="tool-result-block"
+            :ref="(el: unknown) => setAutoScrollEl(`${tc.id}.result`, el)"
+            @scroll="onAutoScroll(`${tc.id}.result`, $event)"
             @mousedown="onResultMouseDown(tc.id, $event)"
             @mouseup="onResultMouseUp(tc.id, $event)"
           >
@@ -564,23 +626,48 @@ function toolIcon(name: string): string {
   font-size: 13px;
 }
 
-/* Thinking row: collapsed vs expanded (per collapse-when-done). */
+/* `MarkdownView` has TWO root nodes (body + teleported mermaid viewer), so a
+ * class passed from the parent is silently dropped by attribute inheritance —
+ * `.message-thinking` never reached the DOM. Style through `.thinking-area`
+ * with :deep() instead, which cannot be lost that way. */
+.thinking-area :deep(.markdown-body),
+.thinking-area :deep(.markdown-body p),
+.thinking-area :deep(.markdown-body li),
+.thinking-area :deep(.markdown-body blockquote) {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.55;
+}
+/* Code inside thinking stays upright — italic monospace is unreadable. */
+.thinking-area :deep(pre),
+.thinking-area :deep(code) {
+  font-style: normal;
+  font-size: 12px;
+}
+
+/* Thinking row: the hover tint, permanently on. No frame — the block should
+ * read as a soft background patch, not as a boxed card (the status-coloured
+ * tool cards are the only framed things in the message). */
 .thinking-area {
-  margin: 2px 0;
+  margin: 6px 0 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--hover-bg);
 }
 .thinking-preview {
   color: var(--text-secondary);
   font-style: italic;
   font-size: 13px;
-  padding: 3px 6px;
+  padding: 2px 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
   user-select: none;
   border-radius: 3px;
-  /* Negative margin lets the hover background extend slightly past text bounds. */
-  margin: 0 -6px;
+  /* No negative margin: the row now lives inside the framed thinking block,
+   * so the hover tint must not bleed past the frame. */
 }
 .thinking-preview:hover {
   background: var(--hover-bg);
@@ -597,13 +684,14 @@ function toolIcon(name: string): string {
 }
 .thinking-expanded {
   cursor: pointer;
-  border-radius: 3px;
-  padding: 2px 6px;
-  margin: 0 -6px;
+  padding: 2px 4px;
   /* No max-height per user request: full thinking stays fully visible. */
 }
-.thinking-expanded:hover {
-  background: var(--hover-bg);
+/* The block itself is already tinted; hovering the inner row must not double
+ * the tint into a darker patch. */
+.thinking-expanded:hover,
+.thinking-preview:hover {
+  background: transparent;
 }
 
 .message-content {
@@ -785,6 +873,13 @@ function toolIcon(name: string): string {
   max-height: 300px;
   overflow-y: auto;
   cursor: pointer;
+}
+
+/* Collapsed result preview: the TAIL of the output, not its head — a long
+   output collapsed to a head-preview reads as "stuck on the first line". */
+.tool-result-tail {
+  color: var(--text-secondary);
+  margin-right: 2px;
 }
 
 /* Collapsed result preview: single-line ellipsis in the same color block
