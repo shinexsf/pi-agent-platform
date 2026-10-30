@@ -52,38 +52,52 @@ export function onMessageUpdate(
   p.text = snapshotText;
 }
 
-/** Handle `message_end` — dispatch the final text via adapter. */
+/** Handle `message_end` — dispatch the final text via adapter.
+ *
+ * `hasToolCalls` marks an INTERMEDIATE assistant message (text + toolCall in
+ * one message — pi emits the pre-tool narration as its own assistant message).
+ * Sending those made the IM user see a stray fragment (e.g. "ok") before the
+ * final answer — and with a final answer that is also short, two "ok"s.
+ * Only pure-text assistant messages are dispatched.
+ *
+ * The pending entry is claimed (done + deleted) SYNCHRONOUSLY before the
+ * first await: a duplicate `message_end` (redelivered inbound / double
+ * subscription) used to pass the `messageId` check while the first send was
+ * still in flight, dispatching the same text twice. */
 export async function onMessageEnd(
   sessionId: SessionId,
   messageId: string,
   adapter: ChannelAdapter,
+  hasToolCalls = false,
 ): Promise<void> {
-  logger.info({ sessionId, messageId, adapterType: adapter.type }, 'reply-sender: worker message_end received');
+  logger.info({ sessionId, messageId, adapterType: adapter.type, hasToolCalls }, 'reply-sender: worker message_end received');
   const p = pendingBySession.get(sessionId);
-  if (!p || p.messageId !== messageId) {
+  if (!p || p.messageId !== messageId || p.done) {
     return;
   }
   p.done = true;
+  pendingBySession.delete(sessionId);
+  if (hasToolCalls) {
+    // Intermediate message — the turn continues; the FINAL message_end
+    // (pure text, after tool results) is the one that reaches the user.
+    return;
+  }
   const text = p.text.trim();
   if (!text) {
-    pendingBySession.delete(sessionId);
     return;
   }
   const meta = getSessionMeta(sessionId);
   if (!meta) {
-    pendingBySession.delete(sessionId);
     return;
   }
   logger.info({ sessionId, channelId: meta.channelId, chatId: meta.chatId, length: text.length }, 'reply-sender: dispatching text');
   try {
-    const platformMsgId = await adapter.sendText(
+    await adapter.sendText(
       { channelId: meta.channelId, chatId: meta.chatId },
       text,
     );
   } catch (err) {
     logger.error({ err: String(err), sessionId, channelId: meta.channelId, chatId: meta.chatId }, 'reply-sender: send failed');
-  } finally {
-    pendingBySession.delete(sessionId);
   }
 }
 

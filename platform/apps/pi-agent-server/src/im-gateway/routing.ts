@@ -240,7 +240,7 @@ function subscribeReplySender(sessionId: SessionId, ctx: RouteContext): void {
   const unsubscribe = sessionRegistry().track(sessionId).subscribe((event) => {
     if (event.kind !== 'event') return;
     const inner = (event as { event?: string }).event;
-    const dto = (event as { data?: { messageId?: string; parentId?: string; content?: string; role?: string } }).data;
+    const dto = (event as { data?: { messageId?: string; parentId?: string; content?: string; role?: string; toolCalls?: unknown[] } }).data;
     if (inner === 'message_update' && dto?.messageId) {
       if (dto.role && dto.role !== 'assistant') {
             return;
@@ -251,7 +251,11 @@ function subscribeReplySender(sessionId: SessionId, ctx: RouteContext): void {
       if (dto.role && dto.role !== 'assistant') {
             return;
       }
-      void onMessageEnd(sessionId, dto.messageId, ctx.adapter);
+      // Assistant messages carrying toolCalls are INTERMEDIATE (pre-tool
+      // narration) — the turn is not over. Dispatching them made the IM user
+      // receive a stray fragment ("ok") plus the final answer: double reply.
+      const hasToolCalls = Array.isArray(dto.toolCalls) && dto.toolCalls.length > 0;
+      void onMessageEnd(sessionId, dto.messageId, ctx.adapter, hasToolCalls);
       touchSession(sessionId);
     } else if (inner === 'agent_end') {
       // Last event of the prompt cycle. No-op here; reply already dispatched above.
