@@ -160,6 +160,21 @@ flowchart TB
 
 **违反以上任一硬约束 = 动架构，必须写新架构变更并重新评审**。
 
+## 插件（2026-10-29 新增）
+
+- **插件不碰会话数据流**：只能读上下文、挂工具、发事件；不得 flush 会话、不得改 `messages.jsonl` 形状
+  - 理由：会话流的真相线只有一条（pi 的 jsonl + 平台投影），插件再加一条状态线就等于重造 chord
+- **浏览器永不直接触达 worker**：插件 web facet 唯一入口是 REST（`/api/sessions/:id/plugins/emit`）+ SSE（固定事件名 `plugin`）
+  - 不得给插件开 IPC / 直连端口
+- **pi 插件是依赖，不被包装**：`requires.plugins` 只做**校验**（未安装 / 未在该 agent `extensions` 启用 → 不加载）
+  - 绝不代勾（不因为插件声明就自动加进 agent 的 `extensions`）
+- **插件不拥有数据库表**：要持久化就按自己 id 前缀建，平台不提供插件 schema DSL
+- **不做全局 CSS / 全局事件总线**：样式与状态收在 `el` 与 `host` 里
+- **`apiVersion` 不兼容即整包跳过**（`status: 'degraded'` + `detail` 写明原因），不尝试降级运行
+- **`PI_PLUGINS=off` 必须彻底可关**：registry 仍可读、全部 `disabled`，平台默认清单行为不变
+
+**违反以上任一硬约束 = 动架构，必须写新架构变更并重新评审**。
+
 ## sessionId
 
 - **master 预生成 sessionId**

@@ -21,6 +21,10 @@ import { createEventsRouter } from './routes/events.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createConfigRouter } from './routes/config.js';
 import { createTemplatesRouter } from './routes/templates.js';
+import { createPluginsRouter } from './routes/plugins.js';
+import { createSessionPluginsRouter } from './routes/session-plugins.js';
+import { createPluginAssetsRouter } from './routes/plugin-assets.js';
+import { startPluginRuntime } from './services/plugins.js';
 import { createServerLogsRouter } from './routes/server-logs.js';
 import { AttachmentStore } from './services/attachment-store.js';
 import { startTimeoutScanner } from './session-timeout-scanner.js';
@@ -85,6 +89,14 @@ async function main() {
   app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
   app.route('/api/config', createConfigRouter(config));
   app.route('/api/templates', createTemplatesRouter(templateRepo));
+  // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
+  app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir }));
+  app.route('/api/sessions', createSessionPluginsRouter({ workerPool }));
+
+  // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
+  app.route('/plugins', createPluginAssetsRouter({ pluginsDir: config.pluginsDir }));
+  // 启动插件运行期：装载快照 + 监听 registry 变化（server/web 立即生效；watcher 非 persistent）
+  startPluginRuntime(config.pluginsDir);
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
 
@@ -122,7 +134,7 @@ async function main() {
   // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
   if (config.isDev) {
     const { createDebugRouter } = await import('./routes/debug.js');
-    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db));
+    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db, agentRepo));
     const { createCapabilityDebugRouter } = await import('./routes/capabilities-debug.js');
     app.route('/debug/capabilities', createCapabilityDebugRouter(agentRepo, sessionRepo, workerPool));
     logger.info('debug routes mounted at /debug (incl. /debug/capabilities)');

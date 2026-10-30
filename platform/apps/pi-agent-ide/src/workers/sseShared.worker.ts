@@ -28,6 +28,10 @@ const SESSION_EVENTS = [
   'agent_end',
   'queue_update',
   'message_error',
+  // 插件事件（change: plugin-mechanism）——固定事件名 `plugin`，载荷带 pluginId/name。
+  // 注意：**新增具名 SSE 事件时必须同步加到这里**，否则共享连接模式下会被静默丢弃
+  // （直连 EventSource 没有这个白名单，两边行为会不一致）。
+  'plugin',
 ] as const
 
 /** 静默超过这个时间的 port 视为已被浏览器回收（标签页崩溃 / 冻结后不再唤醒）。 */

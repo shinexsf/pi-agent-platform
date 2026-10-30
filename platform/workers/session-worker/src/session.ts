@@ -26,6 +26,7 @@ import {
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type {
   MessageDeltaDTO,
   MessageUsageDTO,
@@ -39,7 +40,31 @@ import { groupMcpTools, isMcpToolName, type McpServerGroup } from './mcp-tools.j
 import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
 import { loadSelectedMcpServers } from './mcp-catalog.js';
 import { logger } from './logger.js';
-import type { WorkerEvent, WorkerEventKind } from '@pi-agent-platform/ipc-protocol';
+
+/** 浏览器 → worker 的插件入口；每个 worker 只有一个会话，所以按 pluginId 存即可。 */
+const pluginEmitHandlers = new Map<string, (name: string, data: unknown) => void | Promise<void>>();
+
+/**
+ * 浏览器 `emit` 的分发入口；返回插件是否注册了处理器。
+ *
+ * 做成模块级函数而不是 adapter 方法：adapter 是普通对象，插件这条通道与
+ * SessionHandle 无关，挂在模块上更省事（每个 worker 只有一个会话）。
+ */
+export async function emitToPluginMessage(pluginId: string, name: string, data: unknown): Promise<boolean> {
+  const handler = pluginEmitHandlers.get(pluginId);
+  if (!handler) {
+    return false;
+  }
+  try {
+    await handler(name, data);
+    return true;
+  } catch (err) {
+    logger.error({ pluginId, name, err: String(err) }, 'plugin emit handler failed');
+    return false;
+  }
+}
+import type { WorkerEvent, WorkerEventKind, WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
+import type { PluginWorkerBridge } from '@pi-agent-platform/plugin-types';
 import { createServerTools, type CallMasterFn } from './tools.js';
 
 export type EventEmitter = (event: Omit<WorkerEvent, 'kind'>) => void;
@@ -523,6 +548,7 @@ export async function createSession(
   emit: EventEmitter,
   callMaster: CallMasterFn,
   existingSessionPath?: string,
+  plugins?: WorkerPluginSpec[],
 ): Promise<{ session: PiSessionAdapter; handle: SessionHandle }> {
   const agentDir = process.env.PI_AGENT_DIR ?? defaultAgentDir();
   const acc = new DeltaAccumulator();
@@ -612,6 +638,48 @@ export async function createSession(
     mcpEnabled: mcpActive,
   });
 
+  // ---- 插件 facet（change: plugin-mechanism，骨架）--------------------------------
+  // 只加载 `enabled` 的条目；任一条失败只让该 facet 不可用，不得影响会话。
+  const enabledPlugins = (plugins ?? []).filter((p) => p.enabled);
+
+  /** 每个插件的上行桥：`bridge.emit()` 是本设计里浏览器唯一能收到插件数据的入口。 */
+  const bridgeFor = (pluginId: string): PluginWorkerBridge => ({
+    pluginId,
+    emit(name, data) {
+      emit({ event: 'plugin_event', data: { pluginId, name, data } });
+    },
+    log(level, message, extra) {
+      logger[level]({ pluginId, ...extra }, message);
+    },
+    onEmit(handler) {
+      pluginEmitHandlers.set(pluginId, handler);
+    },
+  });
+
+  // extension facet：用 inline factory 包装，既能把 bridge 作为第二参数注入，
+  // 又天然落进 `<inline:` 豁免集（不受 agent extensions 白名单过滤）。
+  const pluginExtensionFactories: InlineExtension[] = enabledPlugins
+    .filter((p) => p.extensionPath)
+    .map((p) => ({
+      name: `plugin:${p.id}`,
+      hidden: true,
+      factory: async (pi) => {
+        try {
+          const mod = (await import(pathToFileURL(p.extensionPath as string).href)) as {
+            default?: unknown;
+            extension?: unknown;
+            activate?: unknown;
+          };
+          const fn = mod.default ?? mod.extension ?? mod.activate;
+          if (typeof fn !== 'function') throw new Error('extension facet 未导出默认工厂函数');
+          await (fn as (pi: unknown, ctx: unknown) => unknown)(pi, { bridge: bridgeFor(p.id) });
+          logger.info({ pluginId: p.id }, 'extension facet loaded');
+        } catch (err) {
+          logger.error({ pluginId: p.id, err: String(err) }, 'extension facet failed to load (session continues)');
+        }
+      },
+    }));
+
   // Registration of the SELECTED catalog servers. This has to happen while extensions load:
   // pi's `mcp` extension reads `pi.getMcpServers()` on `session_start` and connects whatever is
   // registered there. Inline (not builtin) because the code lives here, not in pi's dist.
@@ -642,6 +710,7 @@ export async function createSession(
     ...(takeoverExtension ? [takeoverExtension] : []),
     ...(mcpCatalogExtension ? [mcpCatalogExtension] : []),
     ...(builtinInjection?.factories ?? []),
+    ...pluginExtensionFactories,
   ];
 
   const resourceLoader = new DefaultResourceLoader({
@@ -687,6 +756,24 @@ export async function createSession(
   // files) never make it into the system prompt — workers run with the bare default
   // prompt + no skills, regardless of what's on disk.
   await resourceLoader.reload();
+
+  // worker facet：与 extension facet 不同，它不是 pi 扩展，只是“同进程的旁观者”，
+  // 只能通过 bridge 看事件/发事件。失败同样只隔离自己。
+  for (const p of enabledPlugins) {
+    if (!p.workerPath) continue;
+    try {
+      const mod = (await import(pathToFileURL(p.workerPath).href)) as {
+        default?: unknown;
+        activate?: unknown;
+      };
+      const fn = mod.default ?? mod.activate;
+      if (typeof fn !== 'function') throw new Error('worker facet 未导出默认函数');
+      await (fn as (ctx: unknown) => unknown)({ bridge: bridgeFor(p.id) });
+      logger.info({ pluginId: p.id }, 'worker facet loaded');
+    } catch (err) {
+      logger.error({ pluginId: p.id, err: String(err) }, 'worker facet failed to load (session continues)');
+    }
+  }
 
   // Resolve the agent's configured model from ModelRegistry so pi SDK uses it
   // instead of falling back to settings.json defaultModel.

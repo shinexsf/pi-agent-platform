@@ -26,6 +26,10 @@ import type {
   SessionRunState,
 } from '@pi-agent-platform/shared-types';
 
+import type { PluginFacetName, PluginStatus, SurfaceRegistration } from '@pi-agent-platform/plugin-types';
+
+export type { SurfaceRegistration } from '@pi-agent-platform/plugin-types';
+
 // ---------- Agents ----------
 
 export interface CreateAgentRequest {
@@ -289,6 +293,28 @@ export interface UpdateTemplateRequest {
 
 export type ListTemplatesResponse = AgentTemplateDTO[];
 export type TemplateResponse = AgentTemplateDTO;
+
+// ---------- Plugins ----------
+
+/** 插件在会话/列表中的只读视图。 */
+export interface PluginEntryDTO {
+  /** 插件 id = npm 包名。 */
+  id: string;
+  version: string;
+  status: PluginStatus;
+  /** 人类可读的降级/停用原因。 */
+  reason?: string;
+  /** facet 就绪情况；未提供的 facet 视为无入口。 */
+  facets: Partial<Record<PluginFacetName, boolean>>;
+  /** 本插件注册的 UI 槽位（仅 web facet 已启用时非空）。 */
+  slots: SurfaceRegistration[];
+}
+
+export interface ListPluginsResponse {
+  plugins: PluginEntryDTO[];
+  /** 全局 kill switch 是否生效。 */
+  disabledByFlag: boolean;
+}
 
 // ---------- Error ----------
 

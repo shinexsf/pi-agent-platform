@@ -75,6 +75,9 @@ importers:
       '@pi-agent-platform/ipc-protocol':
         specifier: workspace:*
         version: link:../../packages/ipc-protocol
+      '@pi-agent-platform/plugin-types':
+        specifier: workspace:*
+        version: link:../../packages/plugin-types
       '@pi-agent-platform/sdk-integration':
         specifier: workspace:*
         version: link:../../packages/sdk-integration
@@ -118,6 +121,9 @@ importers:
       '@pi-agent-platform/channel-types':
         specifier: workspace:*
         version: link:../../packages/channel-types
+      '@pi-agent-platform/plugin-types':
+        specifier: workspace:*
+        version: link:../../packages/plugin-types
       '@pi-agent-platform/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -244,6 +250,9 @@ importers:
 
   packages/api-types:
     dependencies:
+      '@pi-agent-platform/plugin-types':
+        specifier: workspace:*
+        version: link:../plugin-types
       '@pi-agent-platform/shared-types':
         specifier: workspace:*
         version: link:../shared-types
@@ -272,6 +281,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.0
         version: 1.19.17(hono@4.13.3)
+      '@pi-agent-platform/plugin-types':
+        specifier: workspace:*
+        version: link:../plugin-types
       '@tencent-connect/qqbot-connector':
         specifier: ^1.2.0
         version: 1.2.0
@@ -316,6 +328,15 @@ importers:
         specifier: ^5.6.0
         version: 5.6.2
 
+  packages/plugin-types:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.0
+        version: 5.6.2
+
   packages/sdk-integration:
     dependencies:
       '@pi-agent-platform/ipc-protocol':
@@ -346,6 +367,9 @@ importers:
       '@pi-agent-platform/ipc-protocol':
         specifier: workspace:*
         version: link:../../packages/ipc-protocol
+      '@pi-agent-platform/plugin-types':
+        specifier: workspace:*
+        version: link:../../packages/plugin-types
       '@pi-agent-platform/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

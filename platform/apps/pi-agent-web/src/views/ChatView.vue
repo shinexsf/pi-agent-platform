@@ -8,6 +8,8 @@ import MessageList from '../components/chat/MessageList.vue'
 import InputBox from '../components/chat/InputBox.vue'
 import SteerSubBar from '../components/chat/SteerSubBar.vue'
 import SessionInfoModal from '../components/chat/SessionInfoModal.vue'
+import SlotHost from '../components/plugin/SlotHost.vue'
+import { listRailSurfaces } from '../plugins/host'
 const route = useRoute()
 const router = useRouter()
 
@@ -46,13 +48,22 @@ const attachments = useAttachments(
 )
 
 // Session info panel (rendered inside the drawer)
-export type ChatDrawerTab = 'run' | 'context' | 'info'
+export type ChatDrawerTab = 'run' | 'context' | 'info' | `plugin:${string}`
 
 /** Drawer titles per tab (the drawer header is shared). */
-const DRAWER_TITLES: Record<ChatDrawerTab, string> = {
+const BASE_DRAWER_TITLES = {
   run: '运行状态',
   context: '上下文',
   info: '会话信息',
+} as const
+
+/** 插件 tab 的标题来自插件声明的 `title`，其余走固定表。 */
+const pluginTabTitles = ref<Record<string, string>>({})
+
+function drawerTitle(tab: ChatDrawerTab | null): string {
+  if (!tab) return ''
+  if (tab.startsWith('plugin:')) return pluginTabTitles.value[tab.slice('plugin:'.length)] ?? '插件'
+  return BASE_DRAWER_TITLES[tab as keyof typeof BASE_DRAWER_TITLES]
 }
 
 /**
@@ -105,6 +116,26 @@ function startDrawerResize(e: MouseEvent) {
   document.body.style.userSelect = 'none'
   window.addEventListener('mousemove', onMove)
   window.addEventListener('mouseup', onUp)
+}
+
+// 插件 rail 图标（change: plugin-mechanism 6.5）：宿主渲染按钮，插件只声明元数据
+const railPlugins = ref<Array<{ pluginId: string; title: string; icon?: string; order: number }>>([])
+
+async function loadRailPlugins() {
+  try {
+    const items = await listRailSurfaces()
+    railPlugins.value = items.map(({ pluginId, surface }) => ({
+      pluginId,
+      title: surface.title,
+      icon: surface.icon,
+      order: surface.order ?? 100,
+    }))
+    for (const item of railPlugins.value) {
+      pluginTabTitles.value[item.pluginId] = item.title
+    }
+  } catch (err) {
+    console.warn('[plugin] rail load failed', err)
+  }
 }
 
 function toggleDrawer(tab: ChatDrawerTab) {
@@ -239,6 +270,7 @@ async function handleSend(
 }
 
 onMounted(async () => {
+  void loadRailPlugins()
   await loadSessionInfo()
   sse.subscribe()
   sse.subscribeToSteerQueue()
@@ -364,6 +396,19 @@ onUnmounted(() => {
             <line x1="12" y1="8" x2="12.01" y2="8" />
           </svg>
         </button>
+        <!-- 插件槽位 chat.rail-icon（change: plugin-mechanism 6.5） -->
+        <button
+          v-for="item in railPlugins"
+          :key="item.pluginId"
+          class="rail-btn"
+          :class="{ active: drawerTab === `plugin:${item.pluginId}` }"
+          type="button"
+          :title="item.title"
+          :data-plugin-id="item.pluginId"
+          @click="toggleDrawer(`plugin:${item.pluginId}`)"
+        >
+          <span class="rail-plugin-mark">{{ item.title.slice(0, 1) }}</span>
+        </button>
       </aside>
 
       <!-- 右侧抽屉：盖在内容上方（不挤压读宽） -->
@@ -383,7 +428,7 @@ onUnmounted(() => {
             @mousedown="startDrawerResize"
           />
           <header class="drawer-head">
-            <span class="drawer-title">{{ DRAWER_TITLES[drawerTab] }}</span>
+            <span class="drawer-title">{{ drawerTitle(drawerTab) }}</span>
             <button class="drawer-close" type="button" title="关闭" @click="closeDrawer">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M18 6L6 18M6 6l12 12" />
@@ -450,6 +495,18 @@ onUnmounted(() => {
               <div class="drawer-bar-fill" :style="{ width: `${Math.max(0, Math.min(100, contextUsage?.percent ?? 0))}%` }" />
             </div>
             <div class="drawer-note">百分比为 SDK 估算值；压缩（compaction）刚发生时可能暂为未知。</div>
+          </div>
+          <!-- 插件槽位 chat.drawer（change: plugin-mechanism 6.5）：按插件打开 -->
+          <div
+            v-else-if="drawerTab.startsWith('plugin:')"
+            class="drawer-body"
+            :data-plugin-id="drawerTab.slice('plugin:'.length)"
+          >
+            <SlotHost
+              slot="chat.drawer"
+              :session-id="sessionId"
+              :plugin-id="drawerTab.slice('plugin:'.length)"
+            />
           </div>
         </section>
       </transition>
@@ -586,6 +643,12 @@ onUnmounted(() => {
   opacity: 1;
   background: color-mix(in srgb, var(--surface, #fff) 78%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
+}
+
+.rail-plugin-mark {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .rail-btn {

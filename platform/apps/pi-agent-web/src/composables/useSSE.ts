@@ -21,6 +21,7 @@ import type { MessageDTO, MessageDeltaDTO } from '@pi-agent-platform/shared-type
 import type { SessionContextDTO, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types'
 import { useSessionRun, type SessionSnapshotFrame } from './useSessionRun'
 import { createSseTransport, type SseTransport } from './sseTransport'
+import { forwardPluginFrame } from '../plugins/host'
 
 export interface UseSSEOptions {
   sessionId: string
@@ -410,6 +411,12 @@ export function useSSE(options: UseSSEOptions) {
       console.error('[SSE] connection error:', e)
       connected.value = false
       insertError({ source: 'sse_connection', message: 'Connection lost, retrying…' })
+    })
+
+    // 插件事件（change: plugin-mechanism 5.4）：server 用固定事件名 `plugin`
+    // 承载 `{pluginId, name, data}`，这里只做转发，语义在插件宿主里。
+    eventSource.addEventListener('plugin', (e) => {
+      forwardPluginFrame(e.data)
     })
 
     eventSource.addEventListener('message_error', (e) => {

@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pi-agent-platform/plugin-types": "workspace:*",
     "@pi-agent-platform/shared-types": "workspace:*"
   },
   "devDependencies": {

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.3.0",
+    "@pi-agent-platform/plugin-types": "workspace:*",
     "@earendil-works/pi-coding-agent": "1.3.0",
     "@hono/node-server": "^1.13.0",
     "@tencent-connect/qqbot-connector": "^1.2.0",

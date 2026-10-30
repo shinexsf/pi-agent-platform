@@ -11,13 +11,38 @@ import type { WorkerPool } from '../worker-pool.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 import { sql } from 'drizzle-orm';
 import type { DB } from '../db/init.js';
+import type { AgentRepo } from '../repos/agent.repo.js';
+import { extractExtensionNames, readSettings } from '../services/extension-utils.js';
+import { getPluginSnapshot, resolveSessionPlugins } from '../services/plugins.js';
 
 export function createDebugRouter(
   workerPool: WorkerPool,
   sessionRepo: SessionRepo,
   db: DB,
+  agentRepo?: AgentRepo,
 ) {
   const router = new Hono();
+
+  /** 插件闸门结果（只读，用于排查"为什么这个会话上没有某个插件"）。 */
+  async function describePluginsForSession(agentId: string | null) {
+    try {
+      const snapshot = getPluginSnapshot(config.pluginsDir);
+      if (snapshot.disabledByFlag) return { disabledByFlag: true, plugins: [] };
+      const agent = agentId && agentRepo ? agentRepo.get(agentId) : null;
+      const settings = await readSettings(config.agentDir);
+      const resolved = resolveSessionPlugins({
+        snapshot,
+        agentExtensions: agent?.config?.extensions ?? [],
+        installedPiExtensions: extractExtensionNames(settings),
+      });
+      return {
+        disabledByFlag: false,
+        plugins: resolved.map((p) => ({ id: p.id, enabled: p.enabled, reason: p.reason ?? null })),
+      };
+    } catch (err) {
+      return { error: String(err) };
+    }
+  }
 
   router.get('/health', (c) => {
     return c.json({
@@ -34,11 +59,17 @@ export function createDebugRouter(
     return c.json({ sessions, workers });
   });
 
-  router.get('/sessions/:id', (c) => {
+  router.get('/sessions/:id', async (c) => {
     const id = c.req.param('id');
     const session = sessionRepo.get(id);
     const worker = workerPool.get(id);
-    return c.json({ session, worker: worker ? { workerPid: worker.workerPid, ready: worker.ready, stderrTail: worker.stderrTail, pendingCalls: worker.pendingCalls.size } : null });
+    // 插件闸门结果（change: plugin-mechanism）：解释"为什么这个会话上看不到某个插件"
+    const plugins = await describePluginsForSession(session?.agentId ?? null);
+    return c.json({
+      session,
+      worker: worker ? { workerPid: worker.workerPid, ready: worker.ready, stderrTail: worker.stderrTail, pendingCalls: worker.pendingCalls.size } : null,
+      plugins,
+    });
   });
 
   router.get('/workers', (c) => {

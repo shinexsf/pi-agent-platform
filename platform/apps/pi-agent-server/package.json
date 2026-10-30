@@ -23,6 +23,7 @@
     "@pi-agent-platform/api-types": "workspace:*",
     "@pi-agent-platform/channel-types": "workspace:*",
     "@pi-agent-platform/ipc-protocol": "workspace:*",
+    "@pi-agent-platform/plugin-types": "workspace:*",
     "@pi-agent-platform/sdk-integration": "workspace:*",
     "@pi-agent-platform/shared-types": "workspace:*",
     "better-sqlite3": "^11.5.0",

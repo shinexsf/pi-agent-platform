@@ -81,6 +81,19 @@ export function consoleLogFile(): string {
   return path.join(dataRoot(), 'logs', 'server.console.log');
 }
 
+/** 插件安装根：`$HOME/.pi/server/plugins`。 */
+export function pluginsDir(): string {
+  return path.join(dataRoot(), 'plugins');
+}
+
+/**
+ * pi 自己的全局包根（第三方 pi 插件装在这里）：`$HOME/.pi/agent/npm/node_modules`。
+ * 插件包的 `peerDependencies` 不装副本，只链接到这里，保证同一实例。
+ */
+export function piNpmModulesDir(): string {
+  return path.join(homedir(), '.pi', 'agent', 'npm', 'node_modules');
+}
+
 /** Sub-directories under dataRoot() that must exist before start. */
 export function dataSubdirs(): string[] {
   return [

@@ -8,6 +8,13 @@ import { startCommand } from './commands/start.js';
 import { stopCommand } from './commands/stop.js';
 import { statusCommand } from './commands/status.js';
 import { logsCommand } from './commands/logs.js';
+import {
+  pluginAddCommand,
+  pluginDisableCommand,
+  pluginEnableCommand,
+  pluginListCommand,
+  pluginRemoveCommand,
+} from './commands/plugin.js';
 
 const program = new Command();
 
@@ -43,6 +50,47 @@ program
   .option('-f, --follow', 'follow new log output (Ctrl+C to stop)')
   .action(async (opts: { follow?: boolean }) => {
     await logsCommand({ follow: !!opts.follow });
+  });
+
+const plugin = program
+  .command('plugin')
+  .description('install and manage platform plugins (local directory only, no page install)')
+  ;
+
+plugin
+  .command('add <dir>')
+  .description('install a plugin from a local package directory and register it')
+  .action(async (dir: string) => {
+    await pluginAddCommand(dir);
+  });
+
+plugin
+  .command('list')
+  .description('list installed plugins with status and facets')
+  .action(async () => {
+    await pluginListCommand();
+  });
+
+plugin
+  .command('enable <id>')
+  .description('enable an installed plugin')
+  .action(async (id: string) => {
+    await pluginEnableCommand(id);
+  });
+
+plugin
+  .command('disable <id>')
+  .description('disable a plugin without removing its files')
+  .action(async (id: string) => {
+    await pluginDisableCommand(id);
+  });
+
+plugin
+  .command('remove <id>')
+  .description('unregister a plugin (keeps files unless --purge)')
+  .option('--purge', 'also delete the install directory')
+  .action(async (id: string, opts: { purge?: boolean }) => {
+    await pluginRemoveCommand(id, { purge: !!opts.purge });
   });
 
 program.parseAsync(process.argv).catch((err) => {

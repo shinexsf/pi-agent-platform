@@ -20,6 +20,7 @@ import type {
   ReverseCallResponse,
   WorkerEvent,
   WorkerMethod,
+  WorkerPluginSpec,
 } from '@pi-agent-platform/ipc-protocol';
 import type { RuntimeConfig } from '@pi-agent-platform/shared-types';
 import { logger } from './logger.js';
@@ -31,7 +32,7 @@ import { logger } from './logger.js';
 // processImage for the supported mime whitelist — see
 // `processImage` in @earendil-works/pi-coding-agent/dist/utils/image-process.ts.
 import { resizeImage, formatDimensionNote } from '@earendil-works/pi-coding-agent';
-import { createSession, PiSessionAdapter } from './session.js';
+import { createSession, emitToPluginMessage, PiSessionAdapter } from './session.js';
 import type { CallMasterFn } from './tools.js';
 
 // State
@@ -93,9 +94,21 @@ async function dispatch(req: CallRequest): Promise<void> {
   try {
     switch (method as WorkerMethod) {
       case 'createSession': {
-        const [config, sessionId, existingSessionPath] = args as [RuntimeConfig, string, string | undefined];
-        logger.info({ sessionId }, 'received createSession');
-        const { session, handle } = await createSession(config, sessionId, emit, callMaster, existingSessionPath);
+        const [config, sessionId, existingSessionPath, plugins] = args as [
+          RuntimeConfig,
+          string,
+          string | undefined,
+          WorkerPluginSpec[] | undefined,
+        ];
+        logger.info({ sessionId, plugins: plugins?.length ?? 0 }, 'received createSession');
+        const { session, handle } = await createSession(
+          config,
+          sessionId,
+          emit,
+          callMaster,
+          existingSessionPath,
+          plugins,
+        );
         currentSession = session;
         currentHandle = handle.id;
         logger.info(
@@ -199,6 +212,14 @@ async function dispatch(req: CallRequest): Promise<void> {
         if (!currentSession) throw new Error('no active session');
         await currentSession.abort();
         respond(req.id, true, null);
+        return;
+      }
+      case 'pluginEmit': {
+        if (!currentSession) throw new Error('no active session');
+        const [pluginId, name, data] = args as [string, string, unknown];
+        const handled = await emitToPluginMessage(pluginId, name, data);
+        // respond(id, ok, result)：ok 位是"这次调用是否成功"，插件没接收者也算成功
+        respond(req.id, true, handled);
         return;
       }
       case 'setModel': {

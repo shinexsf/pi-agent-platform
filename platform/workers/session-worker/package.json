@@ -14,6 +14,7 @@
     "@earendil-works/pi-ai": "1.3.0",
     "@earendil-works/pi-coding-agent": "1.3.0",
     "@pi-agent-platform/ipc-protocol": "workspace:*",
+    "@pi-agent-platform/plugin-types": "workspace:*",
     "@pi-agent-platform/shared-types": "workspace:*",
     "pino": "^9.5.0"
   },

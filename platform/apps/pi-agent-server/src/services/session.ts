@@ -27,6 +27,10 @@ import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilit
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
 import type { SessionRunState } from '@pi-agent-platform/shared-types';
+import type { WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
+import { config } from '../config.js';
+import { extractExtensionNames, readSettings } from './extension-utils.js';
+import { getPluginSnapshot, resolveSessionPlugins } from './plugins.js';
 
 /**
  * Idle run state. Shared (frozen by convention) so responses for sessions without a
@@ -47,6 +51,31 @@ export function runStateOf(sessionId: string): SessionRunState {
 }
 
 const logger = childLogger('session');
+
+/**
+ * 解析该会话可用的插件集合（会话级闸门）。
+ *
+ * - 解析在 server 单点完成，结果随 `createSession` 一次性下发
+ * - `requires.plugins` 只校验，不代用户启用
+ * - 解析失败降为空集合，不阻断建会话
+ */
+async function resolvePluginsForAgent(agent: AgentLike): Promise<WorkerPluginSpec[]> {
+  try {
+    const snapshot = getPluginSnapshot(config.pluginsDir);
+    if (snapshot.disabledByFlag || snapshot.plugins.length === 0) return [];
+    const settings = await readSettings(config.agentDir);
+    const installed = extractExtensionNames(settings);
+    const agentExtensions = agent.config?.extensions ?? [];
+    const resolved = resolveSessionPlugins({ snapshot, agentExtensions, installedPiExtensions: installed });
+    for (const p of resolved.filter((r) => !r.enabled && r.reason)) {
+      logger.debug({ pluginId: p.id, reason: p.reason }, 'plugin gated off for session');
+    }
+    return resolved.filter((p) => p.enabled);
+  } catch (err) {
+    logger.error({ err: String(err) }, 'plugin resolution failed — session continues without plugins');
+    return [];
+  }
+}
 
 interface AgentLike {
   id: string;
@@ -75,10 +104,11 @@ async function spawnPlaceholder(
   await workerPool.spawn(sessionId, agent.workspacePath);
   session.agentId = agent.id;
   const runtimeConfig = buildRuntimeConfig(agent);
+  const plugins = await resolvePluginsForAgent(agent);
   const result = await workerPool.call<CreateSessionResult>(
     sessionId,
     'createSession',
-    [runtimeConfig, sessionId, undefined],
+    [runtimeConfig, sessionId, undefined, plugins],
   );
   session.piSessionPath = result.piSessionPath;
   session.model = result.model ?? null;
@@ -137,7 +167,7 @@ async function spawnAndCreate(
     const result = await workerPool.call<CreateSessionResult>(
       sessionId,
       'createSession',
-      [runtimeConfig, sessionId, existingSessionPath],
+      [runtimeConfig, sessionId, existingSessionPath, await resolvePluginsForAgent(agent)],
     );
     piSessionPath = result.piSessionPath;
     piSessionName = result.sessionName;

@@ -26,7 +26,8 @@ export type WorkerMethod =
   | 'getContextUsage'
   | 'getSystemPrompt'
   | 'getSessionResources'
-  | 'setSessionName';
+  | 'setSessionName'
+  | 'pluginEmit';
 
 export interface CallRequest {
   kind: 'call';
@@ -69,7 +70,36 @@ export type WorkerEventKind =
   | 'error'
   /** pi-native session display name changed (data: { name }) — master-internal,
    *  consumed to sync sessions.title; NOT forwarded to SSE clients. */
-  | 'session_info_changed';
+  | 'session_info_changed'
+  /** 插件事件（change: plugin-mechanism）。data 为 `PluginEventPayload`，
+   *  master 转发为 SSE 事件名 `plugin.<pluginId>.<name>`。 */
+  | 'plugin_event';
+
+/**
+ * 插件事件的载荷。由 worker/extension facet 的 `bridge.emit(name, data)` 发出。
+ * 与消息事件共用同一条流，顺序天然一致。
+ */
+export interface PluginEventPayload {
+  pluginId: string;
+  name: string;
+  data: unknown;
+}
+
+/**
+ * 会话创建时下发的插件集合（已按会话闸门解析）。
+ * `enabled: false` 时 worker 只记录 `reason`，不执行任何 import。
+ *
+ * 形状与 `@pi-agent-platform/plugin-types` 的 `ResolvedPlugin` 对齐；
+ * 这里保留独立定义，避免 ipc-protocol 增加运行时依赖。
+ */
+export interface WorkerPluginSpec {
+  id: string;
+  dir: string;
+  enabled: boolean;
+  reason?: string;
+  extensionPath?: string;
+  workerPath?: string;
+}
 
 export interface WorkerEvent {
   kind: 'event';

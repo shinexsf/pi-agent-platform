@@ -28,6 +28,11 @@ export interface ServerConfig {
    * Server definitions live ONLY here — the DB stores just the names an agent selected.
    */
   mcpConfigPath: string;
+  /**
+   * 插件安装根 `~/.pi/server/plugins`（change: plugin-mechanism）。
+   * `registry.json` 在其中；安装只能走 `pi-server plugin add`（无 HTTP 端点）。
+   */
+  pluginsDir: string;
   /** Directory for user-uploaded image attachments, organized as <root>/<sessionId>/<sha>.<ext>.
    *  Read tool images (live session) are NOT stored here — they're owned by the source filesystem path. */
   attachmentsDir: string;
@@ -82,6 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     workspaceRoot: env.WORKSPACE_ROOT ?? process.cwd(),
     agentDir,
     mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
+    pluginsDir: env.PI_SERVER_PLUGINS_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugins'),
     attachmentsDir,
   };
 }
