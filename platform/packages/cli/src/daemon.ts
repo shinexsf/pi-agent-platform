@@ -29,6 +29,33 @@ import {
   serverEntry,
   workerEntry,
 } from './paths.js';
+import { getUserConfig } from './env.js';
+
+/** Default port for the packaged daemon. Dev mode is unrelated (dev.mjs pins 3000). */
+export const DEFAULT_PORT = 9006;
+
+/**
+ * Port for the packaged server: `<dataRoot>/config.env` PORT > 9006.
+ * The shell PORT is deliberately ignored (agent/CI shells may carry an
+ * unrelated PORT), matching dev mode where dev.mjs pins 3000 explicitly.
+ */
+export function resolveServerPort(): number {
+  const raw = getUserConfig().PORT;
+  if (raw === undefined) return DEFAULT_PORT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(
+      `invalid PORT in ${configFileLabel()}: "${raw}" (expected integer 1-65535)`,
+    );
+  }
+  return n;
+}
+
+function configFileLabel(): string {
+  return process.platform === 'win32'
+    ? '%USERPROFILE%\\.pi\\server\\config.env'
+    : '~/.pi/server/config.env';
+}
 
 /** Returns true if `pid` is a live process. `process.kill(pid, 0)` is the cross-platform probe. */
 export function isProcessAlive(pid: number): boolean {
@@ -85,10 +112,9 @@ export function startServer(): StartResult {
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    // Always override PORT — the user's shell may have PORT set to a value
-    // occupied by another process on the same machine. Server default is 9006.
-    // Users who want a different port should edit config.env or use --port (post-MVP).
-    PORT: '9006',
+    // Never inherit the shell PORT (it may be set to an unrelated value by the
+    // agent/CI environment). Priority: ~/.pi/server/config.env PORT > 9006.
+    PORT: String(resolveServerPort()),
     NODE_ENV: 'production',
     PI_SERVER_CLI: '1',
     PI_LOG_FILE: logFile(),
