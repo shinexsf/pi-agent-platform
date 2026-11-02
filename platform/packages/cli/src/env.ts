@@ -5,7 +5,8 @@
  * user overrides like custom port or PI model overrides. The CLI does not
  * require this file to exist; everything has sensible defaults.
  *
- * MVP scope: read + write helpers only. No command wiring yet (post-MVP).
+ * MVP scope: read + write helpers. Currently wired into the packaged daemon
+ * port resolution only (daemon.ts resolvePort / status.ts readPortFromEntry).
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

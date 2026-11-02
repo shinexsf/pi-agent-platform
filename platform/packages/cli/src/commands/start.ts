@@ -4,7 +4,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import process from 'node:process';
-import { startServer, isRunning, readPid } from '../daemon.js';
+import { startServer, isRunning, readPid, resolveServerPort } from '../daemon.js';
 import { log, error } from '../logger.js';
 import { dataSubdirs } from '../paths.js';
 
@@ -18,8 +18,9 @@ export async function startCommand(): Promise<void> {
     await mkdir(dir, { recursive: true });
   }
 
+  const port = resolveServerPort();
   const { pid } = startServer();
-  log(`started pid=${pid}`);
+  log(`started pid=${pid} port=${port}`);
   log(`logs: ${process.platform === 'win32' ? '%USERPROFILE%\\.pi\\server\\logs\\server.log' : '~/.pi/server/logs/server.log'} (fixed name — active log; archives: server.<timestamp>.log)`);
   process.exit(0);
 }
