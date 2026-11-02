@@ -63,6 +63,8 @@ const RUNTIME_PACKAGES = [
   'api-types',
   'ipc-protocol',
   'sdk-integration',
+  // 插件机制：server / cli 的 plugin* 模块直接 import 这个包的 registry
+  'plugin-types',
 ];
 
 function remapExportPath(p) {
@@ -125,11 +127,9 @@ function run(cmd, args, opts = {}) {
   log(`$ ${cmd} ${args.join(' ')}  (cwd=${wantedCwd})`);
   // shell: true so Windows resolves `pnpm` / `pnpm.cmd` from PATH.
   // When we need a different cwd, prepend `cd /d <dir> && ` so pnpm runs there.
-  const needsCwdPrefix = wantedCwd !== PLATFORM_DIR;
-  const fullCmd = needsCwdPrefix
-    ? `cd /d "${wantedCwd}" && ${cmd} ${args.join(' ')}`
-    : `${cmd} ${args.join(' ')}`;
-  const child = spawn(fullCmd, {
+  // 跨平台：用 spawn 的 cwd 选项，别拼 `cd /d`（cmd.exe 专用语法，Linux 下会变成 cd /d）
+  const child = spawn(cmd, args, {
+    cwd: wantedCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: true,
     windowsHide: true,
