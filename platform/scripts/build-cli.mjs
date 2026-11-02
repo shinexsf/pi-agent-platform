@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { RUNTIME_PACKAGES } from './pack-manifest.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLATFORM_DIR = path.resolve(__dirname, '..');        // <repo>/platform
@@ -57,15 +58,7 @@ function log(msg) {
  * would move those anchors. Shipping real modules keeps dev and packaged
  * resolution semantics identical.
  */
-const RUNTIME_PACKAGES = [
-  'shared-types',
-  'channel-types',
-  'api-types',
-  'ipc-protocol',
-  'sdk-integration',
-  // 插件机制：server / cli 的 plugin* 模块直接 import 这个包的 registry
-  'plugin-types',
-];
+// 打包清单：与 check-packaged.mjs 共用同一声明（scripts/pack-manifest.mjs）
 
 function remapExportPath(p) {
   return p.replace(/^\.\/src\//, './dist/').replace(/\.ts$/, '.js');

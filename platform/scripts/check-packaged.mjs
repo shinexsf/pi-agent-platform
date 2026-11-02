@@ -21,19 +21,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { builtinModules, createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RUNTIME_PACKAGES } from './pack-manifest.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLATFORM_DIR = path.resolve(__dirname, '..');
 const CLI_DIR = path.join(PLATFORM_DIR, 'packages', 'cli');
 
-// 与 build-cli.mjs 的 RUNTIME_PACKAGES 保持一致：这些包必须随 tarball 发布
-const RUNTIME_PACKAGES = [
-  'shared-types',
-  'channel-types',
-  'api-types',
-  'ipc-protocol',
-  'sdk-integration',
-];
+// 打包清单来自单一来源（与 build-cli.mjs 共用）
 
 /** 扫描文件数下限 / 说明符数量下限 —— 低于任一值说明检查本身失效了 */
 const MIN_JS_FILES = 40;
