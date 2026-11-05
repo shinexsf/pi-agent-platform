@@ -26,7 +26,7 @@
 | **pi-agent-server** | **plugins-manual** | **[插件使用手册](current/pi-agent-server_plugins-manual.md)** | **面向插件作者：三十秒上手（单文件 web facet）→ manifest 全字段 → 四种 facet 签名与选型 → 三个宿主 API → 槽位/mount 协议 → 会话闸门语义 → 调试手册（plugin list / `/api/plugins` / `/debug/sessions/:id`）→ 打包分发 → 已知坑 → 参考示例** | **2026-11-05** |
 | pi-agent-server | invariants | [不变量](current/pi-agent-server_invariants.md) | 架构层 hard rules（不能动）；含 **Session 服务层**（registry 单入口 / 域状态归 Session / 事件订阅归 Session / 核心零 im-gateway 反向依赖）| **2026-09-30** |
 | pi-agent-web | overview | [架构概览](current/pi-agent-web_overview.md) | Vue 3 + Tailwind v4 + 自写业务组件 + 不引入重组件库；**配置三处去继承（单层清单 + 全选/清空/无效项标注）、默认设置三项、配置模板（`/templates` + 填充/存为模板）** | **2026-10-21** |
-| pi-agent-idea | overview | [架构概览](current/pi-agent-idea_overview.md) | IntelliJ 客户端：Kotlin 插件 + Vue UI 双模块；Chat 用 JCEF、管理用 Swing；server 托管静态资源；MVP 已实施 |
-| pi-agent-idea | ide-bridge | [IDE Bridge](current/pi-agent-idea_ide-bridge.md) | JCEF ↔ Kotlin 桥接：通用 invoke/on/getEnv 接口 + method 名路由表 + 跨语言契约同步（9 个集成测试覆盖） |
+| pi-agent-idea | overview | [架构概览](current/pi-agent-idea_overview.md) | IntelliJ 客户端：Kotlin 插件 + Vue UI 双模块；Chat 用 JCEF、管理用 Swing；server 托管静态资源；MVP 已实施；**路径约定：跨 bridge / 跨 HTTP 的路径一律 server 形态（WSL 场景 /home/x，IDE 侧 UNC 只在碰文件系统时出现）** | **2026-11-05** |
+| pi-agent-idea | ide-bridge | [IDE Bridge](current/pi-agent-idea_ide-bridge.md) | JCEF ↔ Kotlin 桥接：通用 invoke/on/getEnv 接口 + method 名路由表 + 跨语言契约同步（9 个集成测试覆盖）+ **路径约定（`paths/PathMapper`：`\\wsl.localhost\<distro>` ⇄ `/` 整盘级映射，出站/入站 7 处显式转换，`getWorkspace` 给 root/localRoot/distro）** | **2026-11-05** |
 
 > 子模块文档**新增 / 重命名 / 删除**时，本表必须同步更新。

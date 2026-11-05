@@ -3,7 +3,7 @@
 > 子项目：pi-agent-idea
 > 子模块：ide-bridge
 > 状态：✅ 已写（已实现）
-> 最后更新：2026-08-24
+> 最后更新：2026-11-05（路径约定：跨边界一律 server 形态）
 
 ## 目标
 
@@ -101,11 +101,19 @@ export const Events = {
 } as const
 
 /** 调用结果的具体类型（按 method 集中放文档里） */
+// 路径约定：以下所有文件路径字段（GetSelection.filePath / GetCurrentFile.path /
+// GetWorkspace.root / SearchFiles[].path）都是 **server 形态**——见「路径约定」小节
 export namespace Results {
   export type OpenFile         = void
   export type GetSelection     = { filePath: string; startLine: number; endLine: number; text: string; language?: string } | null
   export type GetCurrentFile   = { path: string; content: string; language?: string; isDirty?: boolean } | null
-  export type GetWorkspace     = { root: string; git?: { branch: string; remote?: string; commit?: string }; name?: string } | null
+  export type GetWorkspace     = {
+    root: string                                 // server 形态（WSL 下是 posix）
+    localRoot?: string                           // IDE 形态（WSL 下是 UNC）
+    distro?: string                              // WSL 发行版名
+    git?: { branch: string; remote?: string; commit?: string }
+    name?: string
+  } | null
   export type SearchFiles      = Array<{ path: string; label: string; relativePath: string }>  // Kotlin 端 PSI + FS 双路结果
   export type GetTheme         = { mode: 'light' | 'dark' | 'high-contrast'; cssVars: Record<string, string>; fontFamily?: string }
 }
@@ -171,6 +179,54 @@ export namespace Results {
  *   timeout: 1s
  */
 ```
+
+## 路径约定：跨边界一律 server 形态
+
+> 代码：`pi-agent-idea/src/main/kotlin/com/piagent/idea/paths/PathMapper.kt`
+
+### 问题：同一份文件有两套写法
+
+WSL 开发时，主机在 Windows、`pi-agent-server` 在 WSL 里跑，同一个项目路径两边看到的不一样：
+
+| 视角 | 路径 |
+|---|---|
+| IDEA（Windows 宿主） | `\\wsl.localhost\dev-agent\home\shinexsf\code\pi-agent-platform` |
+| server（WSL 内） | `/home/shinexsf/code/pi-agent-platform` |
+
+`project.basePath` 只会给出 **IDE 侧**那套。直接拿来当"通用路径"会双向坏掉：
+
+- **出站会把列表刷空**：`?workspacePath=` 与 `POST /api/agents` 发 UNC 串，server 的 `normalizePath` 把它变成 `//wsl.localhost/dev-agent/...` → agent / session 查询永不命中；新建 agent 的 `cwd` 不存在（`POST /api/agents` 不校验存在性，静默坏掉）
+- **入站靠巧合才能开文件**：`ide.openFile` 拿到 `/home/x` 时，Windows 上 `Paths.get("/home/x").isAbsolute` 是 `false`，最终靠"无盘符绝对路径按 UNC share 根解析"才对上
+
+### 约定
+
+**跨 bridge / 跨 HTTP 的路径一律 server 形态**（WSL 下即 posix）。IDEA 侧形态只出现在"真正要碰 IDE 文件系统"的那一刻。理由：若反过来（边界上发 IDE 形态），每处显示 / 拼路径的地方都得自己知道"我在哪一侧"，漏点是无穷的。
+
+### 映射规则（全自动，由 `project.basePath` 推导，无设置项）
+
+| `project.basePath` | 出站 `toServerPath` | 入站 `toIdePath` |
+|---|---|---|
+| `\\wsl.localhost\<distro>\...` / `\\wsl$\<distro>\...` | 去 UNC 前缀、`\` → `/` → `/home/...` | `/x` → `\\wsl.localhost\<distro>\x` |
+| 其余（盘符 / Linux / macOS） | 原样 | 原样 |
+
+UNC share 根就是发行版 `/`，所以映射是**整盘级**，与项目在发行版里的深度无关；`wsl.localhost` 与 `wsl$` 两种 host 写法都支持，且回程沿用项目打开时的那一种。相对路径两边通用，映射器原样放过，`ide.openFile` 仍按 `project.basePath` 解析。
+
+### 转换点（必须显式经过映射器的位置）
+
+| 方向 | 位置 | 调用 |
+|---|---|---|
+| 入站 | `ide.openFile` / `ide.revealInProject` | `toIdePath(path)` 后再 `findFileByPath` |
+| 出站 | `context.getSelection` / `context.getCurrentFile` / `context.searchFiles` / `context.getWorkspace` | 出参 `toServerPath(...)`；`getWorkspace` 另给 `localRoot` + `distro` |
+| 出站 | `AgentPanel` / `SessionPanel` 的 `workspacePath` 过滤 | `toServerPath(project.basePath)`（`ChatToolWindowFactory` 构造面板时算一次） |
+| 出站 | `AddAgentDialog` 默认 workspacePath + 文件夹选择器结果 | `toServerPath` |
+| 出站 | “关联 pi 会话”的本地 `.jsonl` 路径 | `toServerPath` |
+
+新增任何"往 server 发本地路径"或"拿 server 路径开 IDE 文件"的代码，都必须走这两个方法；报错信息里带 `path mapping: <localRoot> <-> <serverRoot>` 便于定位。
+
+### 已知缺口
+
+- 项目开在 `C:\...` 而 server 在 WSL（需 `C:` ⇄ `/mnt/c`）：当前恒等，要支持得加显式映射设置项
+- 反向（IDEA 开 WSL 项目、server 在 Windows 上跑）：自动推导会误判为 posix，UNC 其实才是对的
 
 ## Vue 端调用示例
 
@@ -369,8 +425,9 @@ class IdeaIdeBridge(private val project: Project) : IdeBridge {
 
     private fun handleOpenFile(params: Any?): Unit {
         val (path, options) = parseOpenFileParams(params)
-        val vf = LocalFileSystem.getInstance().findFileByPath(path)
-            ?: throw IllegalArgumentException("File not found: $path")
+        // 入参可能是 server 形态（WSL 场景是 posix）→ 先换回 IDE 形态（UNC）
+        val vf = LocalFileSystem.getInstance().findFileByPath(paths.toIdePath(path))
+            ?: throw IllegalArgumentException("File not found: $path (path mapping: ${paths.describe()})")
 
         ReadAction.run<Throwable> {
             val editor = FileEditorManager.getInstance(project)
@@ -388,7 +445,7 @@ class IdeaIdeBridge(private val project: Project) : IdeBridge {
         val selection = editor.selectionModel
         if (!selection.hasSelection()) return null
         return EditorContext(
-            filePath = editor.virtualFile.path,
+            filePath = paths.toServerPath(editor.virtualFile.path),  // 选区会被送进对话，模型按这个路径 read
             startLine = selection.selectionStartPosition.line + 1,
             endLine = selection.selectionEndPosition.line + 1,
             text = selection.selectedText ?: "",

@@ -3,7 +3,7 @@
 > 子项目：pi-agent-idea
 > 子模块：overview
 > 状态：✅ 已写（MVP 完成）
-> 最后更新：2026-08-24
+> 最后更新：2026-11-05（WSL 路径映射约定）
 
 ## 背景与目标
 
@@ -174,9 +174,13 @@ pi-agent-idea (Kotlin)
 3. 组件调用 useIdeBridge().invoke('ide.openFile', { path, options })
 4. window.__ideBridge.invoke → JBCefJSQuery → Kotlin handler
 5. Kotlin 解析 method 名 → handlers['ide.openFile'](params)
-6. 调用 IntelliJ Platform API：FileEditorManager.openFile + caretModel.moveToLogicalPosition
-7. 编辑器打开文件并跳转到指定行/列
+6. paths.toIdePath(path)：server 形态（/home/x，WSL 里 server 看到的那套）→ IDE 形态（\\wsl.localhost\<distro>\home\x）
+7. 调用 IntelliJ Platform API：FileEditorManager.openFile + caretModel.moveToLogicalPosition
+8. 编辑器打开文件并跳转到指定行/列
 ```
+
+“跨 bridge / 跨 HTTP 的路径一律 server 形态”这条约定（含反方向：workspacePath 过滤、新建 agent、会话文件导入）
+详见 [`pi-agent-idea_ide-bridge.md`](pi-agent-idea_ide-bridge.md) 的「路径约定」小节。
 
 ## 阶段化路径（MVP → 完善）
 
