@@ -10,7 +10,7 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
 import com.piagent.idea.PluginLogger
 import com.piagent.idea.paths.ProjectPaths
-import com.piagent.idea.settings.PluginSettings
+import com.piagent.idea.settings.ProjectSettings
 import com.piagent.idea.bridge.IdeaIdeBridge
 import java.awt.BorderLayout
 import java.awt.Color
@@ -63,8 +63,10 @@ import com.intellij.util.messages.MessageBusConnection
  * （不接的话仍然会落到错误的 project 上）。
  *
  * Factory 字段（与 project 无关）：
- *   - settings: PluginSettings（应用单例）
- *   - connectionStatusAction: 标题栏状态指示（所有 project 共享同一个 server 连接状态）
+ *   - server 地址：**项目级**（ProjectSettings，留空继承 PluginSettings 的 IDE 级默认），
+ *     所以每个 project 可能连不同的 server —— 所有取地址的地方都必须传 project，
+ *     ️✖ 不能再用一个字段缓存（那会让 A 项目的设置污染 B 项目）
+ *   - 连接状态指示：每个 project 一个 ConnectionStatusAction 实例
  *   - 各种颜色/尺寸常量（JBColor 亮/暗自动切换）
  *
  * 布局：
@@ -93,9 +95,11 @@ import com.intellij.util.messages.MessageBusConnection
  */
 class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
 
-    private lateinit var settings: PluginSettings
-    private val connectionStatusAction = ConnectionStatusAction()
     private var themeConnection: MessageBusConnection? = null
+
+    /** 当前 project 实际生效的 server origin（项目级覆盖 → IDE 级默认）。 */
+    private fun originOf(project: Project): String =
+        ProjectSettings.getInstance(project).effectiveServerOrigin()
 
     /** Per-project state. Keyed by Project so two opened projects keep independent UI state. */
     private val windowStates = mutableMapOf<Project, WindowState>()
@@ -168,7 +172,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
             addFixedTabs(this)
             revalidateTabBar(this)
 
-            val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+            val client = com.piagent.idea.server.ServerApiClient(originOf(project))
             // server 形态的 workspace 路径（WSL 场景：`\\wsl.localhost\dev-agent\home\x` → `/home/x`）。
             // AgentPanel / SessionPanel 的 workspacePath 过滤和新建 agent 的默认值都必须用这个形态，
             // 否则服务端永远匹配不到（见 PathMapper 类注释）。
@@ -210,7 +214,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
     private val tabTitleColor = JBColor(0x333333, 0xDDDDDD)
     private val tabErrorColor = JBColor(0xCC5555, 0xCC5555)
 
-    private class ConnectionStatusAction : AnAction(), DumbAware {
+    private class ConnectionStatusAction(private val project: Project) : AnAction(), DumbAware {
         var status: Status = Status.Checking
 
         enum class Status { Checking, Connected, Failed }
@@ -223,7 +227,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
             // Read serverUrl fresh on every update so settings changes show up
             // immediately without restarting IDEA (previously cached at
             // createToolWindowContent time).
-            val serverUrl = PluginSettings.getInstance().serverUrl
+            val serverUrl = com.piagent.idea.settings.ProjectSettings.getInstance(project).effectiveServerUrl()
             e.presentation.icon = when (status) {
                 Status.Checking -> GrayDotIcon
                 Status.Connected -> GreenDotIcon
@@ -266,17 +270,14 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
     }
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        // settings is an application-level service; only init once.
-        if (!::settings.isInitialized) {
-            settings = PluginSettings.getInstance()
-        }
-        // Title + titleActions are ToolWindow-level (not project-level state),
-        // but harmless to set per createToolWindowContent call.
+        // Title + titleActions are ToolWindow-level (not project-level state).
+        // 状态指示按项目建：两个项目可以连不同 server，不能共享一个状态对象。
+        val statusAction = ConnectionStatusAction(project)
         toolWindow.setTitle("Pi")
-        toolWindow.setTitleActions(listOf(connectionStatusAction))
+        toolWindow.setTitleActions(listOf(statusAction))
 
-        if (!settings.isConfigured()) {
-            connectionStatusAction.status = ConnectionStatusAction.Status.Failed
+        if (!ProjectSettings.getInstance(project).isConfigured()) {
+            statusAction.status = ConnectionStatusAction.Status.Failed
             renderUnconfigured(toolWindow)
             return
         }
@@ -284,7 +285,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         // Build (or reuse) THIS project's WindowState and mount its widget tree.
         val state = stateFor(project)
         mountToolWindow(toolWindow, state)
-        checkConnection()
+        checkConnection(project, statusAction)
 
         // 订阅主题切换（LafManagerListener）：切主题时所有子面板 repaint
         if (themeConnection == null) {
@@ -328,13 +329,13 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         )
     }
 
-    private fun checkConnection() {
+    private fun checkConnection(project: Project, statusAction: ConnectionStatusAction) {
         Thread {
             val ok = try {
-                com.piagent.idea.server.ServerApiClient(settings.serverOrigin()).healthCheck()
+                com.piagent.idea.server.ServerApiClient(originOf(project)).healthCheck()
             } catch (_: Exception) { false }
             SwingUtilities.invokeLater {
-                connectionStatusAction.status = if (ok) {
+                statusAction.status = if (ok) {
                     ConnectionStatusAction.Status.Connected
                 } else {
                     ConnectionStatusAction.Status.Failed
@@ -524,7 +525,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         // Fire-and-forget: ask server to kill worker (server logs warning if worker missing).
         Thread {
             try {
-                com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+                com.piagent.idea.server.ServerApiClient(originOf(state.project))
                     .closeSession(serverSessionId)
             } catch (e: Exception) {
                 PluginLogger.warn("closeSession failed for $serverSessionId: ${e.message}")
@@ -563,7 +564,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
             if (newTitle.isNotBlank() && newTitle != currentTitle) {
                 Thread {
                     try {
-                        com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+                        com.piagent.idea.server.ServerApiClient(originOf(state.project))
                             .renameSession(serverSessionId, newTitle)
                     } catch (e: Exception) {
                         PluginLogger.warn("renameSession failed for $serverSessionId: ${e.message}")
@@ -696,7 +697,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun onNewSessionFromAgent(state: WindowState, agentId: String) {
         val project = state.project
         Thread {
-            val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+            val client = com.piagent.idea.server.ServerApiClient(originOf(project))
             val placeholderId = client.createPlaceholderSession(agentId)
             if (placeholderId == null) {
                 showErrorInBody(state, "Failed to create placeholder session (check server URL)")
@@ -714,7 +715,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
             return
         }
         Thread {
-            val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+            val client = com.piagent.idea.server.ServerApiClient(originOf(state.project))
             val historyJson = client.getSessionMessagesJson(session.id)
             SwingUtilities.invokeLater {
                 openChatTab(
@@ -739,7 +740,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         val bridge = IdeaIdeBridge(project)
         val chatPanel = JcefChatPanel(
             project = project,
-            serverUrl = settings.serverOrigin(),
+            serverUrl = originOf(project),
             sessionId = serverSessionId,
             agentId = agentId,
             bridge = bridge,
@@ -786,7 +787,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         val anchor = state.agentPanel
         val owner = SwingUtilities.getWindowAncestor(anchor) as? Frame ?: return
         val projectPath = ProjectPaths.of(state.project).toServerPath(state.project.basePath ?: "")
-        val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+        val client = com.piagent.idea.server.ServerApiClient(originOf(project))
         AddAgentDialog(owner, client, projectPath, ProjectPaths.of(state.project), existing) { saved ->
             state.agentPanel.reload()
             PluginLogger.info(
@@ -817,7 +818,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         )
         if (confirm != javax.swing.JOptionPane.OK_OPTION) return
         Thread {
-            val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
+            val client = com.piagent.idea.server.ServerApiClient(originOf(state.project))
             val result = client.deleteAgent(agent.id)
             SwingUtilities.invokeLater {
                 if (result == null) {

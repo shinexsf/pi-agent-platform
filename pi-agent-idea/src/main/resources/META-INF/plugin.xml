@@ -22,6 +22,9 @@
         <applicationService
                 serviceImplementation="com.piagent.idea.settings.PluginSettings"/>
 
+        <projectService
+                serviceImplementation="com.piagent.idea.settings.ProjectSettings"/>
+
         <projectConfigurable
                 groupId="tools"
                 displayName="pi-agent-idea"

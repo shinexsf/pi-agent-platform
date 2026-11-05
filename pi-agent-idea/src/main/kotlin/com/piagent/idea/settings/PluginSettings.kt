@@ -7,10 +7,13 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 
 /**
- * 持久化插件配置。
- * 通过 IDEA 的 PersistentStateComponent 机制保存（存到 workspace.xml 或 application-level storage）。
+ * **IDE 级（全局）**插件配置 —— 只当「默认值」用。
  *
- * MVP 只需要 server URL，不再需要 pi binary path（由 pi-agent-server 接管）。
+ * 真正的 server 地址是**项目级**的（[ProjectSettings]）：项目里留空才继承这里的值。
+ * 这样多项目可以各连各的 server，新项目又不用重填；
+ * 想改所有项目的默认值 → Settings 页的 “Set as IDE default”。
+ *
+ * 存储：IDE 配置目录下的 `pi-agent-idea-plugin.xml`（跟着 IDE 走，不跟项目走）。
  */
 @Service
 @State(name = "PiAgentIdeaPluginSettings", storages = [Storage("pi-agent-idea-plugin.xml")])
