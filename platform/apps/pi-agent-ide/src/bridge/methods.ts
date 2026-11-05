@@ -36,7 +36,16 @@ export namespace Results {
   export type OpenFile       = void
   export type GetSelection   = { filePath: string; startLine: number; endLine: number; text: string; language?: string } | null
   export type GetCurrentFile = { path: string; content?: string; language?: string; isDirty?: boolean } | null
-  export type GetWorkspace   = { root: string; git?: { branch: string; remote?: string; commit?: string }; name?: string } | null
+  export type GetWorkspace   = {
+    /** Workspace root in **server form** (posix on WSL, e.g. `/home/x/code/proj`) */
+    root: string
+    /** Same root in **IDE form** (e.g. `\\\\wsl.localhost\\dev-agent\\home\\x\\code\\proj`) */
+    localRoot?: string
+    /** WSL distro name when the project is opened through a WSL UNC share */
+    distro?: string
+    git?: { branch: string; remote?: string; commit?: string }
+    name?: string
+  } | null
   export type GetTheme       = { mode: 'light' | 'dark' | 'high-contrast'; cssVars: Record<string, string>; fontFamily?: string }
   export type Notify         = void
   export type Confirm        = boolean

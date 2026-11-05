@@ -40,6 +40,7 @@
  *   params: 无
  *   returns: WorkspaceInfo | null（无项目时返回 null）
  *   timeout: 1s
+ *   note: root 是 server 形态（WSL 下是 posix）；localRoot 是 IDE 形态（WSL 下是 UNC）
  */
 
 /**

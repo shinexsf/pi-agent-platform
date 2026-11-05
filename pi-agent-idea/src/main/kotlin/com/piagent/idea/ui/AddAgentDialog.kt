@@ -1,6 +1,7 @@
 package com.piagent.idea.ui
 
 import com.piagent.idea.PluginLogger
+import com.piagent.idea.paths.PathMapper
 import com.piagent.idea.server.AgentApiException
 import com.piagent.idea.server.ServerApiClient
 import java.awt.BorderLayout
@@ -34,7 +35,7 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
  *   - name (required)
  *   - model (required; dropdown from /api/models)
  *   - description (optional)
- *   - workspacePath (required; editable with folder chooser)
+ *   - workspacePath (required; **server form**, e.g. `/home/x` on WSL — chooser output is mapped)
  *   - thinkingLevel (default off)
  *   - systemPrompt (optional)
  *   - appendSystemPrompt (optional)
@@ -46,7 +47,10 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 class AddAgentDialog(
     owner: Frame,
     private val client: ServerApiClient,
+    /** Already in server form (mapped by the caller) — see [PathMapper]. */
     private val defaultWorkspacePath: String,
+    /** Used to convert FileChooser results (IDE form, UNC on WSL) back to server form. */
+    private val pathMapper: PathMapper,
     private val existing: ServerApiClient.Agent? = null,
     private val onSaved: (ServerApiClient.Agent) -> Unit,
 ) : JDialog(owner, if (existing == null) "Add Agent" else "Edit Agent", true) {
@@ -233,7 +237,8 @@ class AddAgentDialog(
         val currentPath = workspacePathField.text.trim()
         val files = FileChooser.chooseFiles(descriptor, null, null)
         if (files.isNotEmpty()) {
-            workspacePathField.text = files[0].path
+            // FileChooser 给我们 IDE 形态（WSL 场景是 UNC），DB / 服务端要 server 形态
+            workspacePathField.text = pathMapper.toServerPath(files[0].path)
         }
     }
 

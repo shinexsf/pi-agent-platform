@@ -3,6 +3,7 @@ package com.piagent.idea.ui
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.piagent.idea.paths.ProjectPaths
 import com.piagent.idea.server.ServerApiClient
 import java.awt.BorderLayout
 import java.awt.Color
@@ -38,6 +39,7 @@ import com.intellij.ui.JBColor
 class SessionPanel(
     private val client: ServerApiClient,
     private val project: Project,
+    /** **Server form** workspace path (mapped from `project.basePath` by the caller) — see PathMapper. */
     private val currentProjectPath: String,
     private val onOpenSession: (session: ServerApiClient.Session) -> Unit,
 ) : JPanel(BorderLayout()) {
@@ -114,7 +116,8 @@ class SessionPanel(
         val file = FileChooser.chooseFile(descriptor, project, null) ?: return
 
         Thread {
-            val imported = client.importSessionFromFile(agent.id, file.path)
+            // FileChooser 给的是 IDE 形态（WSL 场景是 UNC），而服务端在 WSL 里读文件
+            val imported = client.importSessionFromFile(agent.id, ProjectPaths.of(project).toServerPath(file.path))
             SwingUtilities.invokeLater {
                 if (imported == null) {
                     JOptionPane.showMessageDialog(

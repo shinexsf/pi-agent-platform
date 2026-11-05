@@ -7,6 +7,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.piagent.idea.bridge.methods.BridgeMethods
+import com.piagent.idea.paths.PathMapper
+import com.piagent.idea.paths.ProjectPaths
 
 /**
  * IDE bridge 通用接口实现。
@@ -67,6 +69,15 @@ class IdeaIdeBridge(private val project: Project) {
         val relativePath: String,   // relative to project base
     )
 
+    /**
+     * IDE 路径 ⇄ server 路径映射（WSL 场景：`\\wsl.localhost\<distro>\...` ⇄ `/...`）。
+     *
+     * 约定：**跨 bridge 的路径一律 server 形态**——`handleGetSelection` / `searchFiles` 等
+     * 出参发出前转 server 形态，`openFile` / `revealInProject` 入参先转回 IDE 形态。
+     * 这样 UI / DB / 模型看到的是同一套路径，不需要谁去记"现在是哪边"。
+     */
+    private val paths: PathMapper get() = ProjectPaths.of(project)
+
     fun <T> invoke(method: String, params: Any?): BridgeResponse<T> {
         val handler = handlers[method]
             ?: return errFor("unknown_method", "Unknown method: $method")
@@ -105,17 +116,21 @@ class IdeaIdeBridge(private val project: Project) {
         val parsed = parseParams(params, OpenFileParams::class.java)
             ?: throw IllegalArgumentException("Invalid openFile params")
 
+        // 入参可能是 server 形态（模型给的 `/home/x`，WSL 场景）：先映射回 IDE 形态。
+        // 相对路径在两边都通用，映射器会原样返回，下面照旧按 basePath 解析。
+        val idePath = paths.toIdePath(parsed.path)
+
         // 相对路径解析为绝对路径（基于 project.basePath）
-        val absPath = if (java.nio.file.Paths.get(parsed.path).isAbsolute) {
-            parsed.path
+        val absPath = if (java.nio.file.Paths.get(idePath).isAbsolute) {
+            idePath
         } else {
             val base = project.basePath
                 ?: throw IllegalArgumentException("Relative path '${parsed.path}' but no project base path")
-            java.nio.file.Paths.get(base, parsed.path).toString()
+            java.nio.file.Paths.get(base, idePath).toString()
         }
 
         val vf = LocalFileSystem.getInstance().findFileByPath(absPath)
-            ?: throw IllegalArgumentException("File not found: $absPath")
+            ?: throw IllegalArgumentException("File not found: $absPath (path mapping: ${paths.describe()})")
 
         val preview = parsed.options?.preview ?: false
         val line0 = (parsed.options?.line ?: 1) - 1
@@ -129,9 +144,10 @@ class IdeaIdeBridge(private val project: Project) {
 
     private fun handleRevealInProject(params: Any?): Unit {
         val map = params as? Map<*, *> ?: throw IllegalArgumentException("Expected object params")
-        val path = map["path"] as? String ?: throw IllegalArgumentException("Missing path")
+        val raw = map["path"] as? String ?: throw IllegalArgumentException("Missing path")
+        val path = paths.toIdePath(raw)
         val vf = LocalFileSystem.getInstance().findFileByPath(path)
-            ?: throw IllegalArgumentException("File not found: $path")
+            ?: throw IllegalArgumentException("File not found: $path (path mapping: ${paths.describe()})")
         ApplicationManager.getApplication().invokeLater {
             FileEditorManager.getInstance(project).openFile(vf, true)
         }
@@ -145,7 +161,8 @@ class IdeaIdeBridge(private val project: Project) {
         val startLine = sel.selectionStartPosition?.line?.plus(1) ?: 1
         val endLine = sel.selectionEndPosition?.line?.plus(1) ?: 1
         return EditorContext(
-            filePath = vf.path,
+            // server 形态（WSL 场景是 posix）：选区会被塞进对话，模型随后要按这个路径 read 到它
+            filePath = paths.toServerPath(vf.path),
             startLine = startLine,
             endLine = endLine,
             text = sel.selectedText ?: "",
@@ -157,7 +174,7 @@ class IdeaIdeBridge(private val project: Project) {
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
         val vf = editor.virtualFile ?: return null
         return mapOf(
-            "path" to vf.path,
+            "path" to paths.toServerPath(vf.path),
             "language" to vf.fileType.name,
             // content omitted (avoid heavy reads on EDT); use file-level APIs if needed
         )
@@ -165,10 +182,15 @@ class IdeaIdeBridge(private val project: Project) {
 
     private fun handleGetWorkspace(): Map<String, Any>? {
         val path = project.basePath ?: return null
-        return mapOf(
-            "root" to path,
+        // root = server 形态（模型/服务端能用那套）；localRoot = IDE 形态（UNC 等）；
+        // distro 只在 WSL UNC 项目下出现。
+        val info = mutableMapOf<String, Any>(
+            "root" to paths.toServerPath(path),
+            "localRoot" to path,
             "name" to project.name,
         )
+        paths.distro?.let { info["distro"] = it }
+        return info
     }
 
     /**
@@ -262,7 +284,8 @@ class IdeaIdeBridge(private val project: Project) {
         } else {
             vf.path
         }
-        return SearchFileHit(path = vf.path, label = vf.name, relativePath = rel)
+        // path 也走 server 形态（跨 bridge 的路径统一形态）；打开时 openFile 会转回来。
+        return SearchFileHit(path = paths.toServerPath(vf.path), label = vf.name, relativePath = rel)
     }
 
     private fun searchFilesystem(query: String, limit: Int, basePath: String): List<SearchFileHit> {
@@ -286,7 +309,7 @@ class IdeaIdeBridge(private val project: Project) {
                 .use { stream ->
                     stream.map { p ->
                         SearchFileHit(
-                            path = p.toString(),
+                            path = paths.toServerPath(p.toString()),
                             label = p.fileName.toString(),
                             relativePath = p.toString().removePrefix(basePath).trimStart('/', '\\').replace('\\', '/'),
                         )

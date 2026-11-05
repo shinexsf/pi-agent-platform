@@ -9,6 +9,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
 import com.piagent.idea.PluginLogger
+import com.piagent.idea.paths.ProjectPaths
 import com.piagent.idea.settings.PluginSettings
 import com.piagent.idea.bridge.IdeaIdeBridge
 import java.awt.BorderLayout
@@ -168,7 +169,10 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
             revalidateTabBar(this)
 
             val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
-            val projectPath = project.basePath ?: ""
+            // server 形态的 workspace 路径（WSL 场景：`\\wsl.localhost\dev-agent\home\x` → `/home/x`）。
+            // AgentPanel / SessionPanel 的 workspacePath 过滤和新建 agent 的默认值都必须用这个形态，
+            // 否则服务端永远匹配不到（见 PathMapper 类注释）。
+            val projectPath = ProjectPaths.of(project).toServerPath(project.basePath ?: "")
             agentPanel = AgentPanel(
                 client,
                 project,
@@ -781,9 +785,9 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         // agent panel (any component in our tree works), then resolve its Frame ancestor.
         val anchor = state.agentPanel
         val owner = SwingUtilities.getWindowAncestor(anchor) as? Frame ?: return
-        val projectPath = state.project.basePath ?: ""
+        val projectPath = ProjectPaths.of(state.project).toServerPath(state.project.basePath ?: "")
         val client = com.piagent.idea.server.ServerApiClient(settings.serverOrigin())
-        AddAgentDialog(owner, client, projectPath, existing) { saved ->
+        AddAgentDialog(owner, client, projectPath, ProjectPaths.of(state.project), existing) { saved ->
             state.agentPanel.reload()
             PluginLogger.info(
                 "Agent ${if (existing == null) "created" else "updated"}: ${saved.name} (id=${saved.id})"

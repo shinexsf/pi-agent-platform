@@ -20,11 +20,12 @@ import com.intellij.ui.JBColor
  * Each row has a [新会话] button → callback.onNewSession(agentId).
  * Below the list, an "Add Agent" row (+ icon) invokes [onAddAgent] so the
  * parent (ChatToolWindowFactory) can pop the AddAgentDialog modal with the
- * project's basePath pre-filled.
+ * project's basePath pre-filled (mapped to server form — see PathMapper).
  */
 class AgentPanel(
     private val client: ServerApiClient,
     val project: Project,
+    /** **Server form** workspace path (mapped from `project.basePath` by the caller) — see PathMapper. */
     private val currentProjectPath: String,
     private val onNewSession: (agentId: String) -> Unit,
     private val onEditAgent: (ServerApiClient.Agent) -> Unit,
