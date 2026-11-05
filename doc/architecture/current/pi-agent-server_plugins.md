@@ -22,41 +22,36 @@
 
 ```
 ~/.pi/server/plugins/@probe/hud-demo/
-├── package.json          package.json#pi.plugin 声明
+├── package.json          ← 安装事实与兼容性闸门（`piServer.apiVersion`）
 ├── server/index.js       ← facet 1（可选）
 ├── worker/index.js       ← facet 2（可选）
 ├── extension/index.js    ← facet 3（可选）
-└── web/panel.js          ← facet 4 的浏览器入口（`mountKey` 对应文件名）
+└── web/panel.js          ← facet 4 的浏览器入口（`entry` 对应文件名）
 ```
 
 ```json
 {
   "name": "@probe/hud-demo",
   "version": "0.0.1",
-  "pi": {
-    "plugin": {
-      "apiVersion": "1",
-      "requires": { "plugins": { "@someone/pi-ext": "^2.0.0" } },
-      "web": {
-        "surfaces": [
-          { "id": "hud", "slot": "chat.rail.right", "mountKey": "panel", "title": "HUD 示例", "icon": "plug", "order": 10 }
-        ]
-      }
-    }
+  "piServer": {
+    "apiVersion": "1",
+    "requires": { "plugins": { "@someone/pi-ext": "^2.0.0" } }
   },
   "peerDependencies": { "@someone/pi-ext": "^2.0.0" }
 }
 ```
 
+界面贡献**不在 `package.json` 里**：插件在 `server/index.js` 的 `register(host)` 里调用注册器（菜单、页面、端点、槽位、工具卡片），见 [`pi-agent-server_plugins-runtime.md`](./pi-agent-server_plugins-runtime.md)。`package.json` 只表达**安装事实与兼容性闸门**。
+
 - `apiVersion` 缺失 → 视为不兼容，整包跳过（`status: 'degraded'`，`detail` 里写原因）
 - `requires.plugins` 是**校验**语义：未安装 / 未在该 agent `extensions` 启用 → 不加载，**绝不代勾**
-- `web.surfaces[].id` 全局唯一；重复注册后者被拒
+- 注册项 `id` 在同一（作用域, 类别）内唯一；重复注册后者被拒并进入 `rejected`
 
 ## 3. 四类 facet（按运行位置分，不是按功能分）
 
 | facet | 跑在哪 | 入口签名 | 能做什么 | 不能做什么 |
 |---|---|---|---|---|
-| `server` | 主进程 | `export function activate(host: PluginServerHost)` | 注册 UI 槽位、写日志、（后续）加 REST 命名空间 | 直接碰 worker / DB / 会话 |
+| `server` | 主进程 | `export function init(host: PluginServerHost)` | 注册菜单/页面/HTTP 端点/UI 槽位/工具卡片 | 直接碰 worker / DB / 会话 |
 | `worker` | session worker | `export function activate(ctx: { bridge: PluginWorkerBridge })` | 用 pi SDK 加工具/中间件、`bridge.emit` 上行 | 阻塞会话启动 |
 | `extension` | worker（作为 pi extension 装载） | `export default async function ({ bridge }) => ({ name, factory })` | **主力形态**：注册工具 / 工具拦截 / 读文件 | 无 `bridge` 时（未启用 bridged 模式）拿不到 `emit` |
 | `web` | 浏览器（SPA 内） | `export function mount(el, host): () => void` | 在自己的 `el` 里渲染任意框架、`host.data.subscribe`、`host.api.post` | 写全局 CSS / teleport 到 `el` 外 / flush 会话 |
@@ -115,16 +110,35 @@ export default async ({ bridge }) => ({
 - 日志只记 `pluginId` / `name` / 字节数，**不落原始载荷**
 - `pluginEmit` 失败不影响会话；插件不存在时返回 404 并带 `reason`
 
-## 6. web 槽位
+## 6. 运行期注册（唯一入口）
 
-- 静态声明在 `package.json#pi.plugin.web.surfaces`（v1 静态；运行期 `host.surfaces.register()` 是 server facet 的增量能力，暂未实现）
-- 内置槽位：`chat.rail.right`（会话页右上轨道按钮 **+ 它的抽屉面板**；一个槽位 = 一个完整入口，不需要再单独声明抽屉）
-- 托管路径：`GET /plugins/<id>/web/<file>`，**在同源下**提供服务（插件自己 import 的第三方库也在 `node_modules` 里，由 CLI 安装时打平），路径穿越与 ext 白名单双向校验，`id` 从 registry 的 `dir` 解析而不是拼字符串
+界面与端点贡献**全部来自运行期注册**，没有声明式清单：
+
+```js
+// server/index.js —— 在 server 进程里执行
+export function init(host) {
+  host.global.menus.register({ id: 'demo', label: '演示页', page: 'about', order: 1050 });
+  host.global.pages.register({ id: 'about', title: '演示页', entry: 'page' });   // → web/page.js
+  host.global.routes.register({ method: 'GET', path: '/echo', handler: (c) => c.json({ ok: true }) });
+  host.session.surfaces.register({ id: 'hud', slot: 'chat.rail.right', title: 'HUD', icon: 'layers', entry: 'panel' });
+  host.session.toolCards.register({ tool: 'sendFileToUser', mode: 'replace', entry: 'card' });
+}
+```
+
+| 能力 | 注册器 | 作用域 | 浏览器侧文件 |
+|---|---|---|---|
+| 菜单项 | `global.menus` | 全局 | 无（点击跳到插件页） |
+| 页面 | `global.pages` | 全局 | `web/<entry>.js` 的 `mount` |
+| HTTP 端点 | `global.routes` | 全局 | 无 |
+| 会话页槽位 | `session.surfaces` | 会话级 | `web/<entry>.js` 的 `mount` |
+| 工具卡片 | `session.toolCards` | 会话级 | `web/<entry>.js` 的 `mount` |
+
+- 内置槽位：`chat.rail.right`（轨道按钮 **+ 抽屉面板**，一个槽位 = 一个完整入口）
+- 托管路径：`GET /plugins/<id>/web/<file>`、`GET /plugin-page/<id>/<page>`、`GET /api/p/<id>/*`，**同源**提供
 - 挂载协议：`mount(el, host)` 返回 `dispose`；关闭顺序 **停推数据 → dispose() → 移除 el**
-- `host` facade（`@pi-agent-platform/plugin-types/web`）：
-  `data.subscribe(fn)`（载荷是冻结的普通 JSON，不是响应式对象）· `api.post(path, body)`（自己前缀）· `theme.get()/subscribe()` · `sessionId` · `log()`
+- 六层查询：`/api/extensions`（全局）· `/api/sessions/:id/extensions`（会话）· `/api/plugins/:id/extensions`（单插件全集，含 `rejected`）· `/plugins/*`（资产）· `/plugin-page/*`（页面）· `/api/p/*`（端点）
 - 主题：只保证白名单 CSS 变量存在于 `el` 祖先链上（`--bg` `--surface` `--fg` `--fg-dim` `--border` `--accent` `--ok` `--warn` `--err`）
-- 失败态：加载/挂载失败 → 该槽位显示「插件加载失败 + 原因」，其余界面不受影响
+- 失败态：加载/挂载失败 → 该槽位显示「插件加载失败 + 原因」，其余界面不受影响；注册失败进入 `rejected`/`registerError` 并在目录页可见
 
 ## 7. CLI 与 REST
 
@@ -137,11 +151,16 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 
 | 端点 | 用途 |
 |---|---|
-| `GET /api/plugins` | registry 快照（status/version/detail/declared/registered）——**配置页用，不带会话维度** |
+| `GET /api/plugins` | 安装事实（status/version/detail/declared/registered）——**不含任何运行期注册项** |
 | `GET /api/plugins/reload` | 手工失效内存快照（registry 文件也会被 `fs.watch` 自动失效） |
-| `GET /api/sessions/:id/plugins` | **会话级解析结果**（只含 `enabled` 的）——web 槽位唯一入口 |
+| `GET /api/plugins/:id/extensions` | 单插件的全部注册项 + `rejected` + `registerError` |
+| `GET /api/extensions` | **全局**注册项聚合（菜单/页面/路由）——web 端菜单唯一入口 |
+| `GET /api/sessions/:id/extensions` | **会话级**注册项（槽位/工具卡片，经闸门过滤） |
+| `GET /api/sessions/:id/plugins` | 会话级解析结果（只含 `enabled` 的） |
 | `POST /api/sessions/:id/plugins/emit` | 浏览器 → 插件（`{ pluginId, name, data }`） |
 | `GET /plugins/<id>/web/<file>` | web facet 静态资产（同源托管，`id` 从 registry 的 `dir` 解析） |
+| `GET /plugin-page/<id>/<page>` | 插件页面入口（SPA 路由，静态一条） |
+| `ANY /api/p/<id>/*` | 插件 HTTP 端点（启动时注册的唯一分发器） |
 
 ## 8. 不变量（改动时别踩）
 
@@ -159,6 +178,7 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 |---|---|---|
 | `1` | 2026-10-29 | 初版：四类 facet、两个内置槽位、双向桥、CLI |
 | `1` | 2026-11-05 | **web 槽位改为会话级下发**（依赖未启用的会话不下发）；新增真实例子 `@platform/session-projection`（读压缩块） |
+| `1` | 2026-11-05 | **声明式清单移除，改为运行期注册**：`register(host)`/`init(host)` 在 server 进程执行，作用域在 API 形状里（`global.*` / `session.*`）；新增菜单/页面/HTTP 端点/工具卡片四类贡献；查询拆成六层。不升版（未对外发布） |
 
 ## 9.5 元数据视图（配置页「平台插件」）
 
@@ -169,7 +189,7 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 | 字段 | 来源 | 读取时机 |
 |---|---|---|
 | `id` / `version` / `enabled` / `facets.*` 开关 / `dir` / `installedAt` | `<pluginsDir>/registry.json` | `loadPlugins()` |
-| `apiVersion` / `requires.plugins` / `web.surfaces[]` / `description` / `author` / `homepage` | 插件自己的 `package.json` | `readManifest(dir)` |
+| `apiVersion` / `requires.plugins` / `description` / `author` / `homepage` | 插件自己的 `package.json` | `readManifest(dir)` |
 | facet 目录是否存在（= 声明） | 磁盘 `readdir` | `listFacetDirs(dir)` |
 | facet 入口文件是否存在 | `existsSync(<dir>/<facet>/index.js 或 <dir>/dist/<facet>/index.js)` | 请求时现读 |
 | 依赖包是否安装 | `settings.json` 的 `packages` → `<agentDir>/npm/node_modules/<pkg>` | 详情请求时现读 |
@@ -185,7 +205,7 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 | **入口** | 入口文件在不在（含期望路径） | `entries[facet].exists` |
 | **装载** | 平台是否真的会执行它 | `facetSupport[facet]` |
 
-`server` facet 与 `web.surfaces.register()` 目前**只有类型、没有装载实现**，因此 `facetSupport.server = 'declared-only'`，页面固定显示「已声明·未装载」。把它们画成"可用"会直接制造"配置对了却不生效"的错觉——这正是本视图要消灭的东西。
+`server` facet 现已真正装载（`init(host)`，`facetSupport.server = 'loaded'`），注册项通过 `/api/extensions` 与 `/api/plugins/:id/extensions` 呈现。把未装载的 facet 画成"可用"会直接制造"配置对了却不生效"的错觉——这正是本视图要消灭的东西。
 
 旧的 `facets`（开关 ∧ 声明 ∧ 入口）保留给既有消费方；新代码请读上面四个字段。
 
@@ -199,9 +219,9 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 
 ## 10. 明确未做（v1 范围声明）
 
-- 运行期注册槽位（`host.surfaces.register()`）、插件间 API（`uses`）、插件 UI 注入到任意 View（只到会话页）
-- 热加载 / 会话内升级 / 滚动升级（版本钉死 + 显式 `restart`）
-- 插件配置 schema 与配置页渲染（先 `package.json` + 环境变量）
-- 插件自带 worker 进程（facet 只能挂在平台 worker 里）
-- 插件市场 / 签名 / 权限模型（本地目录安装，信任模型 = 用户自己 `install`）
-- IDE 端（JCEF）的插槽：当前只有 web SPA 有 `SlotHost`
+- 插件配置 schema 与配置页渲染（先 `package.json` + 环境变量）——运行时配置目前只有平台自己的 `registry.json`
+- 插件注册项的运行期增删（注册是启动期一次性；改 `register()` 需重启 server）
+- 全局菜单/页面的**会话级**变体（菜单恒为全局，带 `sessionId` 参数也无意义）
+- 插件间 API（`uses` 目前只做依赖校验，不注入对方句柄）
+- 插件 UI 注入到任意 View（只到会话页 `chat.rail.right`）与左侧轨道
+- 插件端点无鉴权（与平台其它 REST 一致，单用户本地场景）

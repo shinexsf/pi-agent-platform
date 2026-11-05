@@ -104,29 +104,45 @@ interface SessionContextDTO {
 - ❌ `GET /api/sessions/:id/commands`
 - ⚠️ `GET /api/models`（**曾删除，2026-08-26 重新加入**——给 IDE Add-Agent 对话框下拉用；不再依赖 worker；webui 仍走 `/context`）
 
-## 插件（plugin-mechanism）
+## 插件（plugin-mechanism + 运行期扩展点）
 
-插件机制的完整语义见 [插件架构](pi-agent-server_plugins.md) 与 [使用手册](pi-agent-server_plugins-manual.md)。这里只列端点。
+插件机制的完整语义见 [插件架构](pi-agent-server_plugins.md)、[运行期扩展点](pi-agent-server_plugins-runtime.md) 与 [使用手册](pi-agent-server_plugins-manual.md)。这里只列端点。
+
+**两类信息别弄混**：`/api/plugins*` 是**安装事实**（只读、与装载无关），**不含任何运行期注册项**；菜单/页面/端点/槽位/工具卡片全部从下面四个 `extensions` / `p` 端点拿。
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/plugins` | GET | registry 快照（`status` / `version` / `detail` / `declared` / `registered`）；**全局视图，配置页用，不带会话维度** |
+| `/api/plugins` | GET | registry 快照（`status` / `version` / `detail` / `declared` / `registered`）；**全局视图，不含注册项** |
 | `/api/plugins/reload` | GET | 手工失效内存快照（registry 变更也会被 `fs.watch` 自动失效） |
 | `/api/plugins/:id` | GET | **单插件详情**：`plugin`（含 `declaredFacets` / `switches` / `loadedFacets` / `entries`）+ `entryPoints` + `dependencies`（依赖安装三态）+ `manifestPath` + `registryEntry`；未知 id → 404 |
-| `/api/sessions/:id/plugins` | GET | **会话级解析结果**：只返回该会话 `enabled` 的插件（依赖未启用 → 不出现） |
+| `/api/plugins/:id/extensions` | GET | 该插件的全部注册项（`menus` / `pages` / `routes` / `surfaces` / `toolCards`）+ `rejected[]` + `registerError`；未装载 → 空集合（不 404） |
+| `/api/extensions` | GET | **全局**注册项聚合：`menus[]`（`{pluginId, def}`，已排序）+ `pages[]`；web 端导航唯一入口 |
+| `/api/sessions/:id/extensions` | GET | **会话级**注册项：`surfaces[]` / `toolCards[]`，只保留该会话 `enabled` 的插件；占位会话 → 空 |
+| `/api/sessions/:id/plugins` | GET | 会话级解析结果：只返回该会话 `enabled` 的插件（依赖未启用 → 不出现） |
 | `/api/sessions/:id/plugins/emit` | POST | 浏览器 → 插件：`{ pluginId, name, data }` |
 | `/plugins/<id>/web/<file>` | GET | 插件 web facet 静态资产（同源托管；`id` 从 registry 的 `dir` 解析，带路径穿越与扩展名白名单校验） |
+| `/plugin-page/<id>/<page>` | GET | 插件页面入口（SPA 静态路由，未验证 pageId 是否存在—— 客户端自行处理） |
+| `/api/p/<id>/*` | ANY | 插件 HTTP 端点（启动时注册的**唯一**分发器；未启用 → 404 `not-enabled`，未匹配 → 404） |
 
 ```jsonc
 // GET /api/plugins（列表，顶层带 facetSupport 与 pluginsDir）
 { "plugins": [{ "id": "@platform/session-projection", "status": "active",
                 "description": "…", "declaredFacets": ["extension","web"],
                 "switches": {}, "loadedFacets": ["extension","web"],
-                "entries": { "web": { "path": "…/web/<mountKey>.js", "exists": true, "candidates": ["…"] } },
-                "surfaces": [ … ], "requires": { "billion-context-pi": ">=0.1.0" },
+                "entries": { "web": { "path": "…/web/<entry>.js", "exists": true, "candidates": ["…"] } },
+                "requires": { "billion-context-pi": ">=0.1.0" },
                 "dir": "…", "installedAt": "…" }],
   "disabledByFlag": false, "pluginsDir": "/root/.pi/server/plugins",
-  "facetSupport": { "server": "declared-only", "worker": "loaded", "extension": "loaded", "web": "loaded" } }
+  "facetSupport": { "server": "loaded", "worker": "loaded", "extension": "loaded", "web": "loaded" } }
+
+// GET /api/extensions（全局注册项）
+{ "menus": [{ "pluginId": "demo-menu-top", "def": { "id": "demo", "label": "演示页", "page": "about", "order": 1050 } }],
+  "pages": [{ "pluginId": "demo-menu-top", "def": { "id": "about", "title": "演示页", "entry": "page" } }] }
+
+// GET /api/sessions/:id/extensions（会话级）
+{ "surfaces": [{ "pluginId": "@platform/session-projection", "def": { "id": "hud", "slot": "chat.rail.right", "entry": "panel", "title": "HUD", "icon": "layers", "order": 20 } }],
+  "toolCards": [{ "pluginId": "demo-tool-card", "def": { "tool": "sendFileToUser", "mode": "replace", "entry": "card" } }],
+  "disabled": {}, "disabledByFlag": false, "placeholder": false }
 
 // GET /api/sessions/:id/plugins
 { "disabledByFlag": false, "placeholder": false,
