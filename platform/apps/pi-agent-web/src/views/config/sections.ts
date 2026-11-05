@@ -20,7 +20,8 @@ export const CONFIG_SECTIONS: readonly ConfigSectionMeta[] = [
   { id: 'mcp', label: 'MCP', icon: '🔌' },
   { id: 'skills', label: 'Skills', icon: '📚' },
   { id: 'prompts', label: 'Prompts', icon: '💬' },
-  { id: 'extensions', label: '插件管理', icon: '🧩' },
+  { id: 'plugins', label: '平台插件', icon: '🧱' },
+  { id: 'extensions', label: 'pi 扩展', icon: '🧩' },
   { id: 'templates', label: 'Agent模板', icon: '📋' },
   { id: 'logs', label: '系统日志', icon: '📜' },
 ] as const;

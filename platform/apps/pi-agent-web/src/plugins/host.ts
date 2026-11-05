@@ -189,9 +189,10 @@ export async function mountSlot(
 }
 
 /**
- * 侧栏图标槽位（`chat.rail-icon`）的可用条目。
+ * 右侧轨道（`chat.rail.right`）的可用条目。
  *
- * 宿主自己渲染按钮（图标体系由宿主决定），插件只声明「我是谁、叫什么、排序」。
+ * 一个 surface 就是一个入口：宿主自己渲染按钮（图标体系由宿主决定），
+ * 点开抽屉时用同一 surface 的 `mountKey` 加载面板内容 —— 不再要求插件额外声明面板槽位。
  */
 export async function listRailSurfaces(
   sessionId?: string,
@@ -202,10 +203,7 @@ export async function listRailSurfaces(
   for (const entry of entries) {
     if (!entry.facets.web || disabled.has(entry.id)) continue
     for (const surface of entry.slots ?? []) {
-      if (surface.slot !== 'chat.rail-icon') continue
-      // 需要有对应的抽屉面板可开，否则点了没内容
-      const hasDrawer = (entry.slots ?? []).some((s) => s.slot === 'chat.drawer')
-      if (!hasDrawer) continue
+      if (surface.slot !== 'chat.rail.right') continue
       out.push({ pluginId: entry.id, surface })
     }
   }

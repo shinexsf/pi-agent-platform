@@ -26,7 +26,12 @@ import type {
   SessionRunState,
 } from '@pi-agent-platform/shared-types';
 
-import type { PluginFacetName, PluginStatus, SurfaceRegistration } from '@pi-agent-platform/plugin-types';
+import type {
+  PluginFacetName,
+  PluginStatus,
+  SurfaceDeclaration,
+  SurfaceRegistration,
+} from '@pi-agent-platform/plugin-types';
 
 export type { SurfaceRegistration } from '@pi-agent-platform/plugin-types';
 
@@ -297,6 +302,13 @@ export type TemplateResponse = AgentTemplateDTO;
 // ---------- Plugins ----------
 
 /** 插件在会话/列表中的只读视图。 */
+/** 某个 facet 入口文件的探测结果。 */
+export interface FacetEntryPointDTO {
+  path: string;
+  exists: boolean;
+  candidates: string[];
+}
+
 export interface PluginEntryDTO {
   /** 插件 id = npm 包名。 */
   id: string;
@@ -304,16 +316,74 @@ export interface PluginEntryDTO {
   status: PluginStatus;
   /** 人类可读的降级/停用原因。 */
   reason?: string;
-  /** facet 就绪情况；未提供的 facet 视为无入口。 */
+  /** 面向人的说明（`package.json` 的 `description`）。 */
+  description?: string;
+  author?: string;
+  homepage?: string;
+  /** 开关 ∧ 声明 ∧ 入口（可加载）；保留旧语义。 */
   facets: Partial<Record<PluginFacetName, boolean>>;
-  /** 本插件注册的 UI 槽位（仅 web facet 已启用时非空）。 */
+  /** 磁盘上声明了哪些 facet（只看目录存在）。 */
+  declaredFacets: PluginFacetName[];
+  /** registry 里显式关闭的 facet（原样）。 */
+  switches: Partial<Record<PluginFacetName, boolean>>;
+  /** 平台实际会装载的 facet（不含 `server`：本期仅声明）。 */
+  loadedFacets: PluginFacetName[];
+  /** 各 facet 的入口探测结果（列表页用它区分"声明了但没编译"）。 */
+  entries: Record<PluginFacetName, FacetEntryPointDTO>;
+  /** 本插件校验通过的 UI 槽位（仅 web facet 启用时非空）。 */
   slots: SurfaceRegistration[];
+  /** `package.json` 里声明的全部槽位（未校验，`slots` 是它的合法子集）。 */
+  surfaces: SurfaceDeclaration[];
+  /** 依赖的 pi 插件（包名 → semver range）。 */
+  requires: Record<string, string>;
+  /** 安装目录绝对路径。 */
+  dir: string;
+  /** 安装时间（ISO）。 */
+  installedAt?: string;
 }
+
+/** facet 在当前平台的装载支持度。 */
+export type FacetSupport = 'loaded' | 'declared-only';
 
 export interface ListPluginsResponse {
   plugins: PluginEntryDTO[];
   /** 全局 kill switch 是否生效。 */
   disabledByFlag: boolean;
+  /** 插件根目录（页面上要显示"装到哪了"）。 */
+  pluginsDir: string;
+  /** 各 facet 的装载支持情况（`server` 本期为 `declared-only`）。 */
+  facetSupport: Record<PluginFacetName, FacetSupport>;
+}
+
+/** 依赖的 pi 插件的安装状态。 */
+export interface PluginDependencyDTO {
+  name: string;
+  range: string;
+  /** `null` = 无法判定（例如 pi 的 settings.json 不可读）。 */
+  installed: boolean | null;
+  via?: 'settings' | 'node_modules';
+  version?: string;
+}
+
+export interface PluginDetailDTO {
+  plugin: PluginEntryDTO;
+  /** 四个 facet 的入口探测结果；不做该 facet 时为 `null`。 */
+  entryPoints: Record<PluginFacetName, FacetEntryPointDTO>;
+  dependencies: PluginDependencyDTO[];
+  /** `<dir>/package.json` */
+  manifestPath: string;
+  registryEntry: {
+    id: string;
+    version: string;
+    dir: string;
+    enabled: boolean;
+    facets?: Partial<Record<PluginFacetName, boolean>>;
+    installedAt?: string;
+  };
+}
+
+export interface GetPluginDetailResponse {
+  detail: PluginDetailDTO;
 }
 
 // ---------- Error ----------

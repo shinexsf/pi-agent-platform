@@ -36,9 +36,45 @@ export const PLUGIN_FACET_NAMES: readonly PluginFacetName[] = ['server', 'worker
 export type PluginStatus = 'active' | 'degraded' | 'disabled' | 'pending' | 'orphan';
 
 /** UI 槽位名。宿主实现这些槽位，插件向其中注册。 */
-export type PluginSlotName = 'chat.rail-icon' | 'chat.drawer';
+/**
+ * 插件可以挂载的 UI 槽位。
+ *
+ * 一个槽位 = **一个完整的界面入口**，不是“一个渲染位置”：
+ * - `chat.rail.right` —— 会话页右侧 icon 轨道上的一个按钮 **及其抽屉面板**：
+ *   声明一次，宿主渲染按钮，点开就是用该 surface 的 `mountKey` 加载的面板内容。
+ *
+ * 目前只有右侧轨道。未来若加左侧轨道，命名沿用同一规则（`chat.rail.left`），
+ * 并且抽屉同样是槽位的一部分，不需要再单独声明 `chat.drawer.*`。
+ */
+export type PluginSlotName = 'chat.rail.right';
 
-export const PLUGIN_SLOT_NAMES: readonly PluginSlotName[] = ['chat.rail-icon', 'chat.drawer'];
+export const PLUGIN_SLOT_NAMES: readonly PluginSlotName[] = ['chat.rail.right'];
+
+/**
+ * facet 在当前平台的装载支持度。
+ *
+ * - `loaded`        平台会真的执行它（`worker`/`extension` 在 worker 进程，`web` 在浏览器）
+ * - `declared-only` 只有契约与目录探测，**没有装载实现**（`server` 尚未实现）
+ *
+ * 这个映射是目录页"扩展点是否可用"的唯一依据：不允许用"目录存在"冒充"可用"。
+ */
+export type FacetSupport = 'loaded' | 'declared-only';
+
+export const FACET_SUPPORT: Readonly<Record<PluginFacetName, FacetSupport>> = {
+  server: 'declared-only',
+  worker: 'loaded',
+  extension: 'loaded',
+  web: 'loaded',
+};
+
+/** 某个 facet 的入口文件探测结果。 */
+export interface FacetEntryPoint {
+  /** 实际采用的路径（探测成功时为命中的候选，失败时为第一个期望路径）。 */
+  path: string;
+  exists: boolean;
+  /** 按顺序探测过的候选路径，便于在 UI 上解释"为什么说缺失"。 */
+  candidates: string[];
+}
 
 /** `package.json` 里 `piServer` 字段的形状。 */
 export interface PluginPackageManifest {
@@ -76,6 +112,12 @@ export interface PluginManifest {
   requiresPlugins: Record<string, string>;
   /** 静态声明的 web 槽位（可能为空）。 */
   surfaces: SurfaceDeclaration[];
+  /** 面向人的说明（`package.json` 顶层 `description`）；缺失即 undefined，不补默认值。 */
+  description?: string;
+  /** `package.json` 顶层 `author`（字符串或 `{ name }` 均可，归一为字符串）。 */
+  author?: string;
+  /** `package.json` 顶层 `homepage`。 */
+  homepage?: string;
 }
 
 /** `registry.json` 的单个条目（安装事实）。 */

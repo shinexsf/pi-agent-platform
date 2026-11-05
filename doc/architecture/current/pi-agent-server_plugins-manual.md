@@ -23,8 +23,7 @@
       "apiVersion": "1",
       "web": {
         "surfaces": [
-          { "id": "hello-rail", "slot": "chat.rail-icon", "mountKey": "panel", "title": "Hello" },
-          { "id": "hello-drawer", "slot": "chat.drawer", "mountKey": "panel", "title": "Hello" }
+          { "id": "hello", "slot": "chat.rail.right", "mountKey": "panel", "title": "Hello", "icon": "plug" }
         ]
       }
     }
@@ -67,7 +66,7 @@ pi-server plugin add ~/my-plugin --enable
 | `requires.plugins` | — | `{ "包名": "semver range" }`。**只校验**：未安装、或该 agent 没在 `extensions` 里启用它 → 本插件不加载。**它绝不会帮用户开启依赖** |
 | `web.surfaces[]` | — | 静态槽位声明，见第 4 节 |
 | `web.surfaces[].id` | ✅ | 全局唯一；重复注册的后者被拒 |
-| `web.surfaces[].slot` | ✅ | `chat.rail-icon` \| `chat.drawer` |
+| `web.surfaces[].slot` | ✅ | `chat.rail.right`（目前唯一槽位） |
 | `web.surfaces[].mountKey` | ✅ | 对应 `web/<mountKey>.js`（不带扩展名） |
 | `web.surfaces[].title` | ✅ | 按钮 tooltip / 抽屉标题 |
 | `web.surfaces[].icon` | — | 宿主内置图标标识，缺省用默认图标 |
@@ -150,7 +149,7 @@ export default function activate({ bridge }) {
 // server/index.js
 export function activate(host) {
   host.log('info', 'hello activated');
-  host.surfaces.register({ id: 'hello-rail', slot: 'chat.rail-icon', mountKey: 'panel', title: 'Hello' });
+  host.surfaces.register({ id: 'hello', slot: 'chat.rail.right', mountKey: 'panel', title: 'Hello', icon: 'plug' });
 }
 ```
 
@@ -187,12 +186,11 @@ v1 里 `surfaces.register` 是**增量能力（尚未实现）**——静态槽�
 
 | 槽位 | 位置 | 说明 |
 |---|---|---|
-| `chat.rail-icon` | 会话页右上角 icon 轨道 | 每个面 → 一个按钮；点击展开抽屉 |
-| `chat.drawer` | 右侧抽屉 | 内容是 `web/<mountKey>.js` 的 `mount` |
+| `chat.rail.right` | 会话页右上角 icon 轨道 | 每个面 → 一个按钮；点击展开该插件的抽屉，内容为 `web/<mountKey>.js` 的 `mount` |
 
 - 资产由 server 同源托管：`GET /plugins/<id>/web/<file>`。插件自己 import 的第三方库要么用 CDN，要么装进插件目录的 `node_modules`（`plugin add` 会原样复制）
 - 路径穿越与扩展名白名单双向校验；`id` 从 registry 的 `dir` 解析（不是字符串拼接）
-- **一个 mountKey 可以挂多个槽位**（上面例子 rail 和 drawer 共用一个 `panel.js`，靠 `el.dataset.slot` 判断自己是谁：`'chat.rail-icon'` / `'chat.drawer'`）
+- **一个槽位就是一个入口**：按钮由宿主渲染，抽屉内容是同一 `mountKey` 的 `mount(el, host)`；插件不需要为抽屉再声明一次槽位（`el.dataset.slot` 恒为 `'chat.rail.right'`）
 - 宿主给你的 `el` 上是 `div.plugin-surface`，带 `data-plugin-id` 与 `data-slot`；这就是你全部能碰的外部状态
 
 ## 5. 会话维度：谁能看到你的插件
@@ -219,13 +217,31 @@ pi-server plugin add ./pkg --enable      # 复制目录 + 写 registry
 | 现象 | 先看这里 |
 |---|---|
 | 图标没出现 | `GET /api/sessions/<id>/plugins` 里有没有它 → 没有就是闸门拦了（看 `reason`）；有但不显示 → 前端槽位挂载失败，看浏览器 console |
-| `status: degraded` | `GET /api/plugins` 的 `detail`：`apiVersion` 不对 / 目录缺 `package.json#pi.plugin` / facet 目录为空 |
+| `status: degraded` | `GET /api/plugins` 的 `reason`：`apiVersion` 不对 / 目录缺 `package.json#piServer.apiVersion` / facet 声明了但缺入口文件 |
 | 抽屉报「插件加载失败」 | web 入口 404 或 `mount` 抛异常；`/plugins/<id>/web/<mountKey>.js` 手动打开试试 |
 | 面板收不到数据 | `bridge.emit` 是否真的调用（worker 日志）；`onEmit` 是否在 `activate` 里注册；检查 64 KiB / 100fps 上限 |
 | 改了代码不生效 | v1 **没有热加载**：`pi-server restart`。web 侧刷新页面即可 |
 | 想看每个会话的闸门解释 | `GET /debug/sessions/<id>`（dev 模式）→ `plugins[]` 每条的 `issues[].reason` |
 
 **坏插件不会拖垮别人**：`mount` 抛错只影响自己那个槽位（抽屉里显示失败原因 + 一条 console 错误）；extension/worker facet 抛错会记 `facet failed to load (session continues)`，会话照跑。
+
+### 6.1 用配置页「平台插件」看自己提供了什么
+
+`配置 → 平台插件`（`/config/plugins`）是自查第一站，**只读**：
+
+- **列表**：`id / 版本 / status / 描述 / 扩展点徽标 / 依赖摘要`。扩展点徽标有四态：`✓`（会执行）、`已关`（开关关掉）、`入口缺失`（目录在、入口文件没了）、`未装载`（平台没实现，如 `server`）、`未登记`（目录在但 registry 没登记）
+- **详情**：扩展点四态表（声明 / 开关 / 入口路径 / 是否装载）；依赖的 pi 插件三态（`✓ 已安装` / `✗ 未安装` / `? 未知`）；`web` 槽位表；底部等价 CLI 命令
+
+排查思路：
+
+| 你在页面上看到 | 说明 | 怎么办 |
+|---|---|---|
+| 插件根本没出现 | registry 里没有它（`orphan` 会显示但标"未登记"） | `pi-server plugin add ./pkg --enable` |
+| `worker 入口缺失` | 目录有、`worker/index.js` 没有（或只编到了 `dist/` 下且路径对不上） | 补齐入口文件；期望路径在详情里 |
+| `server 未装载` | 正常现象：`server` facet 本期只有契约、没有装载实现 | 别指望它跑；用 `extension` / `worker` 承载逻辑 |
+| 依赖 `✗ 未安装` | pi 侧没有这个插件，会话闸门会拦 | `pi install <pkg>` 并把它加进 agent 的 `extensions` |
+| 依赖 `? 未知` | `~/.pi/agent/settings.json` 读不出来 | 查权限/JSON 语法 |
+| `status: active` 但会话里没效果 | `active` 只代表静态检查通过 | 去 `GET /debug/sessions/<id>` 看 `plugins[].reason` |
 
 ## 7. 打包与分发
 

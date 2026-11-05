@@ -10,15 +10,19 @@
  * 由 worker 侧按 spawn 参数装载）。
  */
 
-import { existsSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import {
   describePluginState,
   readManifest,
   readRegistry,
   scanPluginDirs,
+  detectFacetEntry,
+  listFacetDirs,
 } from '@pi-agent-platform/plugin-types/registry';
+import { FACET_SUPPORT, PLUGIN_FACET_NAMES } from '@pi-agent-platform/plugin-types';
 import type {
+  FacetEntryPoint,
   PluginFacetName,
   PluginManifest,
   PluginRegistryEntry,
@@ -26,7 +30,11 @@ import type {
   ResolvedPlugin,
   SurfaceDeclaration,
 } from '@pi-agent-platform/plugin-types';
-import type { PluginEntryDTO } from '@pi-agent-platform/api-types';
+import type {
+  PluginDependencyDTO,
+  PluginDetailDTO,
+  PluginEntryDTO,
+} from '@pi-agent-platform/api-types';
 import { childLogger } from '../logger.js';
 
 const logger = childLogger('plugins');
@@ -35,7 +43,16 @@ export interface LoadedPlugin {
   entry: PluginRegistryEntry;
   status: PluginStatus;
   reason?: string;
+  /** 开关 ∧ 声明 ∧ 入口（可加载）。 */
   facets: Partial<Record<PluginFacetName, boolean>>;
+  /** 磁盘上声明了哪些 facet（只看目录）。 */
+  declaredFacets: PluginFacetName[];
+  /** registry 里显式关闭的 facet（原样）。 */
+  switches: Partial<Record<PluginFacetName, boolean>>;
+  /** 各 facet 的入口探测结果。 */
+  entries: Partial<Record<PluginFacetName, FacetEntryPoint>>;
+  /** 平台实际会装载的 facet。 */
+  loadedFacets: PluginFacetName[];
   manifest: PluginManifest | null;
   /** 已校验的槽位（slot 合法、mountKey 文件存在、id 全局唯一）。 */
   slots: SurfaceDeclaration[];
@@ -99,7 +116,18 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
         slots.push(surface);
       }
     }
-    plugins.push({ entry, status: state.status, reason: state.reason, facets: state.facets, manifest: state.manifest, slots });
+    plugins.push({
+      entry,
+      status: state.status,
+      reason: state.reason,
+      facets: state.facets,
+      declaredFacets: state.declaredFacets,
+      switches: state.switches,
+      entries: state.entries,
+      loadedFacets: state.loadedFacets,
+      manifest: state.manifest,
+      slots,
+    });
   }
 
   // 目录存在但未登记 → orphan（不加载）
@@ -107,11 +135,18 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
   for (const dir of scanPluginDirs(pluginsDir)) {
     if (registered.has(path.resolve(dir))) continue;
     const manifest = readManifest(dir);
+    const entries: Partial<Record<PluginFacetName, FacetEntryPoint>> = {};
+    for (const facet of PLUGIN_FACET_NAMES) entries[facet] = detectFacetEntry(dir, facet);
+    const declaredFacets = listFacetDirs(dir);
     plugins.push({
       entry: { id: path.basename(dir), version: manifest?.version ?? '?', dir, enabled: false },
       status: 'orphan',
       reason: '目录存在但未在 registry.json 登记（用 pi-server plugin add 重新登记）',
       facets: {},
+      declaredFacets,
+      switches: {},
+      entries,
+      loadedFacets: [],
       manifest,
       slots: [],
     });
@@ -126,14 +161,124 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
 
 /** 转成对外的只读 DTO。 */
 export function toPluginEntryDTO(plugin: LoadedPlugin): PluginEntryDTO {
+  const manifest = plugin.manifest;
   return {
     id: plugin.entry.id,
     version: plugin.entry.version,
     status: plugin.status,
     reason: plugin.reason,
+    description: manifest?.description,
+    author: manifest?.author,
+    homepage: manifest?.homepage,
     facets: plugin.facets,
+    declaredFacets: plugin.declaredFacets,
+    switches: plugin.switches,
+    loadedFacets: plugin.loadedFacets,
+    entries: Object.fromEntries(
+      PLUGIN_FACET_NAMES.map((facet) => [facet, detectFacetEntry(plugin.entry.dir, facet)]),
+    ) as Record<PluginFacetName, FacetEntryPoint>,
     slots: plugin.slots,
+    surfaces: manifest?.surfaces ?? [],
+    requires: manifest?.requiresPlugins ?? {},
+    dir: plugin.entry.dir,
+    installedAt: plugin.entry.installedAt,
   };
+}
+
+/**
+ * 判定一个 pi 插件是否已安装。
+ *
+ * 判定顺序（与 pi 自己的解析一致）：
+ * 1. `<agentDir>/settings.json` 的 `packages`（剥 `npm:` 前缀）—— 用户显式装的
+ * 2. `<agentDir>/npm/node_modules/<pkg>` —— 安装产物落地
+ *
+ * 两者都查不到 → `false`；settings 读不出来 → `null`（"我不知道" ≠ "没装"）。
+ */
+export function resolveDependency(
+  name: string,
+  range: string,
+  agentDir: string,
+): PluginDependencyDTO {
+  let settingsReadable = true;
+  let packages: string[] = [];
+  try {
+    const raw = readFileSync(path.join(agentDir, 'settings.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as { packages?: unknown };
+    if (Array.isArray(parsed.packages)) {
+      packages = parsed.packages.filter((p): p is string => typeof p === 'string');
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // 文件不存在 = 没装任何扩展，这是可判定的 false；其它错误才算"未知"。
+    if (code !== 'ENOENT') settingsReadable = false;
+  }
+
+  const stripNpm = (spec: string) => spec.replace(/^npm:/, '');
+  if (packages.some((spec) => stripNpm(spec).split('@')[0] === name || stripNpm(spec).startsWith(`${name}@`) || stripNpm(spec) === name)) {
+    return { name, range, installed: true, via: 'settings', version: readInstalledVersion(agentDir, name) };
+  }
+
+  const nested = path.join(agentDir, 'npm', 'node_modules', name, 'package.json');
+  if (existsSync(nested)) {
+    return { name, range, installed: true, via: 'node_modules', version: readInstalledVersion(agentDir, name) };
+  }
+
+  return { name, range, installed: settingsReadable ? false : null };
+}
+
+/** 读 `<agentDir>/npm/node_modules/<pkg>/package.json` 的版本（读不到就不报版本）。 */
+function readInstalledVersion(agentDir: string, name: string): string | undefined {
+  try {
+    const raw = readFileSync(path.join(agentDir, 'npm', 'node_modules', name, 'package.json'), 'utf-8');
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 单个插件的详情视图：声明 + 入口探测 + 依赖安装状态。
+ *
+ * 只读：不写 registry、不动目录。`null` 表示 registry 里没有这个 id。
+ */
+export function describePluginDetail(
+  pluginsDir: string,
+  id: string,
+  agentDir: string,
+): PluginDetailDTO | null {
+  const snapshot = getPluginSnapshot(pluginsDir);
+  const plugin = snapshot.plugins.find((p) => p.entry.id === id);
+  if (!plugin) return null;
+
+  // 入口探测每次现读：编译产物可能刚被重新构建，缓存会让页面说谎。
+  const entryPoints = Object.fromEntries(
+    PLUGIN_FACET_NAMES.map((facet) => [facet, detectFacetEntry(plugin.entry.dir, facet)]),
+  ) as Record<PluginFacetName, FacetEntryPoint>;
+
+  const dependencies = Object.entries(plugin.manifest?.requiresPlugins ?? {}).map(([name, range]) =>
+    resolveDependency(name, range, agentDir),
+  );
+
+  return {
+    plugin: toPluginEntryDTO(plugin),
+    entryPoints,
+    dependencies,
+    manifestPath: path.join(plugin.entry.dir, 'package.json'),
+    registryEntry: {
+      id: plugin.entry.id,
+      version: plugin.entry.version,
+      dir: plugin.entry.dir,
+      enabled: plugin.entry.enabled,
+      facets: plugin.entry.facets,
+      installedAt: plugin.entry.installedAt,
+    },
+  };
+}
+
+/** facet → 装载支持度（`server` 本期为 `declared-only`）。 */
+export function facetSupportMap(): Record<PluginFacetName, 'loaded' | 'declared-only'> {
+  return { ...FACET_SUPPORT };
 }
 
 /**

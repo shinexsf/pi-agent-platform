@@ -396,7 +396,7 @@ onUnmounted(() => {
             <line x1="12" y1="8" x2="12.01" y2="8" />
           </svg>
         </button>
-        <!-- 插件槽位 chat.rail-icon（change: plugin-mechanism 6.5） -->
+        <!-- 插件槽位 chat.rail.right：一个 surface = 一个按钮 + 它的抽屉面板 -->
         <button
           v-for="item in railPlugins"
           :key="item.pluginId"
@@ -496,14 +496,14 @@ onUnmounted(() => {
             </div>
             <div class="drawer-note">百分比为 SDK 估算值；压缩（compaction）刚发生时可能暂为未知。</div>
           </div>
-          <!-- 插件槽位 chat.drawer（change: plugin-mechanism 6.5）：按插件打开 -->
+          <!-- 插件槽位 chat.rail.right：抽屉内容用同一 surface 的 mountKey 加载 -->
           <div
             v-else-if="drawerTab.startsWith('plugin:')"
             class="drawer-body"
             :data-plugin-id="drawerTab.slice('plugin:'.length)"
           >
             <SlotHost
-              slot="chat.drawer"
+              slot="chat.rail.right"
               :session-id="sessionId"
               :plugin-id="drawerTab.slice('plugin:'.length)"
             />

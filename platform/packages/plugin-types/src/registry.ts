@@ -21,8 +21,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { PLUGIN_API_VERSION, PLUGIN_FACET_NAMES, PLUGIN_SLOT_NAMES } from './index.js';
+import { FACET_SUPPORT, PLUGIN_API_VERSION, PLUGIN_FACET_NAMES, PLUGIN_SLOT_NAMES } from './index.js';
 import type {
+  FacetEntryPoint,
   PluginFacetName,
   PluginManifest,
   PluginRegistryEntry,
@@ -100,6 +101,9 @@ export function readManifest(dir: string): PluginManifest | null {
   let pkg: {
     name?: unknown;
     version?: unknown;
+    description?: unknown;
+    author?: unknown;
+    homepage?: unknown;
     piServer?: {
       apiVersion?: unknown;
       requires?: { plugins?: unknown };
@@ -122,7 +126,16 @@ export function readManifest(dir: string): PluginManifest | null {
     }
   }
   const surfaces = parseSurfaces(pkg.piServer?.web?.surfaces);
-  return { name: pkg.name, version: pkg.version, apiVersion, requiresPlugins, surfaces };
+  return {
+    name: pkg.name,
+    version: pkg.version,
+    apiVersion,
+    requiresPlugins,
+    surfaces,
+    description: typeof pkg.description === 'string' ? pkg.description : undefined,
+    author: parseAuthor(pkg.author),
+    homepage: typeof pkg.homepage === 'string' ? pkg.homepage : undefined,
+  };
 }
 
 /** 宽松解析槽位声明：字段不完整的条目直接丢弃（由上层报告）。 */
@@ -164,6 +177,50 @@ export function detectFacets(dir: string): PluginFacetName[] {
   return found;
 }
 
+/** `author` 既可能是字符串，也可能是 `{ name, email }`；只保留展示所需的字符串。 */
+function parseAuthor(raw: unknown): string | undefined {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') {
+    const name = (raw as { name?: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
+  return undefined;
+}
+
+/**
+ * 该目录**声明**了哪些 facet —— 只看目录是否存在，不看入口文件。
+ *
+ * 与 {@link detectFacets} 的区别：后者要求入口文件真的在（= 可加载），
+ * 前者只表达"作者声明了这一类扩展点"。目录页需要把两者分开呈现，
+ * 否则"声明了但没编译"这种最常见的故障会被折叠成一个 false。
+ */
+export function listFacetDirs(dir: string): PluginFacetName[] {
+  return PLUGIN_FACET_NAMES.filter((facet) => dirExists(path.join(dir, facet)));
+}
+
+/**
+ * 探测某个 facet 的入口文件。
+ *
+ * - 非 web：`<dir>/<facet>/index.js`（约定）→ `<dir>/dist/<facet>/index.js`（构建产物布局）
+ * - web：没有固定入口名，约定是 `<dir>/web/<mountKey>.js`，这里只判断目录里有没有 `.js`
+ */
+export function detectFacetEntry(dir: string, facet: PluginFacetName): FacetEntryPoint {
+  if (facet === 'web') {
+    const webDir = path.join(dir, 'web');
+    const expected = path.join(webDir, '<mountKey>.js');
+    let exists = false;
+    try {
+      exists = dirExists(webDir) && readdirSync(webDir).some((name) => name.endsWith('.js'));
+    } catch {
+      exists = false;
+    }
+    return { path: expected, exists, candidates: [expected] };
+  }
+  const candidates = [path.join(dir, facet, 'index.js'), path.join(dir, 'dist', facet, 'index.js')];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  return { path: found ?? candidates[0]!, exists: Boolean(found), candidates };
+}
+
 /** 列出 `<pluginsDir>` 下像插件包的目录（有 package.json）。 */
 export function scanPluginDirs(pluginsDir: string): string[] {
   if (!existsSync(pluginsDir)) return [];
@@ -191,7 +248,16 @@ export function deletePluginDir(pluginsDir: string, id: string): void {
 export interface PluginState {
   status: PluginStatus;
   reason?: string;
+  /** 开关 ∧ 声明（可加载）；保留旧语义，供既有消费方使用。 */
   facets: Partial<Record<PluginFacetName, boolean>>;
+  /** 磁盘上声明了哪些 facet（只看目录存在，不看入口与开关）。 */
+  declaredFacets: PluginFacetName[];
+  /** registry 里显式关闭的 facet（原样，未与声明求交）。 */
+  switches: Partial<Record<PluginFacetName, boolean>>;
+  /** 各 facet 的入口文件探测结果。 */
+  entries: Partial<Record<PluginFacetName, FacetEntryPoint>>;
+  /** 平台实际会装载的 facet（开关 ∧ 声明 ∧ 平台支持 ∧ 入口存在）。 */
+  loadedFacets: PluginFacetName[];
   manifest: PluginManifest | null;
 }
 
@@ -206,33 +272,75 @@ export interface PluginState {
  */
 export function describePluginState(entry: PluginRegistryEntry): PluginState {
   const facets: Partial<Record<PluginFacetName, boolean>> = {};
+  const switches: Partial<Record<PluginFacetName, boolean>> = { ...(entry.facets ?? {}) };
+  const entries: Partial<Record<PluginFacetName, FacetEntryPoint>> = {};
+
+  // 目录探测与入口探测都不依赖开关：先算出来，这样"停用"的插件也能看到它声明了什么。
+  const declaredFacets = listFacetDirs(entry.dir);
+  for (const facet of PLUGIN_FACET_NAMES) entries[facet] = detectFacetEntry(entry.dir, facet);
+
+  const base = { facets, declaredFacets, switches, entries, loadedFacets: [] as PluginFacetName[] };
+
   if (!entry.enabled) {
-    return { status: 'disabled', reason: '已在 registry 中停用', facets, manifest: null };
+    return { ...base, status: 'disabled', reason: '已在 registry 中停用', manifest: null };
   }
   const manifest = readManifest(entry.dir);
   if (!dirExists(entry.dir)) {
-    return { status: 'degraded', reason: `安装目录不存在: ${entry.dir}`, facets, manifest };
-  }
-  if (!manifest) {
-    return { status: 'degraded', reason: 'package.json 缺失或缺少 piServer.apiVersion', facets, manifest };
-  }
-  if (manifest.apiVersion !== PLUGIN_API_VERSION) {
     return {
+      ...base,
       status: 'degraded',
-      reason: `契约版本不匹配: 插件 ${manifest.apiVersion} / 平台 ${PLUGIN_API_VERSION}`,
-      facets,
+      reason: `安装目录不存在: ${entry.dir}`,
       manifest,
     };
   }
+  if (!manifest) {
+    return {
+      ...base,
+      status: 'degraded',
+      reason: 'package.json 缺失或缺少 piServer.apiVersion',
+      manifest,
+    };
+  }
+  if (manifest.apiVersion !== PLUGIN_API_VERSION) {
+    return {
+      ...base,
+      status: 'degraded',
+      reason: `契约版本不匹配: 插件 ${manifest.apiVersion} / 平台 ${PLUGIN_API_VERSION}`,
+      manifest,
+    };
+  }
+
+  // 声明了目录却没有入口文件 —— 最常见的"编译产物没跟上来"故障，必须单独报。
+  const missingEntry = declaredFacets.filter((facet) => !entries[facet]?.exists);
   const detected = detectFacets(entry.dir);
   for (const facet of PLUGIN_FACET_NAMES) {
-    const switchedOn = entry.facets?.[facet] !== false;
+    const switchedOn = switches[facet] !== false;
     facets[facet] = switchedOn && detected.includes(facet);
   }
-  if (!Object.values(facets).some(Boolean)) {
-    return { status: 'degraded', reason: '没有任何可加载的 facet（server/ worker/ extension/ web/）', facets, manifest };
+  const loadedFacets = PLUGIN_FACET_NAMES.filter(
+    (facet) => facets[facet] === true && FACET_SUPPORT[facet] === 'loaded',
+  );
+
+  if (missingEntry.length > 0) {
+    const first = entries[missingEntry[0]!]!;
+    return {
+      ...base,
+      status: 'degraded',
+      reason: `${missingEntry.join(' / ')} 缺少入口文件（期望 ${first.candidates.join(' 或 ')}）`,
+      loadedFacets,
+      manifest,
+    };
   }
-  return { status: 'active', facets, manifest };
+  if (!Object.values(facets).some(Boolean)) {
+    return {
+      ...base,
+      status: 'degraded',
+      reason: '没有任何可加载的 facet（server/ worker/ extension/ web/）',
+      loadedFacets,
+      manifest,
+    };
+  }
+  return { ...base, status: 'active', loadedFacets, manifest };
 }
 
 // ---------- 互斥锁 ----------

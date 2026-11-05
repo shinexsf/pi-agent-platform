@@ -112,11 +112,22 @@ interface SessionContextDTO {
 |---|---|---|
 | `/api/plugins` | GET | registry 快照（`status` / `version` / `detail` / `declared` / `registered`）；**全局视图，配置页用，不带会话维度** |
 | `/api/plugins/reload` | GET | 手工失效内存快照（registry 变更也会被 `fs.watch` 自动失效） |
+| `/api/plugins/:id` | GET | **单插件详情**：`plugin`（含 `declaredFacets` / `switches` / `loadedFacets` / `entries`）+ `entryPoints` + `dependencies`（依赖安装三态）+ `manifestPath` + `registryEntry`；未知 id → 404 |
 | `/api/sessions/:id/plugins` | GET | **会话级解析结果**：只返回该会话 `enabled` 的插件（依赖未启用 → 不出现） |
 | `/api/sessions/:id/plugins/emit` | POST | 浏览器 → 插件：`{ pluginId, name, data }` |
 | `/plugins/<id>/web/<file>` | GET | 插件 web facet 静态资产（同源托管；`id` 从 registry 的 `dir` 解析，带路径穿越与扩展名白名单校验） |
 
 ```jsonc
+// GET /api/plugins（列表，顶层带 facetSupport 与 pluginsDir）
+{ "plugins": [{ "id": "@platform/session-projection", "status": "active",
+                "description": "…", "declaredFacets": ["extension","web"],
+                "switches": {}, "loadedFacets": ["extension","web"],
+                "entries": { "web": { "path": "…/web/<mountKey>.js", "exists": true, "candidates": ["…"] } },
+                "surfaces": [ … ], "requires": { "billion-context-pi": ">=0.1.0" },
+                "dir": "…", "installedAt": "…" }],
+  "disabledByFlag": false, "pluginsDir": "/root/.pi/server/plugins",
+  "facetSupport": { "server": "declared-only", "worker": "loaded", "extension": "loaded", "web": "loaded" } }
+
 // GET /api/sessions/:id/plugins
 { "disabledByFlag": false, "placeholder": false,
   "plugins": [{ "id": "@platform/session-projection", "enabled": true, "facets": { "extension": true, "web": true }, "slots": [...] }] }

@@ -29,6 +29,7 @@ import ConfigView from './views/config/ConfigView.vue';
 import ModelsConfig from './views/config/ModelsConfig.vue';
 import DefaultSettings from './views/config/DefaultSettings.vue';
 import McpServersView from './views/config/McpServersView.vue';
+import PluginsView from './views/config/PluginsView.vue';
 import SkillsConfig from './views/config/SkillsConfig.vue';
 import PromptsConfig from './views/config/PromptsConfig.vue';
 import ExtensionsConfig from './views/config/ExtensionsConfig.vue';
@@ -144,6 +145,12 @@ const baseRoutes = [
         name: 'config-prompts',
         component: PromptsConfig,
         meta: { crumbTitleFromParam: 'name' },
+      },
+      {
+        path: 'plugins',
+        name: 'config-plugins',
+        component: PluginsView,
+        meta: { crumbTitle: '平台插件' },
       },
       { path: 'extensions', name: 'config-extensions', component: ExtensionsConfig },
       {

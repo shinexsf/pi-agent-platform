@@ -39,8 +39,7 @@
       "requires": { "plugins": { "@someone/pi-ext": "^2.0.0" } },
       "web": {
         "surfaces": [
-          { "id": "hud-rail", "slot": "chat.rail-icon", "mountKey": "panel", "title": "HUD 示例", "order": 10 },
-          { "id": "hud-drawer", "slot": "chat.drawer", "mountKey": "panel", "title": "HUD 示例" }
+          { "id": "hud", "slot": "chat.rail.right", "mountKey": "panel", "title": "HUD 示例", "icon": "plug", "order": 10 }
         ]
       }
     }
@@ -119,7 +118,7 @@ export default async ({ bridge }) => ({
 ## 6. web 槽位
 
 - 静态声明在 `package.json#pi.plugin.web.surfaces`（v1 静态；运行期 `host.surfaces.register()` 是 server facet 的增量能力，暂未实现）
-- 内置槽位：`chat.rail-icon`（会话页右上轨道按钮）、`chat.drawer`（右侧抽屉内容）
+- 内置槽位：`chat.rail.right`（会话页右上轨道按钮 **+ 它的抽屉面板**；一个槽位 = 一个完整入口，不需要再单独声明抽屉）
 - 托管路径：`GET /plugins/<id>/web/<file>`，**在同源下**提供服务（插件自己 import 的第三方库也在 `node_modules` 里，由 CLI 安装时打平），路径穿越与 ext 白名单双向校验，`id` 从 registry 的 `dir` 解析而不是拼字符串
 - 挂载协议：`mount(el, host)` 返回 `dispose`；关闭顺序 **停推数据 → dispose() → 移除 el**
 - `host` facade（`@pi-agent-platform/plugin-types/web`）：
@@ -160,6 +159,43 @@ pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目
 |---|---|---|
 | `1` | 2026-10-29 | 初版：四类 facet、两个内置槽位、双向桥、CLI |
 | `1` | 2026-11-05 | **web 槽位改为会话级下发**（依赖未启用的会话不下发）；新增真实例子 `@platform/session-projection`（读压缩块） |
+
+## 9.5 元数据视图（配置页「平台插件」）
+
+装完插件在 UI 里看不见，是这个机制上线后最直接的抱怨。`GET /api/plugins` + `GET /api/plugins/:id` 支撑配置页把"装了什么、声明了什么、依赖装没装、为什么没生效"讲清楚。**只读**：启停/安装/卸载仍只走 `pi-server plugin`。
+
+### 数据来源：三层文件 + 一层缓存
+
+| 字段 | 来源 | 读取时机 |
+|---|---|---|
+| `id` / `version` / `enabled` / `facets.*` 开关 / `dir` / `installedAt` | `<pluginsDir>/registry.json` | `loadPlugins()` |
+| `apiVersion` / `requires.plugins` / `web.surfaces[]` / `description` / `author` / `homepage` | 插件自己的 `package.json` | `readManifest(dir)` |
+| facet 目录是否存在（= 声明） | 磁盘 `readdir` | `listFacetDirs(dir)` |
+| facet 入口文件是否存在 | `existsSync(<dir>/<facet>/index.js 或 <dir>/dist/<facet>/index.js)` | 请求时现读 |
+| 依赖包是否安装 | `settings.json` 的 `packages` → `<agentDir>/npm/node_modules/<pkg>` | 详情请求时现读 |
+
+内存里的 `PluginSnapshot` 只是前三类的**解析结果缓存**（1s TTL + `fs.watch(registry.json)` 失效），不是独立数据源。
+
+### 扩展点是四态，不是一个布尔
+
+| 维度 | 含义 | 字段 |
+|---|---|---|
+| **声明** | 磁盘上有没有这个 facet 目录 | `declaredFacets` |
+| **开关** | registry 里有没有被关 | `switches` |
+| **入口** | 入口文件在不在（含期望路径） | `entries[facet].exists` |
+| **装载** | 平台是否真的会执行它 | `facetSupport[facet]` |
+
+`server` facet 与 `web.surfaces.register()` 目前**只有类型、没有装载实现**，因此 `facetSupport.server = 'declared-only'`，页面固定显示「已声明·未装载」。把它们画成"可用"会直接制造"配置对了却不生效"的错觉——这正是本视图要消灭的东西。
+
+旧的 `facets`（开关 ∧ 声明 ∧ 入口）保留给既有消费方；新代码请读上面四个字段。
+
+### `status` 的语义边界
+
+`active` / `degraded` / `disabled` / `pending` / `orphan` 全部由上述三层静态推导，**不包含**"worker 里 facet import 抛错"这类运行期失败。运行期证据只在会话调试信息里（`/debug/sessions/:id` 的 `plugins[].reason`）。页面因此不能把 `active` 读成"运行正常"。
+
+### 准入规则（后续扩展点必须遵守）
+
+新增扩展点（新 facet / 新 host API / 新的可注册贡献类型）的变更必须同时交付：① 装载实现；② 目录页上的字段与文案；③ "未装载 / 未生效"时的显式标注。缺任一项不算完成。
 
 ## 10. 明确未做（v1 范围声明）
 

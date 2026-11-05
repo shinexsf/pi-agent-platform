@@ -90,7 +90,7 @@ async function main() {
   app.route('/api/config', createConfigRouter(config));
   app.route('/api/templates', createTemplatesRouter(templateRepo));
   // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
-  app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir }));
+  app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
   app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
 
   // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
