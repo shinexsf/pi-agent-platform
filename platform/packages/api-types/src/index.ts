@@ -27,10 +27,13 @@ import type {
 } from '@pi-agent-platform/shared-types';
 
 import type {
+  MenuRegistration,
+  PageRegistration,
+  PluginExtensions,
   PluginFacetName,
   PluginStatus,
-  SurfaceDeclaration,
   SurfaceRegistration,
+  ToolCardRegistration,
 } from '@pi-agent-platform/plugin-types';
 
 export type { SurfaceRegistration } from '@pi-agent-platform/plugin-types';
@@ -330,10 +333,6 @@ export interface PluginEntryDTO {
   loadedFacets: PluginFacetName[];
   /** 各 facet 的入口探测结果（列表页用它区分"声明了但没编译"）。 */
   entries: Record<PluginFacetName, FacetEntryPointDTO>;
-  /** 本插件校验通过的 UI 槽位（仅 web facet 启用时非空）。 */
-  slots: SurfaceRegistration[];
-  /** `package.json` 里声明的全部槽位（未校验，`slots` 是它的合法子集）。 */
-  surfaces: SurfaceDeclaration[];
   /** 依赖的 pi 插件（包名 → semver range）。 */
   requires: Record<string, string>;
   /** 安装目录绝对路径。 */
@@ -384,6 +383,35 @@ export interface PluginDetailDTO {
 
 export interface GetPluginDetailResponse {
   detail: PluginDetailDTO;
+}
+
+// ---------- 运行期扩展点（注册式） ----------
+
+/** 带来源插件的注册项。 */
+export type WithPlugin<T> = T & { pluginId: string };
+
+/** `GET /api/extensions`：全局注册（导航用）。 */
+export interface GlobalExtensionsResponse {
+  menus: WithPlugin<MenuRegistration>[];
+  pages: WithPlugin<PageRegistration>[];
+  disabledByFlag: boolean;
+}
+
+/** `GET /api/plugins/:id/extensions`：单插件全集（含被拒项）。 */
+export interface PluginExtensionsResponse {
+  pluginId: string;
+  extensions: PluginExtensions;
+}
+
+/** `GET /api/sessions/:id/extensions`：会话级（经闸门过滤）。 */
+export interface SessionExtensionsResponse {
+  surfaces: WithPlugin<SurfaceRegistration>[];
+  toolCards: WithPlugin<ToolCardRegistration>[];
+  /** 被闸门拦下的插件及原因（插件 id → 原因）。 */
+  disabled: Record<string, string>;
+  disabledByFlag: boolean;
+  /** 占位会话（库里还没有行）：此时不做闸门过滤。 */
+  placeholder?: boolean;
 }
 
 // ---------- Error ----------

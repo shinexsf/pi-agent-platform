@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { FACET_SUPPORT, PLUGIN_API_VERSION, PLUGIN_FACET_NAMES, PLUGIN_SLOT_NAMES } from './index.js';
+import { FACET_SUPPORT, PLUGIN_API_VERSION, PLUGIN_FACET_NAMES } from './index.js';
 import type {
   FacetEntryPoint,
   PluginFacetName,
@@ -29,7 +29,6 @@ import type {
   PluginRegistryEntry,
   PluginRegistryFile,
   PluginStatus,
-  SurfaceDeclaration,
 } from './index.js';
 
 export const REGISTRY_FILENAME = 'registry.json';
@@ -107,7 +106,6 @@ export function readManifest(dir: string): PluginManifest | null {
     piServer?: {
       apiVersion?: unknown;
       requires?: { plugins?: unknown };
-      web?: { surfaces?: unknown };
     };
   };
   try {
@@ -125,38 +123,15 @@ export function readManifest(dir: string): PluginManifest | null {
       if (typeof range === 'string') requiresPlugins[name] = range;
     }
   }
-  const surfaces = parseSurfaces(pkg.piServer?.web?.surfaces);
   return {
     name: pkg.name,
     version: pkg.version,
     apiVersion,
     requiresPlugins,
-    surfaces,
     description: typeof pkg.description === 'string' ? pkg.description : undefined,
     author: parseAuthor(pkg.author),
     homepage: typeof pkg.homepage === 'string' ? pkg.homepage : undefined,
   };
-}
-
-/** 宽松解析槽位声明：字段不完整的条目直接丢弃（由上层报告）。 */
-function parseSurfaces(raw: unknown): SurfaceDeclaration[] {
-  if (!Array.isArray(raw)) return [];
-  const out: SurfaceDeclaration[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const s = item as Partial<SurfaceDeclaration>;
-    if (typeof s.id !== 'string' || typeof s.mountKey !== 'string' || typeof s.title !== 'string') continue;
-    if (typeof s.slot !== 'string' || !PLUGIN_SLOT_NAMES.includes(s.slot as SurfaceDeclaration['slot'])) continue;
-    out.push({
-      id: s.id,
-      slot: s.slot as SurfaceDeclaration['slot'],
-      mountKey: s.mountKey,
-      title: s.title,
-      icon: typeof s.icon === 'string' ? s.icon : undefined,
-      order: typeof s.order === 'number' ? s.order : undefined,
-    });
-  }
-  return out;
 }
 
 /** 该目录实际存在哪些 facet（目录约定即声明）。 */

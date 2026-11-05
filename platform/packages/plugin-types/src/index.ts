@@ -41,7 +41,7 @@ export type PluginStatus = 'active' | 'degraded' | 'disabled' | 'pending' | 'orp
  *
  * 一个槽位 = **一个完整的界面入口**，不是“一个渲染位置”：
  * - `chat.rail.right` —— 会话页右侧 icon 轨道上的一个按钮 **及其抽屉面板**：
- *   声明一次，宿主渲染按钮，点开就是用该 surface 的 `mountKey` 加载的面板内容。
+ *   声明一次，宿主渲染按钮，点开就是用该 surface 的 `entry` 加载的面板内容。
  *
  * 目前只有右侧轨道。未来若加左侧轨道，命名沿用同一规则（`chat.rail.left`），
  * 并且抽屉同样是槽位的一部分，不需要再单独声明 `chat.drawer.*`。
@@ -53,15 +53,15 @@ export const PLUGIN_SLOT_NAMES: readonly PluginSlotName[] = ['chat.rail.right'];
 /**
  * facet 在当前平台的装载支持度。
  *
- * - `loaded`        平台会真的执行它（`worker`/`extension` 在 worker 进程，`web` 在浏览器）
- * - `declared-only` 只有契约与目录探测，**没有装载实现**（`server` 尚未实现）
+ * - `loaded`        平台会真的执行它（`server`/`worker`/`extension`/`web` 都有装载实现）
+ * - `declared-only` 只有契约与目录探测，**没有装载实现**
  *
  * 这个映射是目录页"扩展点是否可用"的唯一依据：不允许用"目录存在"冒充"可用"。
  */
 export type FacetSupport = 'loaded' | 'declared-only';
 
 export const FACET_SUPPORT: Readonly<Record<PluginFacetName, FacetSupport>> = {
-  server: 'declared-only',
+  server: 'loaded',
   worker: 'loaded',
   extension: 'loaded',
   web: 'loaded',
@@ -86,21 +86,7 @@ export interface PluginPackageManifest {
    * 语义是"校验"：未安装或未在该 agent 的 `extensions` 白名单启用 → 不加载，绝不代勾。
    */
   requires?: { plugins?: Record<string, string> };
-  /**
-   * web 槽位声明（v1 静态声明）。
-   * 运行期 `host.surfaces.register()` 属于 server facet 能力，本 change 不做。
-   */
-  web?: { surfaces?: SurfaceDeclaration[] };
-}
-
-/** `package.json` 里声明的槽位（`id` / `slot` / `mountKey` 必填）。 */
-export interface SurfaceDeclaration {
-  id: string;
-  slot: PluginSlotName;
-  mountKey: string;
-  title: string;
-  icon?: string;
-  order?: number;
+  // web 槽位不再声明：界面贡献一律来自 web/index.js 的 `register(host)` 运行期注册。
 }
 
 /** 从 `package.json` 解析出的插件清单。 */
@@ -110,8 +96,6 @@ export interface PluginManifest {
   version: string;
   apiVersion: string;
   requiresPlugins: Record<string, string>;
-  /** 静态声明的 web 槽位（可能为空）。 */
-  surfaces: SurfaceDeclaration[];
   /** 面向人的说明（`package.json` 顶层 `description`）；缺失即 undefined，不补默认值。 */
   description?: string;
   /** `package.json` 顶层 `author`（字符串或 `{ name }` 均可，归一为字符串）。 */
@@ -155,13 +139,13 @@ export interface ResolvedPlugin {
   workerPath?: string;
 }
 
-/** 插件向宿主注册的 UI 槽位。 */
+/** 插件向宿主注册的 UI 槽位（= 一个完整界面入口：按钮 + 打开后的内容）。 */
 export interface SurfaceRegistration {
-  /** 槽位标识，全局唯一；重复注册后者被拒绝。 */
+  /** 槽位标识，同槽位内唯一；重复注册后者被拒绝。 */
   id: string;
   slot: PluginSlotName;
-  /** 浏览器入口文件名（不含 `.js`），对应 `web/<mountKey>.js`。 */
-  mountKey: string;
+  /** 浏览器入口文件名（不含 `.js`），对应 `web/<entry>.js`。 */
+  entry: string;
   title: string;
   /** 图标标识，由宿主解析；缺省时宿主用默认图标。 */
   icon?: string;
@@ -169,17 +153,126 @@ export interface SurfaceRegistration {
   order?: number;
 }
 
-/** server facet 入口签名（骨架，能力按需扩展）。 */
-export interface PluginServerHost {
-  /** 插件 id，便于日志区分。 */
+/** 插件注册的一级菜单项。 */
+export interface MenuRegistration {
+  id: string;
+  label: string;
+  icon?: string;
+  /** 一级菜单按此排序，小者靠前；缺省排在内置项之后。 */
+  order?: number;
+  /** 二级挂载点；本期只开放 `config`。 */
+  parent?: PluginMenuParent;
+  /** 引用 `PageRegistration.id`，点击后渲染该页面。 */
+  page: string;
+}
+
+export type PluginMenuParent = 'config';
+
+/** 插件页面：菜单点击后渲染的内容。 */
+export interface PageRegistration {
+  id: string;
+  /** 浏览器入口文件名（不含 `.js`），对应 `web/<entry>.js`。 */
+  entry: string;
+}
+
+/** 插件 HTTP 端点的请求视图（`path` 已剥掉 `/api/p/<pluginId>` 前缀）。 */
+export interface PluginRouteRequest {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  /** 原始 body 文本（JSON 需插件自行 `JSON.parse`，平台不做猜测）。 */
+  body: string;
+  header(name: string): string | undefined;
+}
+
+/** 插件 HTTP 端点的响应。缺省为 200 + JSON 空对象。 */
+export interface PluginRouteResponse {
+  status?: number;
+  headers?: Record<string, string>;
+  /** 与 `body` 二选一；同时给出时 `body` 优先。 */
+  json?: unknown;
+  body?: string | Uint8Array;
+}
+
+export type PluginRouteHandler = (
+  req: PluginRouteRequest,
+) => PluginRouteResponse | void | Promise<PluginRouteResponse | void>;
+
+/** 插件注册的 HTTP 端点（挂在 `/api/p/<pluginId>/` 下）。 */
+export interface RouteRegistration {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  /** 以 `/` 开头；不支持通配符（分发器按精确路径匹配）。 */
+  path: string;
+  handler: PluginRouteHandler;
+}
+
+/** 工具卡片替换模式：整卡替换，或只替换指定区域。 */
+export type ToolCardMode = 'replace' | 'regions';
+
+/** 工具卡片可被替换的区域。 */
+export type ToolCardRegion = 'header' | 'body' | 'footer';
+
+/** 插件对工具卡片的接管声明。 */
+export interface ToolCardRegistration {
+  /** 工具名；`match: 'prefix'` 时可写 `mcp__xx__` 这类前缀。 */
+  tool: string;
+  match?: 'exact' | 'prefix';
+  mode: ToolCardMode;
+  /** `mode: 'replace'` 必填：整卡渲染入口（`web/<entry>.js`）。 */
+  entry?: string;
+  /** `mode: 'regions'` 必填：区域 → 入口文件。 */
+  regions?: Partial<Record<ToolCardRegion, string>>;
+}
+
+/** 被拒绝的注册项（绝不静默丢弃）。 */
+export interface RejectedRegistration {
+  kind: 'menu' | 'page' | 'route' | 'surface' | 'toolCard';
+  /** 被拒项的自报标识（可能重复，故意的）。 */
+  id: string;
+  reason: string;
+}
+
+/** 单个插件的运行期注册结果。 */
+export interface PluginExtensions {
+  menus: MenuRegistration[];
+  pages: PageRegistration[];
+  /** handler 不序列化，只暴露 method/path。 */
+  routes: Array<{ method: RouteRegistration['method']; path: string }>;
+  surfaces: SurfaceRegistration[];
+  toolCards: ToolCardRegistration[];
+  rejected: RejectedRegistration[];
+  /** `register()` / `init()` 抛错或超时时的说明。 */
+  registerError?: string;
+}
+
+/**
+ * 注册入口的宿主接口。
+ *
+ * - `register(host)` 用 `global.{menus,pages}` 与 `session.{surfaces,toolCards}`
+ * - `init(host)` 用 `global.routes`
+ * 两组命名空间是硬边界：`global` 下的东西与会话无关，`session` 下的只对会话有意义。
+ */
+export interface PluginRegistrationHost {
   readonly id: string;
-  /** 注册 UI 槽位。 */
-  surfaces: {
-    register(def: SurfaceRegistration): void;
+  /** 插件安装目录（绝对路径），便于插件自己读写文件。 */
+  readonly dir: string;
+  readonly global: {
+    menus: { register(def: MenuRegistration): void };
+    pages: { register(def: PageRegistration): void };
+    routes: { register(def: RouteRegistration): void };
   };
-  /** 写日志（自动带 pluginId）。 */
+  readonly session: {
+    surfaces: { register(def: SurfaceRegistration): void };
+    toolCards: { register(def: ToolCardRegistration): void };
+  };
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
 }
+
+/** server facet 入口签名（`server/index.js` 默认导出）。 */
+export type PluginServerInit = (host: PluginRegistrationHost) => void | Promise<void>;
+
+/** web facet 的注册入口（`web/index.js` 的 `register`，由 server 进程执行）。 */
+export type PluginWebRegister = (host: PluginRegistrationHost) => void | Promise<void>;
 
 /**
  * worker facet / extension facet 的上行桥（骨架）。
