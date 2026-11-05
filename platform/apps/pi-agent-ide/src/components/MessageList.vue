@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { MessageDTO } from '@pi-agent-platform/shared-types'
 import MessageItem from './MessageItem.vue'
 import TypingIndicator from './TypingIndicator.vue'
@@ -22,6 +22,20 @@ const emit = defineEmits<{
 
 const messagesEl = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
+
+/**
+ * 末尾 typing 指示器只在「还没有流式气泡」时显示。
+ *
+ * 指示器永远排在消息列表最后，而正在流式的 assistant 气泡排在它上面 —— 一直显示
+ * 的话，用户看到的输出永远长在「最后一个节点」（那个动画点）的上方，像是插到了
+ * 上一个节点里。当最后一条就是正在流式的 assistant 时，气泡本身已经表达了「正在
+ * 输出」，指示器没有信息量，藏掉即可。
+ */
+const showTyping = computed(() => {
+  if (!props.sending) return false
+  const last = props.messages[props.messages.length - 1]
+  return !(last && last.role === 'assistant' && (last as any).__isStreaming === true)
+})
 
 /** 滚轮一格滚多少像素。
  *  Windows 的 Chromium 报 deltaMode=1（按行），一格通常是 3 行；macOS 触控板报
@@ -227,7 +241,7 @@ watch(
         @dismiss-error="(id: string) => emit('dismissError', id)"
       />
       <!-- Typing indicator (per E2) -->
-      <TypingIndicator v-if="sending" class="typing-indicator" />
+      <TypingIndicator v-if="showTyping" class="typing-indicator" />
     </div>
     <button
       v-if="!autoScroll"

@@ -318,11 +318,14 @@ export function useSSE(options: UseSSEOptions) {
 
     // 共享连接（SharedWorker）下，服务端的 `connected` 只发给「建立流那一刻」的
     // 订阅者；后加入的标签页靠 EventSource 自身的 open 事件得知流是通的。
-    eventSource.addEventListener('open', () => {
+    eventSource.addEventListener('open', (e) => {
       connected.value = true
       clearConnectionError()
-      // 重连成功：把断流期间错过的消息补回来（首次连接由 loadHistory 负责）
-      if (streamOpenedBefore) void resyncNewest()
+      // 只有**真重连**才补齐（首次连接由 loadHistory 负责）。
+      // `attach` = 只是把 port 重新挂回还开着的流（切标签页 / 切 app 回来、
+      // 或同会话又开一个页面）：流没断、没漏帧，重放历史只会制造重复节点。
+      const attach = (e as MessageEvent & { attach?: boolean })?.attach === true
+      if (!attach && streamOpenedBefore) void resyncNewest()
       streamOpenedBefore = true
     })
 
@@ -455,24 +458,17 @@ export function useSSE(options: UseSSEOptions) {
    * while the stream was down stops rendering "[running]"), unseen rows append.
    */
   async function resyncNewest(): Promise<void> {
-    const data = await fetchMessagePage()
-    if (!data) return
-    const incoming = mergeToolResultsIntoCalls(data.messages)
-    const byId = new Map(incoming.map((m) => [m.id, m]))
-    const known = new Set(messages.value.map((m) => m.id))
-    const merged = messages.value.map((m) => byId.get(m.id) ?? m)
-    const tail = incoming.filter((m) => !known.has(m.id))
-    messages.value = tail.length > 0 ? [...merged, ...tail] : merged
-    for (const msg of tail) {
-      if (
-        msg.role === 'user' &&
-        msg.content?.includes('<file ') &&
-        !msg.images?.length &&
-        !fileAttachmentsByMsg.value.has(msg.id)
-      ) {
-        fetchUserMessageAttachments(msg)
-      }
-    }
+    // 历史页是「已完成消息」的权威视图，直接整页覆盖（复用 loadHistory）。
+    //
+    // 以前这里做「按 id 合并 + 追加没见过的」，但两边的 id 是**两套空间**：
+    // 实时流用 worker 自增的 `msg-N`，历史用 pi 写 jsonl 时的 entry id（8 位 hex，
+    // 在 message_end 才生成）——永远匹配不上，于是整页历史被当成新消息追加到末尾，
+    // 表现为「切标签页回来输出错位 + 重复节点」。
+    //
+    // 覆盖会**丢掉正在流式的那条**（pi 只在 message_end 落盘，历史里没有它），
+    // 但它不需要抢救：下一条 delta 带的是累计全文，会把它原样重建出来
+    // （session-stream-protocol：content 是累积全文，不是增量）。
+    await loadHistory()
   }
 
   /**

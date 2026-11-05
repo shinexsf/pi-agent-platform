@@ -101,8 +101,10 @@ function subscribe(port: MessagePort, sessionId: string): void {
   const entry = sessions.get(sessionId) ?? openSession(sessionId)
   entry.ports.set(port, Date.now())
   portSession.set(port, sessionId)
-  // EventSource 已连上时立刻告诉客户端，避免它等下一次 open
-  if (entry.es.readyState === EventSource.OPEN) post(port, { type: 'open' })
+  // EventSource 已连上时立刻告诉客户端，避免它等下一次 open。
+  // ⚠️ 带 `attach: true`：这一帧是「把 port 重新挂回已有流」（标签页从后台回来，
+  // 或同一会话又开了一个页面），**流并没有断**，客户端不能把它当重连去重放历史。
+  if (entry.es.readyState === EventSource.OPEN) post(port, { type: 'open', attach: true })
 }
 
 function unsubscribe(port: MessagePort): void {

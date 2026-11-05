@@ -65,7 +65,8 @@ interface WorkerEventFrame {
 
 type WorkerFrame =
   | WorkerEventFrame
-  | { type: 'open' }
+  /** `attach: true` = 只是把 port 重新挂回已有流（流没断），不是重连。 */
+  | { type: 'open'; attach?: boolean }
   | { type: 'error' }
   | { type: 'pong' }
 
@@ -130,7 +131,8 @@ class SharedTransport implements SseTransport {
   private dispatch(frame: WorkerFrame): void {
     if (frame.type === 'open') {
       this.ready = true
-      this.emit('open', {} as MessageEvent)
+      // attach 标记随事件透出：订阅方据此区分「重挂」与「真重连」
+      this.emit('open', { attach: frame.attach === true } as unknown as MessageEvent)
       return
     }
     if (frame.type === 'error') {
