@@ -17,6 +17,7 @@ import { childLogger } from '../logger.js';
 import { config } from '../config.js';
 import { extractExtensionNames, readSettings } from '../services/extension-utils.js';
 import { getPluginSnapshot, resolveSessionPlugins, toPluginEntryDTO } from '../services/plugins.js';
+import { listSessionExtensions } from '../services/plugin-extensions.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 
@@ -71,12 +72,62 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
           .filter((r) => r.enabled)
           .map((r) => {
             const loaded = byId.get(r.id);
-            return loaded ? toPluginEntryDTO(loaded) : { id: r.id, enabled: true, facets: {}, slots: [] };
+            return loaded ? toPluginEntryDTO(loaded) : { id: r.id, enabled: true, facets: {} };
           }),
       });
     } catch (err) {
       logger.warn({ sessionId, err: String(err) }, 'session plugin resolution failed');
       return c.json({ disabledByFlag: false, plugins: [] });
+    }
+  });
+
+  /**
+   * `GET /api/sessions/:id/extensions` —— 该会话生效的 rail 槽位与工具卡片。
+   *
+   * 与 `/:id/plugins` 的分工：那个只说"哪些插件对这个会话启用"，这个说"启用的插件贡献了什么界面"。
+   */
+  app.get('/:id/extensions', async (c) => {
+    const sessionId = c.req.param('id');
+    const snapshot = getPluginSnapshot(config.pluginsDir);
+    if (snapshot.disabledByFlag) {
+      return c.json({ surfaces: [], toolCards: [], disabled: {}, disabledByFlag: true });
+    }
+
+    const session = deps.sessionRepo.get(sessionId);
+    const agent = session?.agentId ? deps.agentRepo.get(session.agentId) : null;
+    if (!session) {
+      const all = new Set(snapshot.plugins.filter((p) => p.status === 'active').map((p) => p.entry.id));
+      const { surfaces, toolCards } = listSessionExtensions(all);
+      return c.json({
+        surfaces: surfaces.map(({ pluginId, def }) => ({ pluginId, ...def })),
+        toolCards: toolCards.map(({ pluginId, def }) => ({ pluginId, ...def })),
+        disabled: {},
+        disabledByFlag: false,
+        placeholder: true,
+      });
+    }
+
+    try {
+      const settings = await readSettings(config.agentDir);
+      const resolved = resolveSessionPlugins({
+        snapshot,
+        agentExtensions: agent?.config?.extensions ?? [],
+        installedPiExtensions: extractExtensionNames(settings),
+      });
+      const enabled = new Set(resolved.filter((r) => r.enabled).map((r) => r.id));
+      const disabled: Record<string, string> = {};
+      for (const r of resolved) if (!r.enabled) disabled[r.id] = r.reason ?? '未启用';
+      const { surfaces, toolCards } = listSessionExtensions(enabled);
+      return c.json({
+        surfaces: surfaces.map(({ pluginId, def }) => ({ pluginId, ...def })),
+        toolCards: toolCards.map(({ pluginId, def }) => ({ pluginId, ...def })),
+        disabled,
+        disabledByFlag: false,
+        placeholder: false,
+      });
+    } catch (err) {
+      logger.warn({ sessionId, err: String(err) }, 'session extension resolution failed');
+      return c.json({ surfaces: [], toolCards: [], disabled: {}, disabledByFlag: false });
     }
   });
 

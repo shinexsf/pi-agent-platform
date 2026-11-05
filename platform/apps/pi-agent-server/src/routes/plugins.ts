@@ -6,7 +6,7 @@
  */
 
 import { Hono } from 'hono';
-import type { GetPluginDetailResponse, ListPluginsResponse } from '@pi-agent-platform/api-types';
+import type { GetPluginDetailResponse, ListPluginsResponse, PluginExtensionsResponse } from '@pi-agent-platform/api-types';
 import {
   describePluginDetail,
   facetSupportMap,
@@ -14,6 +14,7 @@ import {
   loadPlugins,
   toPluginEntryDTO,
 } from '../services/plugins.js';
+import { getPluginExtensions } from '../services/plugin-extensions.js';
 export interface PluginsRouterDeps {
   pluginsDir: string;
   /** pi 的 agent 目录（判定依赖安装时读它的 `settings.json` 与 `npm/node_modules`）。 */
@@ -46,6 +47,21 @@ export function createPluginsRouter(deps: PluginsRouterDeps): Hono {
     const detail = describePluginDetail(deps.pluginsDir, id, deps.agentDir);
     if (!detail) return c.json({ error: 'plugin not found' }, 404);
     const body: GetPluginDetailResponse = { detail };
+    return c.json(body);
+  });
+
+  /**
+   * `/:id/extensions` —— 该插件的运行期注册项（含被拒项与注册错误）。
+   *
+   * 与静态详情分开的原因：`/` 回答"装了什么"，这个回答"跑起来之后声明了什么"。
+   * 未装载的插件返回空集合（不是 404）——"还没跑"与"没有这个插件"是两回事。
+   */
+  app.get('/:id/extensions', (c) => {
+    const id = c.req.param('id');
+    const snapshot = getPluginSnapshot(deps.pluginsDir);
+    const plugin = snapshot.plugins.find((p) => p.entry.id === id);
+    if (!plugin) return c.json({ error: 'plugin not found' }, 404);
+    const body: PluginExtensionsResponse = { pluginId: id, extensions: getPluginExtensions(id) };
     return c.json(body);
   });
 

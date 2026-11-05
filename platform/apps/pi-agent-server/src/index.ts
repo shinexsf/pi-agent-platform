@@ -22,6 +22,7 @@ import { createAttachmentsRouter } from './routes/attachments.js';
 import { createConfigRouter } from './routes/config.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createPluginsRouter } from './routes/plugins.js';
+import { createExtensionsRouter, createPluginDispatcherRouter } from './routes/plugin-runtime.js';
 import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
 import { startPluginRuntime } from './services/plugins.js';
@@ -92,11 +93,14 @@ async function main() {
   // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
   app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
   app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
+  // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
+  app.route('/api/extensions', createExtensionsRouter({ pluginsDir: config.pluginsDir }));
+  app.route('/api/p', createPluginDispatcherRouter({ pluginsDir: config.pluginsDir }));
 
   // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
   app.route('/plugins', createPluginAssetsRouter({ pluginsDir: config.pluginsDir }));
-  // 启动插件运行期：装载快照 + 监听 registry 变化（server/web 立即生效；watcher 非 persistent）
-  startPluginRuntime(config.pluginsDir);
+  // 启动插件运行期：静态快照 + 执行 register()/init() + 监听 registry 变化
+  void startPluginRuntime(config.pluginsDir);
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
 

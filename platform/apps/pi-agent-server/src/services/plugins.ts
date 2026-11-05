@@ -28,7 +28,6 @@ import type {
   PluginRegistryEntry,
   PluginStatus,
   ResolvedPlugin,
-  SurfaceDeclaration,
 } from '@pi-agent-platform/plugin-types';
 import type {
   PluginDependencyDTO,
@@ -36,6 +35,7 @@ import type {
   PluginEntryDTO,
 } from '@pi-agent-platform/api-types';
 import { childLogger } from '../logger.js';
+import { loadPluginExtensions } from './plugin-extensions.js';
 
 const logger = childLogger('plugins');
 
@@ -54,8 +54,6 @@ export interface LoadedPlugin {
   /** 平台实际会装载的 facet。 */
   loadedFacets: PluginFacetName[];
   manifest: PluginManifest | null;
-  /** 已校验的槽位（slot 合法、mountKey 文件存在、id 全局唯一）。 */
-  slots: SurfaceDeclaration[];
 }
 
 export interface PluginSnapshot {
@@ -96,26 +94,9 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
   }
 
   const plugins: LoadedPlugin[] = [];
-  const usedSlotIds = new Set<string>();
 
   for (const entry of file.plugins) {
     const state = describePluginState(entry);
-    const slots: SurfaceDeclaration[] = [];
-    if (state.facets.web && state.manifest) {
-      for (const surface of state.manifest.surfaces) {
-        if (usedSlotIds.has(surface.id)) {
-          logger.warn({ pluginId: entry.id, surfaceId: surface.id }, 'duplicate surface id — ignored');
-          continue;
-        }
-        const script = path.join(entry.dir, 'web', `${surface.mountKey}.js`);
-        if (!existsSync(script)) {
-          logger.warn({ pluginId: entry.id, surfaceId: surface.id, script }, 'surface mountKey has no script — ignored');
-          continue;
-        }
-        usedSlotIds.add(surface.id);
-        slots.push(surface);
-      }
-    }
     plugins.push({
       entry,
       status: state.status,
@@ -126,7 +107,6 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
       entries: state.entries,
       loadedFacets: state.loadedFacets,
       manifest: state.manifest,
-      slots,
     });
   }
 
@@ -148,7 +128,6 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
       entries,
       loadedFacets: [],
       manifest,
-      slots: [],
     });
   }
 
@@ -177,8 +156,6 @@ export function toPluginEntryDTO(plugin: LoadedPlugin): PluginEntryDTO {
     entries: Object.fromEntries(
       PLUGIN_FACET_NAMES.map((facet) => [facet, detectFacetEntry(plugin.entry.dir, facet)]),
     ) as Record<PluginFacetName, FacetEntryPoint>,
-    slots: plugin.slots,
-    surfaces: manifest?.surfaces ?? [],
     requires: manifest?.requiresPlugins ?? {},
     dir: plugin.entry.dir,
     installedAt: plugin.entry.installedAt,
@@ -373,17 +350,23 @@ export function invalidatePluginSnapshot(): void {
 
 /**
  * 启动插件运行期：装载一次 + 监听注册表变化。
- * 返回停止函数。
+ *
+ * 装载分两步：先算静态快照，再执行插件代码（`register()` / `init()`）。
+ * 后者可能抛错/超时，所以整体是异步的。
  */
-export function startPluginRuntime(pluginsDir: string): () => void {
+export async function startPluginRuntime(pluginsDir: string): Promise<() => void> {
   invalidatePluginSnapshot();
-  getPluginSnapshot(pluginsDir);
+  const snapshot = getPluginSnapshot(pluginsDir);
+  await loadPluginExtensions(snapshot);
   const stopWatch = watchRegistry(pluginsDir, () => {
     invalidatePluginSnapshot();
-    const snapshot = getPluginSnapshot(pluginsDir);
+    const next = getPluginSnapshot(pluginsDir);
+    void loadPluginExtensions(next).catch((err) =>
+      logger.error({ err: String(err) }, 'plugin extensions reload failed'),
+    );
     logger.info(
-      { count: snapshot.plugins.length, active: snapshot.plugins.filter((p) => p.status === 'active').length },
-      'plugin registry changed — snapshot reloaded (server/web facets take effect now; worker/extension facets on next spawn)',
+      { count: next.plugins.length, active: next.plugins.filter((p) => p.status === 'active').length },
+      'plugin registry changed — snapshot reloaded (web/server facets reload now; worker/extension facets on next spawn)',
     );
   });
   return stopWatch;
