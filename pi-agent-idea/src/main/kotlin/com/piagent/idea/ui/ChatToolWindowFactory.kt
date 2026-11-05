@@ -787,7 +787,7 @@ class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
         val anchor = state.agentPanel
         val owner = SwingUtilities.getWindowAncestor(anchor) as? Frame ?: return
         val projectPath = ProjectPaths.of(state.project).toServerPath(state.project.basePath ?: "")
-        val client = com.piagent.idea.server.ServerApiClient(originOf(project))
+        val client = com.piagent.idea.server.ServerApiClient(originOf(state.project))
         AddAgentDialog(owner, client, projectPath, ProjectPaths.of(state.project), existing) { saved ->
             state.agentPanel.reload()
             PluginLogger.info(

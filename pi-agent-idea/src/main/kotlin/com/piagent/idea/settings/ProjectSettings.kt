@@ -15,7 +15,7 @@ import com.intellij.openapi.project.Project
  * 新项目又不用每次重填。
  *
  * ⚠️ 存储：写到**项目 workspace.xml**（`StoragePathMacros.WORKSPACE_FILE`），
- * 不写 `.idea/*.xml` —— server 地址是本机个人偏好，不该进 VCS。
+ * 不写 `.idea` 目录下的 xml —— server 地址是本机个人偏好，不该进 VCS。
  * （之前这个配置挂在 `applicationService` 上、却注册成 `projectConfigurable`，
  * 界面上标着"对本项目生效"，实际改一次所有项目一起变。）
  */
