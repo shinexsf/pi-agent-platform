@@ -2,6 +2,8 @@
 
 > 一句话：**插件是「一个带 `package.json` 的目录 + 四种可选 facet」**，平台只负责装载、隔离、下发与转发；插件想加工具就写 pi extension，想加 UI 就写 web facet，平台不发明第二套工具 API。
 >
+> **给插件作者看的手册**：[插件使用手册](pi-agent-server_plugins-manual.md)（三十秒上手 / facet 签名 / 调试 / 坑）。本文只讲平台侧机制。
+>
 > 代码落点：`packages/plugin-types/`（契约）· `apps/pi-agent-server/src/services/plugins.ts`（registry）· `apps/pi-agent-server/src/routes/plugins.ts` / `plugin-assets.ts`（REST + 静态托管）· `workers/session-worker/src/plugins.ts`（worker/extension facet）· `apps/pi-agent-web/src/components/plugin/`（槽位宿主）· `packages/cli/src/plugin.ts`（安装命令）。
 
 ## 1. 设计边界（为什么长这样）
@@ -80,17 +82,26 @@ export default async ({ bridge }) => ({
         │ loadPlugins()
         ▼
   PluginSnapshot（内存缓存 + fs.watch 失效）
-        │ resolveSessionPlugins({ snapshot, agentPlugins })
+        │ resolveSessionPlugins({ snapshot, agentExtensions, installedPiExtensions })
         ▼
   ResolvedPlugin[]  { id, dir, enabled, reason, extensionPath?, workerPath? }
-        │ 随 spawn 参数下发
+        │ 随 spawn 参数下发 + GET /api/sessions/:id/plugins 下发给浏览器
         ▼
   worker：enabled 才 import；关闭只记 reason，不执行任何 import
 ```
 
-`reason` 是诊断代码（`kill-switch` / `not-installed` / `api-version` / `requires-missing` / `requires-not-enabled` / `facet-disabled`），`GET /debug/sessions/:id` 的 `plugins[]` 每条 `issues[].reason` 原样带出——**闸门解释不能丢**。
+**两层语义（别混）**：
 
-`agent.plugins` 的形状与 `extensions` 同构：`{ id, enabled, facets?: { web?: false } }`。
+| 层 | 事实源 | 效果 |
+|---|---|---|
+| 全局开关 | `registry.json` 的 `enabled` / `facets.*` | 关掉 → 任何会话都不加载 |
+| 会话闸门 | 该会话 agent 的 `extensions` 白名单 × 插件声明的 `requires.plugins` | 依赖未启用 → **仅该会话**不加载（`reason: 依赖未启用: xxx`） |
+
+插件**本身**不需要出现在 agent 的 `extensions` 里：那层白名单只用于它依赖的 pi 插件。
+
+`reason` 是诊断代码（`kill-switch` / `not-installed` / `api-version` / `requires-missing` / `requires-not-enabled` / `facet-disabled` / `依赖未启用: <ids>`），`GET /debug/sessions/:id` 的 `plugins[]` 每条 `issues[].reason` 原样带出——**闸门解释不能丢**。
+
+**浏览器侧同样按会话取**：web 端不给全局插件列表渲染槽位，而是 `GET /api/sessions/:id/plugins`（只返回该会话 `enabled` 的）。否则会话 A 启用了依赖、会话 B 没启用，B 的页面也会冒出 A 的图标——必须服务端不下发，前端隐藏不算数。占位会话（库里还没有行）返回全局可用集合。
 
 ## 5. 通路：双向窄桥（不 flush 会话）
 
@@ -119,19 +130,19 @@ export default async ({ bridge }) => ({
 ## 7. CLI 与 REST
 
 ```bash
-pi-server plugin install ./pkg --enable      # 校验 apiVersion / peerDependencies → 复制 → 写 registry
-pi-server plugin install @scope/name         # 走 npm pack（本地 npm install 受 Node 类型剥离限制时会失败）
+pi-server plugin add <dir> [--enable]   # 校验 apiVersion / peerDependencies → 复制目录 → 写 registry
 pi-server plugin list [--json]
-pi-server plugin enable|disable <id> [--facet=server,web]
-pi-server plugin remove <id>
+pi-server plugin enable|disable <id>
+pi-server plugin remove <id> [--purge]  # 默认只反注册，--purge 才删目录
 ```
 
 | 端点 | 用途 |
 |---|---|
-| `GET /api/plugins` | registry 快照（status/version/detail/declared/registered） |
-| `POST /api/plugins/reload` | 手工失效内存快照（registry 文件也会被 `fs.watch` 自动失效） |
-| `GET /plugins/<id>/web/<file>` | web facet 静态资产 |
+| `GET /api/plugins` | registry 快照（status/version/detail/declared/registered）——**配置页用，不带会话维度** |
+| `GET /api/plugins/reload` | 手工失效内存快照（registry 文件也会被 `fs.watch` 自动失效） |
+| `GET /api/sessions/:id/plugins` | **会话级解析结果**（只含 `enabled` 的）——web 槽位唯一入口 |
 | `POST /api/sessions/:id/plugins/emit` | 浏览器 → 插件（`{ pluginId, name, data }`） |
+| `GET /plugins/<id>/web/<file>` | web facet 静态资产（同源托管，`id` 从 registry 的 `dir` 解析） |
 
 ## 8. 不变量（改动时别踩）
 
@@ -140,13 +151,15 @@ pi-server plugin remove <id>
 3. **不默认安装**：内置 IM 渠道是平台自带（先加载、插件机制遇 manifest 用 id **接管**）；第三方插件一律显式 `install`
 4. **插件不拥有数据库表**：要持久化就自己按 `id` 前缀建；平台不提供插件 schema DSL
 5. **不做全局 CSS / 全局事件总线**：样式与状态都收在 `el` 与 `host` 里
-6. **kill switch 常驻**：`PI_PLUGINS=off` 时 registry 仍可读、全部插件 `status: 'disabled'`，默认清单照常工作
+6. **槽位只按会话下发**：绕过 `GET /api/sessions/:id/plugins` 直接渲染全局插件列表，会让闸门形同虚设
+7. **kill switch 常驻**：`PI_PLUGINS=off` 时 registry 仍可读、全部插件 `status: 'disabled'`，默认清单照常工作
 
 ## 9. apiVersion 变更史
 
 | 版本 | 日期 | 变化 |
 |---|---|---|
-| `1` | 2026-10-29 | 初版：四类 facet、三个内置槽位、双向桥、CLI |
+| `1` | 2026-10-29 | 初版：四类 facet、两个内置槽位、双向桥、CLI |
+| `1` | 2026-11-05 | **web 槽位改为会话级下发**（依赖未启用的会话不下发）；新增真实例子 `@platform/session-projection`（读压缩块） |
 
 ## 10. 明确未做（v1 范围声明）
 

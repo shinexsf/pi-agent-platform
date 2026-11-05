@@ -104,6 +104,24 @@ interface SessionContextDTO {
 - ❌ `GET /api/sessions/:id/commands`
 - ⚠️ `GET /api/models`（**曾删除，2026-08-26 重新加入**——给 IDE Add-Agent 对话框下拉用；不再依赖 worker；webui 仍走 `/context`）
 
+## 插件（plugin-mechanism）
+
+插件机制的完整语义见 [插件架构](pi-agent-server_plugins.md) 与 [使用手册](pi-agent-server_plugins-manual.md)。这里只列端点。
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/plugins` | GET | registry 快照（`status` / `version` / `detail` / `declared` / `registered`）；**全局视图，配置页用，不带会话维度** |
+| `/api/plugins/reload` | GET | 手工失效内存快照（registry 变更也会被 `fs.watch` 自动失效） |
+| `/api/sessions/:id/plugins` | GET | **会话级解析结果**：只返回该会话 `enabled` 的插件（依赖未启用 → 不出现） |
+| `/api/sessions/:id/plugins/emit` | POST | 浏览器 → 插件：`{ pluginId, name, data }` |
+| `/plugins/<id>/web/<file>` | GET | 插件 web facet 静态资产（同源托管；`id` 从 registry 的 `dir` 解析，带路径穿越与扩展名白名单校验） |
+
+```jsonc
+// GET /api/sessions/:id/plugins
+{ "disabledByFlag": false, "placeholder": false,
+  "plugins": [{ "id": "@platform/session-projection", "enabled": true, "facets": { "extension": true, "web": true }, "slots": [...] }] }
+```
+
 ## 流式响应
 
 | 路径 | 方法 | 用途 |

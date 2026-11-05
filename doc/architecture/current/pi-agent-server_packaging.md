@@ -28,8 +28,8 @@ package/
     │   └── channels/         # IM 渠道包（manifest + channel-{wechat,qq}/dist/，不含 admin/__tests__/*.d.ts/*.map）
     ├── worker/               # 编译后 worker
     │   └── index.js
-    └── node_modules/@pi-agent-platform/   # 5 个 workspace 运行时包（见下）
-        └── {shared-types,channel-types,api-types,ipc-protocol,sdk-integration}/
+    └── node_modules/@pi-agent-platform/   # 6 个 workspace 运行时包（见下）
+        └── {shared-types,channel-types,api-types,ipc-protocol,sdk-integration,plugin-types}/
 ```
 
 **不含**：
@@ -42,7 +42,7 @@ package/
 
 ## workspace 运行时包
 
-`@pi-agent-platform/*` 这 5 个包在 dev 态由 tsx 直跑 TS 源码解析，`tsc`（`moduleResolution: bundler`）会把裸包名 specifier
+`@pi-agent-platform/*` 这 6 个包在 dev 态由 tsx 直跑 TS 源码解析，`tsc`（`moduleResolution: bundler`）会把裸包名 specifier
 原样留在产物 JS 里。因此它们**必须随 tarball 发布**，按 npm 目录结构放在
 `dist/node_modules/@pi-agent-platform/<pkg>/`，且 manifest 需改写：
 
@@ -52,10 +52,16 @@ package/
 ```
 
 由 `build-cli.mjs` 的 `copyWorkspaceRuntimePackages()`（step 5c）生成。
+
+**清单是单一来源**：`scripts/pack-manifest.mjs` 导出的 `RUNTIME_PACKAGES` 同时被
+`build-cli.mjs`（决定复制哪些）与 `check-packaged.mjs`（校验是否都进去了）import。
+早先两处各硬编码一份、靠注释"保持一致"人肉同步，结果插件机制引入 `plugin-types` 时漏了一处
+（产物缺包 → 装完启动 `ERR_MODULE_NOT_FOUND`）。
 **不用 esbuild 内联**：`dist/{server,worker,channels}` 大量用 `import.meta.url` 推导 channels 目录、public 目录、
 worker 入口候选路径，内联会移动这些锚点；发真模块可让打包态与 dev 态解析语义一致。
 
-新增跨包 runtime import 时必须确认对应包在 `RUNTIME_PACKAGES` 列表里（缺失会被静态自检拦下）。
+新增跨包 runtime import 时必须把对应包加进 `scripts/pack-manifest.mjs` 的 `RUNTIME_PACKAGES`
+（缺失会被静态自检 `D.workspace` 拦下——前提是构建脚本本身没先崩）。
 
 ## 构建流水线
 
@@ -82,7 +88,9 @@ pnpm pack:cli
 9b. **产物静态自检**（[`scripts/check-packaged.mjs`](../../../platform/scripts/check-packaged.mjs)），不过则 exit 1、不产 tgz
 10. `pnpm pack` 在 `packages/cli/` 下产 `pi-server-X.Y.Z.tgz`
 
-构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（plain Node.js + ESM）
+构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（plain Node.js + ESM）。
+**跨平台**：命令执行走 `spawn(cmd, args, { cwd })`，不拼 `cd /d`（cmd.exe 专用语法）——
+Windows / WSL / Linux 都能直接跑 `pnpm pack:cli`。
 
 ## 产物静态自检
 
@@ -92,7 +100,7 @@ pnpm pack:cli
 
 | 规则 | 查什么 |
 |---|---|
-| `A.artifact` | `bin/pi-server.js`、`dist/bin.js`、`server/index.js`、`worker/index.js`、`channels/manifest.json`、`public/{web,ide}/index.html` + `assets` 至少一个 `.js`、5 个 workspace 包齐全 |
+| `A.artifact` | `bin/pi-server.js`、`dist/bin.js`、`server/index.js`、`worker/index.js`、`channels/manifest.json`、`public/{web,ide}/index.html` + `assets` 至少一个 `.js`、6 个 workspace 包齐全 |
 | `B.channel` | `manifest.json` 每个渠道 → `server/channels/<name>/dist/index.js` 存在 |
 | `C.manifest` | cli `bin`/`main`、workspace 包 `main`/`exports` 目标文件存在 |
 | `D.relative` | 产物内相对导入指向存在的文件 |
@@ -104,6 +112,29 @@ pnpm pack:cli
 native binding 加载、运行期 `import.meta.url` 锚点是否指向正确目录、功能正确性。
 
 **约束**：改动跨包 runtime import 或打包脚本 → 必须跑一次 `pnpm pack:cli`（见根 `AGENTS.md`）。
+
+## 打包态验证（干净环境装一遍）
+
+静态自检能拦"产物缺件"，拦不住"装进干净机器能不能跑"——那是部署环境的事，但发版前
+至少要自己做一轮最小验证：**把 tgz 装进一个干净容器、起服务、从外部打 API**。
+
+做法（WSL 开发机上的常驻容器，脚本见本地 skill `packaged-test`，不进仓库）：
+
+| 项 | 值 |
+|---|---|
+| 镜像 | `pi-packtest:ubuntu2604-node24`（与宿主同版本：Ubuntu 26.04 + Node 24） |
+| 容器 | `pi-packtest` 常驻，数据卷 `pi-packtest-data` → `/root/.pi`（凭据 / DB / **全局 npm 包**） |
+| 端口 | `127.0.0.1:9911` → 容器内 `9102`（容器内 `config.env` 的 `PORT` 必须对齐） |
+| 进包方式 | 只挂 `tmp/packtest-dist`（:ro），不挂整棵仓库 |
+
+日常三步：`pack`（`pnpm pack:cli` + 拷 tgz）→ `install`（容器内 `npm i -g --prefix /root/.pi/npm-global`
++ 重启 `pi-server`）→ `verify`（health / models / agents / 版本）。
+
+四个非显然的坑：`wslc run` 没有 `--sleep`（常驻靠镜像 `CMD ["sleep","infinity"]`）；
+全局包必须装在数据卷前缀里，否则重建容器就丢；容器内端口要与发布映射一致；
+`npm i -g` 默认跳过 postinstall，需 `--allow-scripts=better-sqlite3,@google/genai,protobufjs`。
+
+**不覆盖**：容器内扩展装载链路（`pi-web-access` 等 package 解析）、mock provider 行为——这两块目前仍只在 dev 态验过。
 
 ## 部署与启动
 
@@ -215,6 +246,8 @@ IM channels（wechat + qq）在 dev 态直接 `import('channels/<name>/src/index
 - GitHub Releases 不通（防火墙/网络）→ 等或换镜像
 - 没编译工具链 → 装 VS Build Tools（Windows）或 `build-essential`（Linux）
 - 都走不通 → 手动下载 prebuilt binary 解压到 `<global>/node_modules/better-sqlite3/`
+- 用 npm ≥ 11 安装/发布时 postinstall 可能被默认策略跳过 → 显式 `--allow-scripts=better-sqlite3,@google/genai,protobufjs`
+  （后者是 `@google/genai` 的必需后置脚本，缺它会在运行时才炸）
 
 详细 workaround 见 [`packages/cli/README.md`](../../../platform/packages/cli/README.md) 的 Troubleshooting 段。
 
