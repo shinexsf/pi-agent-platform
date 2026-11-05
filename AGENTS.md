@@ -48,6 +48,21 @@
 
 细节（自检 agent 的 skill/fixture 布局、断言流程）见 [`.pi/skills/llm-integration-testing/SKILL.md`](.pi/skills/llm-integration-testing/SKILL.md)。
 
+### 打包态验证走 `packaged-test` skill（只在容器里测）
+
+改到**跨包 runtime import（`@pi-agent-platform/*`）、渠道 manifest、打包脚本、`postinstall`**，或用户提到"验证打包 / 测正式包 / pack 一下"时：
+
+```bash
+SK=.pi/skills/packaged-test    # 项目内唯一一份（全局副本已删）
+$SK/scripts/packtest.sh pack      # pnpm pack:cli（内含 check-packaged 自检）
+$SK/scripts/packtest.sh install   # 容器内 npm i -g tgz → 重启
+$SK/scripts/packtest.sh verify    # 从 WSL curl 127.0.0.1:9911 冒烟
+```
+
+理由：dev 态（tsx 直跑 + pnpm symlink + bundler resolution）会**静默掩盖**缺包、`dist` 缺文件、`postinstall` 没跑、`PATH` 不对——这类 bug 只在干净机器 + 安装产物里暴露。真实案例：`RUNTIME_PACKAGES` 漏 `plugin-types`，dev 全绿、用户装完即 `ERR_MODULE_NOT_FOUND`。
+
+环境常量、坑表（`--sleep` 不存在、容器内必须 `PORT=9102`、pid 残留、`allow-scripts`）、镜像重建流程见 skill 的 `SKILL.md`；脚本路径自动推导，从任何 cwd 调用都对。
+
 ### 修 bug 流程
 
 修 bug 后**默认**走以下流程：
