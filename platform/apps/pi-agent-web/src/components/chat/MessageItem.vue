@@ -4,6 +4,8 @@ import type { MessageDTO } from '@pi-agent-platform/shared-types'
 import MarkdownView from './MarkdownView.vue'
 import ImageGrid from './ImageGrid.vue'
 import { resolveToolBlock } from './tool-blocks'
+import PluginToolCard from './tool-blocks/PluginToolCard.vue'
+import { ruleFor } from './tool-blocks/pluginToolCards'
 
 const props = defineProps<{ message: MessageDTO; agentId?: string; fileAttachments?: Array<{ attId: string; name: string; type: string }> }>()
 const emit = defineEmits<{
@@ -84,7 +86,15 @@ const thinkingPinned = ref(false)
  * registry derived so the template does not call it repeatedly.
  */
 const toolBlocks = computed(() =>
-  (props.message.toolCalls ?? []).map((tc) => ({ tc, block: resolveToolBlock(tc.name) })),
+  (props.message.toolCalls ?? []).map((tc) => {
+    const rule = ruleFor(tc.name)
+    return {
+      tc,
+      block: resolveToolBlock(tc.name),
+      // `replace` 模式整卡交给插件；`regions` 模式由 ToolCard 内部挂载
+      replaceRule: rule && rule.mode === 'replace' ? rule : undefined,
+    }
+  }),
 )
 
 const showThinkingExpanded = computed(() => thinkingExpanded.value || isStreaming.value)
@@ -263,15 +273,22 @@ async function downloadFile(attId: string, fileName: string) {
 
     <!-- Tool calls：每张卡片由 tool-blocks 注册表解析（未知工具一律回落到默认卡片） -->
     <div v-if="toolBlocks.length > 0" class="message-toolcalls">
-      <component
-        :is="entry.block.component"
-        v-for="entry in toolBlocks"
-        :key="entry.tc.id"
-        :call="entry.tc"
-        :streaming="isStreaming"
-        :label="entry.block.label"
-        @open-file="openFile"
-      />
+      <template v-for="entry in toolBlocks" :key="entry.tc.id">
+        <PluginToolCard
+          v-if="entry.replaceRule"
+          :rule="entry.replaceRule"
+          :call="entry.tc"
+          :streaming="isStreaming"
+        />
+        <component
+          :is="entry.block.component"
+          v-else
+          :call="entry.tc"
+          :streaming="isStreaming"
+          :label="entry.block.label"
+          @open-file="openFile"
+        />
+      </template>
     </div>
   </div>
 </template>

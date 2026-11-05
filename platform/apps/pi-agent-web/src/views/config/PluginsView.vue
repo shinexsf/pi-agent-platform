@@ -21,8 +21,9 @@ import type {
   PluginDependencyDTO,
   PluginDetailDTO,
   PluginEntryDTO,
+  PluginExtensionsResponse,
 } from '@pi-agent-platform/api-types';
-import type { PluginFacetName } from '@pi-agent-platform/plugin-types';
+import type { PluginExtensions, PluginFacetName } from '@pi-agent-platform/plugin-types';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import InfoTip from '../../components/ui/InfoTip.vue';
 import { toast } from '../../composables/useFeedback';
@@ -148,21 +149,58 @@ async function rescan(): Promise<void> {
   }
 }
 
+/**
+ * 运行期注册项（与静态详情分开拉）：静态接口只说"装了什么"，
+ * 这个接口说"跑起来之后声明了什么"——含被拒项与注册错误。
+ */
+const extensions = ref<PluginExtensions | null>(null);
+
 async function openDetail(id: string): Promise<void> {
   detailLoading.value = true;
   detailError.value = '';
   detail.value = null;
+  extensions.value = null;
   try {
-    const res = await fetch(`/api/plugins/${encodeURIComponent(id)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as GetPluginDetailResponse;
+    const [detailRes, extRes] = await Promise.all([
+      fetch(`/api/plugins/${encodeURIComponent(id)}`),
+      fetch(`/api/plugins/${encodeURIComponent(id)}/extensions`),
+    ]);
+    if (!detailRes.ok) throw new Error(`HTTP ${detailRes.status}`);
+    const body = (await detailRes.json()) as GetPluginDetailResponse;
     detail.value = body.detail;
+    if (extRes.ok) {
+      const ext = (await extRes.json()) as PluginExtensionsResponse;
+      extensions.value = ext.extensions;
+    }
   } catch (err) {
     detailError.value = String(err);
   } finally {
     detailLoading.value = false;
   }
 }
+
+/** 已注册的界面贡献（菜单 / 页面 / 槽位 / 工具卡片）。 */
+const contributedUi = computed(() => {
+  const ext = extensions.value;
+  if (!ext) return [];
+  const rows: Array<{ kind: string; id: string; detail: string }> = [];
+  for (const menu of ext.menus) {
+    rows.push({ kind: '菜单', id: menu.id, detail: `${menu.label}${menu.parent ? ` → ${menu.parent}` : ''} → page:${menu.page}` });
+  }
+  for (const page of ext.pages) rows.push({ kind: '页面', id: page.id, detail: page.entry });
+  for (const surface of ext.surfaces) rows.push({ kind: '槽位', id: surface.id, detail: `${surface.slot} · ${surface.title} · web/${surface.entry}.js` });
+  for (const tool of ext.toolCards) {
+    const desc = tool.mode === 'replace'
+      ? `整卡替换 → web/${tool.entry}.js`
+      : `区域替换 ${Object.keys(tool.regions ?? {}).join('/')}`;
+    rows.push({ kind: '工具卡片', id: tool.tool, detail: `${tool.match ?? 'exact'} · ${desc}` });
+  }
+  const pluginId = detail.value?.plugin.id ?? '';
+  for (const route of ext.routes) {
+    rows.push({ kind: 'HTTP', id: `${route.method} /api/p/${pluginId}${route.path}`, detail: '' });
+  }
+  return rows;
+});
 
 function closeDetail(): void {
   detail.value = null;
@@ -360,28 +398,37 @@ onMounted(load);
           </section>
 
           <section class="detail-section">
-            <h3>提供的界面（web 槽位）</h3>
-            <p v-if="detail.plugin.surfaces.length === 0" class="muted">未贡献界面</p>
-            <table v-else class="facet-table">
+            <h3>运行期注册项</h3>
+            <p v-if="extensions?.registerError" class="banner banner-error">
+              注册失败：{{ extensions.registerError }}
+            </p>
+            <p v-if="contributedUi.length === 0 && !extensions?.registerError" class="muted">
+              未注册任何界面贡献（未装载，或 register() 没有注册内容）
+            </p>
+            <table v-else-if="contributedUi.length > 0" class="facet-table">
               <thead>
                 <tr>
+                  <th>类型</th>
                   <th>id</th>
-                  <th>槽位</th>
-                  <th>标题</th>
-                  <th>图标</th>
-                  <th>order</th>
+                  <th>说明</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="surface in detail.plugin.surfaces" :key="surface.id">
-                  <td class="mono">{{ surface.id }}</td>
-                  <td class="mono">{{ surface.slot }}</td>
-                  <td>{{ surface.title }}</td>
-                  <td>{{ surface.icon ?? '-' }}</td>
-                  <td>{{ surface.order ?? '-' }}</td>
+                <tr v-for="row in contributedUi" :key="`${row.kind}-${row.id}`">
+                  <td>{{ row.kind }}</td>
+                  <td class="mono">{{ row.id }}</td>
+                  <td class="mono">{{ row.detail }}</td>
                 </tr>
               </tbody>
             </table>
+            <div v-if="extensions && extensions.rejected.length > 0" class="rejected">
+              <h4>被拒绝的注册（{{ extensions.rejected.length }}）</h4>
+              <ul>
+                <li v-for="(item, index) in extensions.rejected" :key="index">
+                  <span class="mono">{{ item.kind }}/{{ item.id }}</span> — {{ item.reason }}
+                </li>
+              </ul>
+            </div>
           </section>
 
           <section class="detail-section">

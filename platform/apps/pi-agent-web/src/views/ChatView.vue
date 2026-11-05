@@ -10,6 +10,7 @@ import SteerSubBar from '../components/chat/SteerSubBar.vue'
 import SessionInfoModal from '../components/chat/SessionInfoModal.vue'
 import SlotHost from '../components/plugin/SlotHost.vue'
 import { listRailSurfaces } from '../plugins/host'
+import { refreshToolCardRules } from '../components/chat/tool-blocks/pluginToolCards'
 const route = useRoute()
 const router = useRouter()
 
@@ -123,7 +124,10 @@ const railPlugins = ref<Array<{ pluginId: string; title: string; icon?: string; 
 
 async function loadRailPlugins() {
   try {
-    const items = await listRailSurfaces(route.params.id as string | undefined)
+    const sid = route.params.id as string | undefined
+    // 工具卡片规则与会话绑定：切会话时重新拉，避免把上一个会话的插件规则带过来
+    void refreshToolCardRules(sid)
+    const items = await listRailSurfaces(sid)
     railPlugins.value = items.map(({ pluginId, surface }) => ({
       pluginId,
       title: surface.title,

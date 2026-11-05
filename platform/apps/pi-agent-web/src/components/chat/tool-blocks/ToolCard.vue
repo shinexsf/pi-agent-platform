@@ -19,6 +19,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import ImageGrid from '../ImageGrid.vue'
+import PluginToolRegion from './PluginToolRegion.vue'
+import { ruleFor } from './pluginToolCards'
 import type { ToolCall } from './types'
 import { toolIcon, toolStatus } from './format'
 
@@ -28,6 +30,12 @@ const props = defineProps<{
   /** Display name — the raw tool name unless a card overrides it. */
   label?: string
 }>()
+
+/** 插件对本工具的区域接管（`mode: 'regions'` 时才有） */
+const regionRule = computed(() => {
+  const rule = ruleFor(props.call.name)
+  return rule && rule.mode === 'regions' ? rule : undefined
+})
 
 const status = computed(() => toolStatus(props.call))
 const icon = computed(() => toolIcon(props.call.name))
@@ -99,13 +107,29 @@ const pillState = computed(() => {
     >
       <span class="tc-icon" v-html="icon" />
       <span class="tc-name">{{ label ?? call.name }}</span>
-      <span class="tc-summary"><slot name="summary" /></span>
+      <span class="tc-summary">
+        <slot name="summary" />
+        <PluginToolRegion
+          v-if="regionRule?.regions?.header"
+          region="header"
+          :rule="regionRule"
+          :call="call"
+          :streaming="streaming"
+        />
+      </span>
       <span v-if="durationLabel" class="tc-dur">{{ durationLabel }}</span>
       <span class="tc-pill" :class="pillState">{{ status.label }}</span>
     </div>
 
     <div v-if="expanded" class="tc-body">
       <slot name="body" />
+      <PluginToolRegion
+        v-if="regionRule?.regions?.body"
+        region="body"
+        :rule="regionRule"
+        :call="call"
+        :streaming="streaming"
+      />
     </div>
     <div v-else class="tc-preview">
       <slot name="preview" />
@@ -113,8 +137,15 @@ const pillState = computed(() => {
 
     <ImageGrid v-if="call.images?.length" :images="call.images" variant="tool" />
 
-    <div v-if="$slots.foot" class="tc-foot">
+    <div v-if="$slots.foot || regionRule?.regions?.footer" class="tc-foot">
       <slot name="foot" />
+      <PluginToolRegion
+        v-if="regionRule?.regions?.footer"
+        region="footer"
+        :rule="regionRule"
+        :call="call"
+        :streaming="streaming"
+      />
     </div>
   </div>
 </template>

@@ -38,6 +38,7 @@ import ProviderEditorView from './views/config/ProviderEditorView.vue';
 import ResourceEditorView from './views/config/ResourceEditorView.vue';
 import AgentEditorView from './views/agents/AgentEditorView.vue';
 import TemplatesView from './views/templates/TemplatesView.vue';
+import { refreshPluginMenus } from './plugins/menus';
 
 // Step 1: base routes（一级导航由 `components/layout/nav-tree.ts` 从 meta 读取）
 const baseRoutes = [
@@ -164,6 +165,14 @@ const baseRoutes = [
   },
 
   {
+    path: '/plugin-page/:pluginId/:pageId',
+    name: 'plugin-page',
+    component: () => import('./views/PluginPageView.vue'),
+    // 插件菜单不进路由表（运行期新增不触发重算），所以入口是一条静态路由。
+    meta: { fullWidth: true },
+  },
+
+  {
     path: '/chat/:id',
     component: () => import('./views/ChatView.vue'),
     // chat 页在 App.vue 里走 isChatPage 分支，不套 AppShell（无 app-main），
@@ -179,6 +188,8 @@ const router = createRouter({
 });
 routerRef.router = router;
 installRouteTransitions(router);
+// 插件注册的一级菜单来自 server 注册表，启动时拉一次（失败就空导航，不阻塞启动）。
+void refreshPluginMenus();
 
 // Set up the global ChannelAdminHost object so channel admin pages can use
 // window.__channelAdminHost.apiFetch() etc. The current channel type is
