@@ -123,7 +123,7 @@ const railPlugins = ref<Array<{ pluginId: string; title: string; icon?: string; 
 
 async function loadRailPlugins() {
   try {
-    const items = await listRailSurfaces()
+    const items = await listRailSurfaces(route.params.id as string | undefined)
     railPlugins.value = items.map(({ pluginId, surface }) => ({
       pluginId,
       title: surface.title,

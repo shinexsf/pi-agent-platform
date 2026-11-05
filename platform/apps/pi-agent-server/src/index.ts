@@ -91,7 +91,7 @@ async function main() {
   app.route('/api/templates', createTemplatesRouter(templateRepo));
   // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
   app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir }));
-  app.route('/api/sessions', createSessionPluginsRouter({ workerPool }));
+  app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
 
   // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
   app.route('/plugins', createPluginAssetsRouter({ pluginsDir: config.pluginsDir }));

@@ -67,6 +67,7 @@ export function setPluginDisabled(pluginId: string, disabled: boolean): void {
 
 /** 缓存一次列表请求；`force` 用于插件重装后的手动刷新。 */
 let cachedEntries: PluginEntryDTO[] | null = null
+const cachedSessionEntries = new Map<string, PluginEntryDTO[]>()
 
 export async function listPluginEntries(force = false): Promise<PluginEntryDTO[]> {
   if (cachedEntries && !force) return cachedEntries
@@ -80,6 +81,28 @@ export async function listPluginEntries(force = false): Promise<PluginEntryDTO[]
     cachedEntries = []
   }
   return cachedEntries
+}
+
+export async function listSessionPluginEntries(
+  sessionId: string | undefined,
+  force = false,
+): Promise<PluginEntryDTO[]> {
+  if (!sessionId) return listPluginEntries(force)
+  if (!force) {
+    const cached = cachedSessionEntries.get(sessionId)
+    if (cached) return cached
+  }
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/plugins`)
+    if (!res.ok) throw new Error(`GET /api/sessions/:id/plugins ${res.status}`)
+    const body = (await res.json()) as { plugins?: PluginEntryDTO[] }
+    const entries = Array.isArray(body.plugins) ? body.plugins : []
+    cachedSessionEntries.set(sessionId, entries)
+    return entries
+  } catch (err) {
+    console.warn('[plugin] session list failed', err)
+    return []
+  }
 }
 
 /** 拼出插件 web 入口的 URL（server 静态托管）。 */
@@ -124,7 +147,7 @@ export async function mountSlot(
   slot: SurfaceRegistration['slot'],
   options: { sessionId?: string; onlyPluginId?: string } = {},
 ): Promise<() => void> {
-  const entries = await listPluginEntries()
+  const entries = await listSessionPluginEntries(options.sessionId)
   const disabled = readDisabled()
   const mounted: MountedSurface[] = []
 
@@ -170,8 +193,10 @@ export async function mountSlot(
  *
  * 宿主自己渲染按钮（图标体系由宿主决定），插件只声明「我是谁、叫什么、排序」。
  */
-export async function listRailSurfaces(): Promise<Array<{ pluginId: string; surface: SurfaceRegistration }>> {
-  const entries = await listPluginEntries()
+export async function listRailSurfaces(
+  sessionId?: string,
+): Promise<Array<{ pluginId: string; surface: SurfaceRegistration }>> {
+  const entries = await listSessionPluginEntries(sessionId)
   const disabled = readDisabled()
   const out: Array<{ pluginId: string; surface: SurfaceRegistration }> = []
   for (const entry of entries) {

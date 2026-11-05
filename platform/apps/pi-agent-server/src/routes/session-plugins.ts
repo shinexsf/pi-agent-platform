@@ -14,15 +14,71 @@
 import { Hono } from 'hono';
 import type { WorkerPool } from '../worker-pool.js';
 import { childLogger } from '../logger.js';
+import { config } from '../config.js';
+import { extractExtensionNames, readSettings } from '../services/extension-utils.js';
+import { getPluginSnapshot, resolveSessionPlugins, toPluginEntryDTO } from '../services/plugins.js';
+import type { AgentRepo } from '../repos/agent.repo.js';
+import type { SessionRepo } from '../repos/session.repo.js';
 
 const logger = childLogger('plugin-emit');
 
 export interface SessionPluginsRouterDeps {
   workerPool: WorkerPool;
+  agentRepo: AgentRepo;
+  sessionRepo: SessionRepo;
 }
 
 export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono {
   const app = new Hono();
+
+  /**
+   * `GET /api/sessions/:id/plugins` —— 该会话**会话级闸门**的解析结果。
+   *
+   * 为什么需要它：`GET /api/plugins` 是全局视图（配置页用），跟"这个会话到底加载了哪些插件"无关。
+   * web 槽位必须按会话渲染，否则 agent 没启用插件的会话也会冒出图标/面板（spec: plugin-facets 会话级闸门）。
+   *
+   * 占位会话（库里还没有行、agent 未定）返回全局可用集合：此时还谈不上闸门。
+   */
+  app.get('/:id/plugins', async (c) => {
+    const sessionId = c.req.param('id');
+    const snapshot = getPluginSnapshot(config.pluginsDir);
+    if (snapshot.disabledByFlag) {
+      return c.json({ disabledByFlag: true, plugins: [] });
+    }
+
+    const session = deps.sessionRepo.get(sessionId);
+    const agent = session?.agentId ? deps.agentRepo.get(session.agentId) : null;
+    if (!session) {
+      return c.json({
+        disabledByFlag: false,
+        placeholder: true,
+        plugins: snapshot.plugins.filter((p) => p.status === 'active').map(toPluginEntryDTO),
+      });
+    }
+
+    try {
+      const settings = await readSettings(config.agentDir);
+      const resolved = resolveSessionPlugins({
+        snapshot,
+        agentExtensions: agent?.config?.extensions ?? [],
+        installedPiExtensions: extractExtensionNames(settings),
+      });
+      const byId = new Map(snapshot.plugins.map((p) => [p.entry.id, p]));
+      return c.json({
+        disabledByFlag: false,
+        placeholder: false,
+        plugins: resolved
+          .filter((r) => r.enabled)
+          .map((r) => {
+            const loaded = byId.get(r.id);
+            return loaded ? toPluginEntryDTO(loaded) : { id: r.id, enabled: true, facets: {}, slots: [] };
+          }),
+      });
+    } catch (err) {
+      logger.warn({ sessionId, err: String(err) }, 'session plugin resolution failed');
+      return c.json({ disabledByFlag: false, plugins: [] });
+    }
+  });
 
   app.post('/:id/plugins/emit', async (c) => {
     const sessionId = c.req.param('id');
