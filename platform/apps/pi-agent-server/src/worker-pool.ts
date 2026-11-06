@@ -284,6 +284,22 @@ export class WorkerPool extends EventEmitter {
       }
     });
 
+    // Spawn failures (missing cwd, EACCES, …) arrive as 'error' events. Without
+    // this handler Node throws "Unhandled 'error' event" and kills the WHOLE
+    // server — the failure must stay scoped to this session instead.
+    entry.child.on('error', (err) => {
+      this.workers.delete(sessionId);
+      if (entry.readyTimer) {
+        clearTimeout(entry.readyTimer);
+        entry.readyTimer = null;
+      }
+      for (const p of entry.pendingCalls.values()) {
+        p.reject(new Error(`worker spawn failed: ${err.message}`));
+      }
+      entry.pendingCalls.clear();
+      this.emit('crash', sessionId, -1, 'spawn-error');
+    });
+
     // Crash detection
     entry.child.on('exit', (code, signal) => {
       this.workers.delete(sessionId);
