@@ -90,3 +90,76 @@ export const agentTemplates = sqliteTable(
     nameIdx: index('idx_agent_templates_name').on(t.name),
   }),
 );
+
+/** Triggers (change: trigger-scheduling). ONE table for every source —
+ *  source-specific parameters live in `config` JSON, so a new source needs
+ *  no schema change. `next_at` is a real column because the scheduler scans it. */
+export const triggers = sqliteTable(
+  'triggers',
+  {
+    id: text('id').primaryKey(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    name: text('name').notNull(),
+    source: text('source').notNull(),
+    config: text('config').notNull(), // JSON
+    prompt: text('prompt').notNull(),
+    sessionMode: text('session_mode', { enum: ['new', 'reuse'] }).notNull(),
+    enabled: integer('enabled').notNull(),
+    nextAt: integer('next_at'),
+    maxRuns: integer('max_runs'),
+    runsCount: integer('runs_count').notNull().default(0),
+    sessionId: text('session_id'),
+    lastFiredAt: integer('last_fired_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    agentIdIdx: index('idx_triggers_agent_id').on(t.agentId),
+    nextAtIdx: index('idx_triggers_next_at').on(t.nextAt),
+  }),
+);
+
+/** One row per firing attempt. `status` is the observable outcome. */
+export const triggerRuns = sqliteTable(
+  'trigger_runs',
+  {
+    id: text('id').primaryKey(),
+    triggerId: text('trigger_id').notNull(),
+    status: text('status', { enum: ['fired', 'skipped', 'missed', 'failed'] }).notNull(),
+    triggeredBy: text('triggered_by').notNull(),
+    idempotencyKey: text('idempotency_key'),
+    startedAt: integer('started_at').notNull(),
+    finishedAt: integer('finished_at'),
+    sessionId: text('session_id'),
+    error: text('error'),
+    payloadBytes: integer('payload_bytes'),
+  },
+  (t) => ({
+    triggerIdx: index('idx_trigger_runs_trigger').on(t.triggerId, t.startedAt),
+    idemIdx: index('idx_trigger_runs_idem').on(t.triggerId, t.idempotencyKey),
+  }),
+);
+
+/** Notification inbox (client-agnostic). `deliveries` is a JSON array of
+ *  per-channel outcomes; a failing channel never blocks the row. */
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: text('id').primaryKey(),
+    severity: text('severity', { enum: ['info', 'warning', 'error'] }).notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    source: text('source').notNull(),
+    sourceId: text('source_id'),
+    actionUrl: text('action_url'),
+    readAt: integer('read_at'),
+    createdAt: integer('created_at').notNull(),
+    deliveries: text('deliveries'), // JSON array
+  },
+  (t) => ({
+    createdAtIdx: index('idx_notifications_created_at').on(t.createdAt),
+    unreadIdx: index('idx_notifications_unread').on(t.readAt),
+  }),
+);

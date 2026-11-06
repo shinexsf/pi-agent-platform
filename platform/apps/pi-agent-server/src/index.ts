@@ -13,6 +13,12 @@ import { initDb } from './db/init.js';
 import { createAgentRepo } from './repos/agent.repo.js';
 import { createSessionRepo } from './repos/session.repo.js';
 import { createTemplateRepo } from './repos/template.repo.js';
+import { createTriggerRepo } from './repos/trigger.repo.js';
+import { createNotificationRepo } from './repos/notification.repo.js';
+import { initTriggerRuntime } from './services/trigger/runtime.js';
+import { createTriggersRouter } from './routes/triggers.js';
+import { createHooksRouter } from './routes/hooks.js';
+import { createNotificationsRouter } from './routes/notifications.js';
 import { initSessionRegistry } from './services/session.js';
 import { workerPool } from './worker-pool.js';
 import { createAgentsRouter } from './routes/agents.js';
@@ -64,11 +70,25 @@ async function main() {
   const agentRepo = createAgentRepo(db);
   const sessionRepo = createSessionRepo(db);
   const templateRepo = createTemplateRepo(db);
+  const triggerRepo = createTriggerRepo(db);
+  const notificationRepo = createNotificationRepo(db);
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
   // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
   // Must init BEFORE any consumer (routes / im-gateway / capabilities) handles a request.
   initSessionRegistry({ sessionRepo, agentRepo, workerPool });
+
+  // Trigger runtime (change: trigger-scheduling) — register built-in sources,
+  // wire dispatcher/notifier/scheduler. MUST init BEFORE routes/capabilities.
+  const triggerRt = initTriggerRuntime({
+    agentRepo,
+    sessionRepo,
+    triggerRepo,
+    notificationRepo,
+    workerPool,
+    notificationsConfigPath: config.notificationsConfigPath,
+    triggersDisabled: config.triggersDisabled,
+  });
 
   const app = new Hono();
 
@@ -93,6 +113,28 @@ async function main() {
   // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
   app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
   app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
+  // Triggers + webhook entry + notification inbox (change: trigger-scheduling).
+  app.route('/api/triggers', createTriggersRouter(agentRepo, triggerRt));
+  app.route('/api/hooks', createHooksRouter(triggerRt));
+  app.route('/api/notifications', createNotificationsRouter(notificationRepo));
+
+  // `sendNotifyToUser` — server tool (same shape as sendFileToUser, but inbox).
+  workerPool.registerReverseCallHandler('sendNotifyToUser', async (sessionId, args) => {
+    const [, params] = args as [string, { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
+    const title = (params?.title ?? '').trim();
+    const body = (params?.body ?? '').trim();
+    if (!title && !body) throw new Error('sendNotifyToUser: title/body required');
+    const session = sessionRepo.get(sessionId);
+    return triggerRt.notifier.notify({
+      severity: params?.severity ?? 'info',
+      title: title.slice(0, 200),
+      body: body.slice(0, 4000),
+      source: 'agent',
+      sourceId: sessionId,
+      // Deep link is built by the platform, never by the caller.
+      actionUrl: `/chat/${sessionId}`,
+    });
+  });
   // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
   app.route('/api/extensions', createExtensionsRouter({ pluginsDir: config.pluginsDir }));
   app.route('/api/p', createPluginDispatcherRouter({ pluginsDir: config.pluginsDir }));
@@ -138,7 +180,7 @@ async function main() {
   // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
   if (config.isDev) {
     const { createDebugRouter } = await import('./routes/debug.js');
-    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db, agentRepo));
+    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db, agentRepo, triggerRt));
     const { createCapabilityDebugRouter } = await import('./routes/capabilities-debug.js');
     app.route('/debug/capabilities', createCapabilityDebugRouter(agentRepo, sessionRepo, workerPool));
     logger.info('debug routes mounted at /debug (incl. /debug/capabilities)');
@@ -148,6 +190,9 @@ async function main() {
 
   // Start placeholder timeout scanner (active sessions are never auto-killed)
   const scanner = startTimeoutScanner(workerPool, config.placeholderTimeoutMs);
+
+  // Arm the trigger scheduler AFTER routes are mounted (one setTimeout, no polling).
+  triggerRt.scheduler.start();
 
   // Start IM gateway BEFORE serve() so its router can be mounted while
   // Hono's matcher is still mutable.
@@ -175,6 +220,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
     scanner.stop();
+    triggerRt.scheduler.stop();
     if (imGatewayHandle) await imGatewayHandle.shutdown();
     await workerPool.shutdown();
     raw.close();

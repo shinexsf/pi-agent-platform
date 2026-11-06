@@ -84,6 +84,75 @@ function createSendFileToUserTool(
   };
 }
 
+// ── sendNotifyToUser ────────────────────────────────────────────────────────
+
+/**
+ * Push a notification to the user's inbox (change: trigger-scheduling).
+ *
+ * This is the ONLY way an agent can notify: notifications are never derived
+ * from assistant messages. `sessionId` / `actionUrl` are filled by the master,
+ * so the schema deliberately has no routing fields.
+ */
+const sendNotifyToUserSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Short subject line (<= 120 chars)' },
+    body: { type: 'string', description: 'Message body (plain text, no markdown)' },
+    severity: {
+      type: 'string',
+      enum: ['info', 'warning', 'error'],
+      description: 'info = FYI, warning = needs attention, error = something failed',
+    },
+  },
+  required: ['title', 'body'],
+  additionalProperties: false,
+} as const;
+
+interface SendNotifyToUserParams {
+  title: string;
+  body: string;
+  severity?: 'info' | 'warning' | 'error';
+}
+
+function createSendNotifyToUserTool(
+  sessionId: string,
+  callMaster: CallMasterFn,
+): ToolDefinition {
+  return {
+    name: 'sendNotifyToUser',
+    label: 'Notify User',
+    description: 'Send a notification to the user inbox when the user is not here to see the answer',
+    promptSnippet: 'Push a notification (title + body) to the user inbox',
+    promptGuidelines: [
+      'Use sendNotifyToUser when the result matters while the user is away — scheduled/long tasks, failures, or explicit "tell me when done" requests.',
+      'Do NOT use it for ordinary replies: if the user is chatting with you, answer in the conversation.',
+      'severity: info for progress, warning for something the user should look at, error for failures.',
+    ],
+    parameters: sendNotifyToUserSchema as any,
+    execute: async (
+      _toolCallId: string,
+      params: SendNotifyToUserParams,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      _ctx: unknown,
+    ) => {
+      try {
+        const result = await callMaster('sendNotifyToUser', [sessionId, params]);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result ?? { ok: true }) }],
+          details: result ?? { ok: true },
+        };
+      } catch (err) {
+        const errorMsg = `Failed to send notification: ${(err as Error).message}`;
+        return {
+          content: [{ type: 'text' as const, text: errorMsg }],
+          details: { error: errorMsg },
+        };
+      }
+    },
+  };
+}
+
 // ── callServer ──────────────────────────────────────────────────────────────
 
 /**
@@ -189,6 +258,9 @@ export function createServerTools(
   const tools: ToolDefinition[] = [];
   if (enabled.has('sendFileToUser')) {
     tools.push(createSendFileToUserTool(sessionId, callMaster));
+  }
+  if (enabled.has('sendNotifyToUser')) {
+    tools.push(createSendNotifyToUserTool(sessionId, callMaster));
   }
   if (enabled.has('callServer')) {
     tools.push(createCallServerTool(callMaster, opts.capabilityIndex ?? []));

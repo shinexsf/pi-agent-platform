@@ -12,6 +12,15 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import { sql } from 'drizzle-orm';
 import type { DB } from '../db/init.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
+import type { TriggerRuntime } from '../services/trigger/runtime.js';
+import { listTriggerSources } from '../services/trigger/sources.js';
+
+/** Keep webhook secrets out of debug output (末尾 4 位足够排查)。 */
+function redactSecretConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const secret = config?.secret;
+  if (typeof secret !== 'string') return config;
+  return { ...config, secret: undefined, secretEnding: secret.slice(-4) };
+}
 import { extractExtensionNames, readSettings } from '../services/extension-utils.js';
 import { getPluginSnapshot, resolveSessionPlugins } from '../services/plugins.js';
 
@@ -20,8 +29,49 @@ export function createDebugRouter(
   sessionRepo: SessionRepo,
   db: DB,
   agentRepo?: AgentRepo,
+  triggerRt?: TriggerRuntime,
 ) {
   const router = new Hono();
+
+  // ── Triggers (change: trigger-scheduling) ─────────────────────────────────
+  router.get('/triggers', (c) => {
+    if (!triggerRt) return c.json({ error: 'trigger runtime not initialized' }, 500);
+    return c.json({
+      disabled: triggerRt.flags.disabled,
+      sources: listTriggerSources().map((s) => ({
+        source: s.source,
+        timeDriven: typeof s.computeNextAt === 'function',
+        httpEntry: s.httpEntry === true,
+        hasSecret: s.hasSecret === true,
+      })),
+      nextDueAt: triggerRt.repo.nextDueAt(),
+      triggers: triggerRt.repo.list({ includeDisabled: true }).map((t) => ({
+        ...t,
+        config: redactSecretConfig(t.config),
+        runs: triggerRt.repo.listRuns(t.id, 5),
+      })),
+    });
+  });
+
+  router.post('/triggers/:id/run', async (c) => {
+    if (!triggerRt) return c.json({ error: 'trigger runtime not initialized' }, 500);
+    const trigger = triggerRt.repo.get(c.req.param('id'));
+    if (!trigger) return c.json({ error: 'trigger not found' }, 404);
+    let payload: unknown;
+    try {
+      payload = (await c.req.json<{ payload?: unknown }>())?.payload;
+    } catch {
+      /* no body */
+    }
+    const event = triggerRt.dispatcher.eventFromTrigger(trigger, { triggeredBy: 'manual', payload });
+    return c.json(await triggerRt.dispatcher.dispatch(event));
+  });
+
+  router.post('/triggers/tick', async (c) => {
+    if (!triggerRt) return c.json({ error: 'trigger runtime not initialized' }, 500);
+    await triggerRt.scheduler.tick();
+    return c.json({ ok: true, nextDueAt: triggerRt.repo.nextDueAt() });
+  });
 
   /** 插件闸门结果（只读，用于排查"为什么这个会话上没有某个插件"）。 */
   async function describePluginsForSession(agentId: string | null) {

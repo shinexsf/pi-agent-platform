@@ -226,7 +226,7 @@ export interface ToolCardRegistration {
 
 /** 被拒绝的注册项（绝不静默丢弃）。 */
 export interface RejectedRegistration {
-  kind: 'menu' | 'page' | 'route' | 'surface' | 'toolCard';
+  kind: 'menu' | 'page' | 'route' | 'surface' | 'toolCard' | 'triggerSource';
   /** 被拒项的自报标识（可能重复，故意的）。 */
   id: string;
   reason: string;
@@ -252,6 +252,35 @@ export interface PluginExtensions {
  * - `init(host)` 用 `global.routes`
  * 两组命名空间是硬边界：`global` 下的东西与会话无关，`session` 下的只对会话有意义。
  */
+/**
+ * `host.triggerSources.register` 的描述符（change: trigger-scheduling）。
+ * 结构与 server 侧 `SourceSpec` 同契约：只描述「配置校验 + 时间计算」，
+ * 不含 HTTP 路由（Hono 路由表首次请求后冻结）。
+ */
+export interface TriggerSourceRegistration {
+  /** 持久化进 `triggers.source` 的名字（重名注册会被拒绝）。 */
+  source: string;
+  label?: string;
+  description?: string;
+  /** 校验并归一化 config；抛错即视为无效（message 会直接展示）。 */
+  validateConfig(config: Record<string, unknown>): Record<string, unknown>;
+  /** 下一次触发时刻（epoch ms，严格大于 from）；null = 不再触发。 */
+  computeNextAt?(config: Record<string, unknown>, from: number): number | null;
+  /** 每日一次的清理钩子。 */
+  housekeeping?(ctx: { deleteStaleDisabled(source: string, before: number): number }): void;
+  defaultMaxRuns?: number;
+  httpEntry?: boolean;
+  hasSecret?: boolean;
+}
+
+/** `host.triggers` —— 进程内触发（不过 HTTP，不需要 secret）。 */
+export interface PluginTriggersHost {
+  /** 立即触发一次；走与定时/webhook 完全相同的 dispatch 路径。 */
+  fire(triggerId: string, payload?: unknown): Promise<{ status: string; runId?: string; sessionId?: string; error?: string }>;
+  /** 列出触发器（默认只含启用中的）。 */
+  list(filter?: { agentId?: string; source?: string; includeDisabled?: boolean }): unknown[];
+}
+
 export interface PluginRegistrationHost {
   readonly id: string;
   /** 插件安装目录（绝对路径），便于插件自己读写文件。 */
@@ -261,6 +290,10 @@ export interface PluginRegistrationHost {
     pages: { register(def: PageRegistration): void };
     routes: { register(def: RouteRegistration): void };
   };
+  /** 触发器扩展点（change: trigger-scheduling）。 */
+  readonly triggers: PluginTriggersHost;
+  /** 注册新的触发器来源（与内置 cron/once/webhook 同一张注册表）。 */
+  readonly triggerSources: { register(def: TriggerSourceRegistration): void };
   readonly session: {
     surfaces: { register(def: SurfaceRegistration): void };
     toolCards: { register(def: ToolCardRegistration): void };

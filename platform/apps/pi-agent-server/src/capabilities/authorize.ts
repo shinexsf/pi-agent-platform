@@ -43,6 +43,7 @@ function ownsTarget(
   ctx: InvokeContext,
   params: unknown,
   resolveSessionAgent: (sessionId: string) => string | undefined,
+  resolveTriggerAgent: (triggerId: string) => string | undefined,
 ): boolean {
   const id = (params as { id?: unknown } | undefined)?.id;
   if (typeof id !== 'string' || id.length === 0) return false;
@@ -51,12 +52,23 @@ function ownsTarget(
     const owner = resolveSessionAgent(id);
     return owner !== undefined && owner !== undefined && owner === ctx.agentId;
   }
+  if (def.module === 'trigger') {
+    // `trigger.create` has no id yet — its target agent is `params.agentId`.
+    const agentIdParam = (params as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof agentIdParam === 'string' && agentIdParam.length > 0) {
+      return agentIdParam === ctx.agentId;
+    }
+    const owner = resolveTriggerAgent(id);
+    return owner !== undefined && owner === ctx.agentId;
+  }
   return false;
 }
 
 export interface AuthorizeDeps {
   /** Resolve the agent that owns a session id (sessions row); undefined if none. */
   resolveSessionAgent: (sessionId: string) => string | undefined;
+  /** Resolve the agent that owns a trigger id; undefined if none (fail closed). */
+  resolveTriggerAgent: (triggerId: string) => string | undefined;
 }
 
 /**
@@ -95,7 +107,7 @@ export function authorizeCapability(
   // mode === 'own': only non-scoped capabilities pass freely;
   // scoped ones must target the caller's own agent/session.
   if (!def.scoped) return;
-  if (!ownsTarget(def, ctx, params, deps.resolveSessionAgent)) {
+  if (!ownsTarget(def, ctx, params, deps.resolveSessionAgent, deps.resolveTriggerAgent)) {
     logger.warn(
       { sessionId: ctx.sessionId, agentId: ctx.agentId, method: def.method, mode },
       'capability denied by own-mode scope check',

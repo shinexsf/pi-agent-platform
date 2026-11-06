@@ -5,6 +5,17 @@
 
 export type {
   AgentDTO,
+  TriggerDTO,
+  TriggerRunDTO,
+  TriggerEvent,
+  TriggerSourceName,
+  TriggeredBy,
+  TriggerSessionMode,
+  TriggerRunStatus,
+  TriggerSourceInfo,
+  NotificationDTO,
+  NotificationSeverity,
+  NotificationDeliveryDTO,
   AgentTemplateDTO,
   AgentConfig,
   SessionDTO,
@@ -24,6 +35,11 @@ import type {
   SessionDTO,
   MessageDTO,
   SessionRunState,
+  NotificationDTO,
+  TriggerDTO,
+  TriggerRunDTO,
+  TriggerSessionMode,
+  TriggerSourceName,
 } from '@pi-agent-platform/shared-types';
 
 import type {
@@ -419,4 +435,52 @@ export interface SessionExtensionsResponse {
 export interface ApiError {
   error: string;
   path?: string;
+}
+
+// ---------- Triggers (change: trigger-scheduling) ----------
+
+export interface CreateTriggerRequest {
+  agentId: string;
+  name: string;
+  source: TriggerSourceName;
+  config?: Record<string, unknown>;
+  prompt: string;
+  sessionMode?: TriggerSessionMode;
+  /** 0/undefined = unbounded. */
+  maxRuns?: number;
+  enabled?: boolean;
+}
+
+export interface UpdateTriggerRequest {
+  name?: string;
+  config?: Record<string, unknown>;
+  prompt?: string;
+  sessionMode?: TriggerSessionMode;
+  enabled?: boolean;
+  maxRuns?: number | null;
+  /** Recompute `next_at` from `config` (used after config edits). */
+  reschedule?: boolean;
+}
+
+export interface RunTriggerRequest {
+  payload?: unknown;
+}
+
+export interface TriggerListResponse {
+  items: TriggerDTO[];
+}
+
+export interface TriggerRunsResponse {
+  items: TriggerRunDTO[];
+}
+
+/** Returned by create / rotate-secret — the only place a webhook secret is plaintext. */
+export interface TriggerSecretResponse {
+  id: string;
+  secret: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationDTO[];
+  unreadCount: number;
 }

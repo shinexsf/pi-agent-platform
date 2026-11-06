@@ -32,6 +32,8 @@ import {
   type ToolCardRegion,
 } from '@pi-agent-platform/plugin-types';
 import { childLogger } from '../logger.js';
+import { hasTriggerRuntime, triggerRuntime } from './trigger/runtime.js';
+import { registerTriggerSource } from './trigger/sources.js';
 import { getPluginSnapshot } from './plugins.js';
 import type { LoadedPlugin, PluginSnapshot } from './plugins.js';
 
@@ -210,6 +212,42 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginRegi
     session: {
       surfaces: { register: (def) => registerSurface(id, dir, def) },
       toolCards: { register: (def) => registerToolCard(id, dir, def) },
+    },
+    triggers: {
+      async fire(triggerId: string, payload?: unknown) {
+        if (!hasTriggerRuntime()) throw new Error('trigger runtime not initialized');
+        const rt = triggerRuntime();
+        const trigger = rt.repo.get(String(triggerId));
+        if (!trigger) throw new Error(`unknown trigger: ${triggerId}`);
+        // Same 64 KiB cap as the HTTP entry: payloads are data, not channels.
+        if (payload !== undefined) {
+          const bytes = Buffer.byteLength(JSON.stringify(payload) ?? '');
+          if (bytes > 64 * 1024) throw new Error('payload too large (max 64 KiB)');
+        }
+        const event = rt.dispatcher.eventFromTrigger(trigger, { triggeredBy: 'plugin', payload });
+        return rt.dispatcher.dispatch(event);
+      },
+      list(filter) {
+        if (!hasTriggerRuntime()) return [];
+        return triggerRuntime().repo.list({
+          agentId: filter?.agentId,
+          source: filter?.source,
+          includeDisabled: filter?.includeDisabled === true,
+        });
+      },
+    },
+    triggerSources: {
+      register(def) {
+        if (!def || typeof def.validateConfig !== 'function') {
+          return reject(id, 'triggerSource', String(def?.source), 'validateConfig 必须是函数');
+        }
+        try {
+          registerTriggerSource(def);
+          logger.info({ pluginId: id, source: def.source }, 'trigger source registered by plugin');
+        } catch (err) {
+          reject(id, 'triggerSource', String(def?.source), (err as Error).message);
+        }
+      },
     },
     log(level, message, extra) {
       logger[level]({ pluginId: id, ...extra }, message);

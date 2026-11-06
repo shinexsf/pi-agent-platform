@@ -30,6 +30,8 @@ import { registerCapability } from './registry.js';
 import { serverCapabilities } from './handlers/server.js';
 import { agentCapabilities } from './handlers/agent.js';
 import { sessionCapabilities } from './handlers/session.js';
+import { triggerCapabilities } from './handlers/trigger.js';
+import { triggerRuntime, hasTriggerRuntime } from '../services/trigger/runtime.js';
 
 const logger = childLogger('capability');
 
@@ -155,6 +157,7 @@ export async function dispatchWithCtx(
     const policy = DEFAULT_POLICY; // fixed own-scope safety net (not configurable)
     authorizeCapability(def, ctx, params, effectiveConfig, policy, {
       resolveSessionAgent: (sid) => resolveSessionAgentId(deps, sid),
+      resolveTriggerAgent: (tid) => (hasTriggerRuntime() ? triggerRuntime().repo.get(tid)?.agentId : undefined),
     });
   } catch (err) {
     auditCapability({
@@ -190,6 +193,8 @@ export function registerAllCapabilities(deps: {
     ...serverCapabilities(deps.workerPool, deps.serverOpts),
     ...agentCapabilities(deps.agentRepo),
     ...sessionCapabilities(deps.agentRepo, deps.sessionRepo, deps.workerPool),
+    // trigger.* — only when the trigger runtime is initialized (always in prod/dev).
+    ...(hasTriggerRuntime() ? triggerCapabilities(triggerRuntime()) : []),
     // channel.* / config.* modules: registered empty (group placeholder, list shows them)
   ]) {
     registerCapability(def);

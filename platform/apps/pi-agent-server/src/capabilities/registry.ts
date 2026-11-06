@@ -22,6 +22,7 @@ export const CAPABILITY_MODULES: readonly CapabilityModule[] = [
   'session',
   'channel',
   'config',
+  'trigger',
 ] as const;
 
 const defs = new Map<string, AnyCapabilityDef>();

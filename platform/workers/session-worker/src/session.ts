@@ -35,6 +35,7 @@ import type {
   ToolCallDTO,
   AgentConfig,
 } from '@pi-agent-platform/shared-types';
+import { SYSTEM_EVENT_PROMPT_NOTICE } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 import { groupMcpTools, isMcpToolName, type McpServerGroup } from './mcp-tools.js';
 import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
@@ -717,7 +718,13 @@ export async function createSession(
     cwd: config.workspacePath,
     agentDir,
     systemPrompt: agentConfig?.systemPrompt?.trim() ? agentConfig.systemPrompt : undefined,
-    appendSystemPrompt: agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : undefined,
+    // Platform-level notice FIRST (change: trigger-scheduling): every agent must
+    // know what `<system-event>` means, independent of its own append prompt.
+    // One line, one contract — new envelope `kind`s never touch this.
+    appendSystemPrompt: [
+      SYSTEM_EVENT_PROMPT_NOTICE,
+      ...(agentConfig?.appendSystemPrompt?.trim() ? [agentConfig.appendSystemPrompt] : []),
+    ],
     // Inline takeover extension — loaded BEFORE extensionsOverride runs, hence the
     // `<inline:` exemption inside createExtensionsFilter (resource-filters.ts).
     // Built-in extension factories (codemode/tool-search/mcp) ride along here; the matching
