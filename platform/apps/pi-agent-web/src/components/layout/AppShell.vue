@@ -9,7 +9,7 @@
  * 抽屉行为由 AppDrawer 内部按断点决定——≥1024px 为常驻侧栏（挤压内容），
  * <1024px 为带遮罩的覆盖层。本组件只负责持有 open 状态。
  */
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useTheme } from '../../composables/useTheme';
 import { useIsCompact, useIsDesktop, BP } from '../../composables/useMediaQuery';
@@ -17,11 +17,13 @@ import AppIcon from '../ui/AppIcon.vue';
 import AppBreadcrumb from './AppBreadcrumb.vue';
 import AppDrawer from './AppDrawer.vue';
 import ToastHost from '../../modules/im-gateway/components/ToastHost.vue';
+import { useNotifications } from '../../composables/useNotifications';
 import ConfirmDialogHost from '../../modules/im-gateway/components/ConfirmDialogHost.vue';
 
 const DRAWER_STORAGE_KEY = 'pi-web-drawer-open';
 
 const { theme, toggle } = useTheme();
+const { unreadCount, refreshCount, startPolling } = useNotifications();
 const route = useRoute();
 const isDesktop = useIsDesktop();
 const isCompact = useIsCompact();
@@ -53,8 +55,14 @@ watch(
   () => route.fullPath,
   () => {
     if (!isDesktop.value) drawerOpen.value = false;
+    // 通知 badge 随导航刷新（30s 轮询兜底）
+    void refreshCount();
   },
 );
+
+onMounted(() => {
+  startPolling();
+});
 </script>
 
 <template>
@@ -75,6 +83,15 @@ watch(
         <AppBreadcrumb />
 
         <div class="header-actions">
+          <router-link
+            class="header-icon-btn notification-bell"
+            to="/notifications"
+            title="通知"
+            aria-label="通知"
+          >
+            <AppIcon name="bell" :size="18" />
+            <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+          </router-link>
           <router-link
             v-if="!isCompact"
             class="header-icon-btn"
@@ -180,6 +197,27 @@ watch(
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+
+/* 通知铃铛 + 未读 badge（change: trigger-scheduling，spec trigger-console） */
+.notification-bell {
+  position: relative;
+}
+
+.notification-badge {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
 }
 
 /* 紧凑断点：按钮缩小但保持可点 */

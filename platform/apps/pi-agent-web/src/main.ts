@@ -29,6 +29,7 @@ import ConfigView from './views/config/ConfigView.vue';
 import ModelsConfig from './views/config/ModelsConfig.vue';
 import DefaultSettings from './views/config/DefaultSettings.vue';
 import McpServersView from './views/config/McpServersView.vue';
+import NotificationsConfig from './views/config/NotificationsConfig.vue';
 import PluginsView from './views/config/PluginsView.vue';
 import SkillsConfig from './views/config/SkillsConfig.vue';
 import PromptsConfig from './views/config/PromptsConfig.vue';
@@ -65,6 +66,28 @@ const baseRoutes = [
     path: '/agents/:id/edit',
     component: AgentEditorView,
     meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Agent' },
+  },
+  // 触发器 / 通知（change: trigger-scheduling）
+  {
+    path: '/triggers',
+    component: () => import('./views/triggers/TriggersListView.vue'),
+    meta: { navLabel: '触发器', navOrder: 15, navIcon: 'automation' },
+  },
+  {
+    path: '/triggers/new',
+    component: () => import('./views/triggers/TriggerEditorView.vue'),
+    meta: { crumbTitle: '新建触发器' },
+  },
+  {
+    path: '/triggers/:id',
+    component: () => import('./views/triggers/TriggerEditorView.vue'),
+    meta: { crumbTitleFromParam: 'id', crumbTitle: '触发器' },
+  },
+  // 通知不进抽屉（铃铛入口），mobileHidden 避免和别人抢位置
+  {
+    path: '/notifications',
+    component: () => import('./views/notifications/NotificationsView.vue'),
+    meta: { crumbTitle: '通知', mobileHidden: true },
   },
   {
     path: '/sessions',
@@ -117,6 +140,12 @@ const baseRoutes = [
         meta: { crumbTitleFromParam: 'name', crumbTitle: '编辑 Provider' },
       },
       { path: 'settings', name: 'config-settings', component: DefaultSettings },
+      {
+        path: 'notifications',
+        name: 'config-notifications',
+        component: NotificationsConfig,
+        meta: { crumbTitle: '通知渠道' },
+      },
       {
         path: 'mcp',
         name: 'config-mcp',

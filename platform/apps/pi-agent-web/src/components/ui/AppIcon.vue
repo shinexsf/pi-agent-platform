@@ -39,6 +39,15 @@ withDefaults(
       <path d="M4 5.75A2.75 2.75 0 0 1 6.75 3h10.5A2.75 2.75 0 0 1 20 5.75v7.5A2.75 2.75 0 0 1 17.25 16H10l-4.5 4v-4.4A2.75 2.75 0 0 1 4 13.25z" />
       <path d="M8 8h8M8 11.5h5" />
     </template>
+    <template v-else-if="name === 'automation'">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+      <path d="M12 3.5V2M20.5 12H22M12 20.5V22M3.5 12H2" />
+    </template>
+    <template v-else-if="name === 'bell'">
+      <path d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 3.2.8 4.6 1.5 5.5H5c.7-.9 1.5-2.3 1.5-5.5z" />
+      <path d="M9.75 18.5a2.25 2.25 0 0 0 4.5 0" />
+    </template>
     <template v-else-if="name === 'architecture'">
       <rect x="8.5" y="3" width="7" height="5" rx="1" />
       <rect x="2.5" y="16" width="7" height="5" rx="1" />
