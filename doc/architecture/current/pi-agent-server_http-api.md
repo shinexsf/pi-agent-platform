@@ -185,6 +185,34 @@ interface SessionContextDTO {
 | `/api/templates` | POST | 新建模板（`name` 必填，重复名 409；`config` 归一后落库）|
 | `/api/templates/:id` | GET/PATCH/DELETE | 读取 / 改名·改描述 / 删除 |
 
+## 触发器 / 通知（2026-11-06）
+
+管理面（web console 驱动，扁平不按 agent 分组）：
+
+| 路径 | 方法 | 用途 |
+|---|---|---|
+| `/api/triggers` | GET | `?agentId&source&includeDisabled` → `{ items: TriggerDTO[], sources: TriggerSourceInfo[] }`；`config.secret` 恒脱敏成 `secretEnding` |
+| `/api/triggers` | POST | 创建：`{ agentId, name, source, config, prompt, sessionMode?, maxRuns? }`；source 校验走 `SourceSpec.validateConfig`，webhook secret 服务端生成并在响应里返回**一次**明文 |
+| `/api/triggers/:id` | GET/PATCH/DELETE | 详情（含最近 20 条 runs）/ 更新（重启用会重算 `next_at`；`runs_count>=max_runs` 时拒绝启用）/ 删除 |
+| `/api/triggers/:id/run` | POST | 立即运行（`triggeredBy='manual'`），`{ payload? }` |
+| `/api/triggers/:id/runs` | GET | `?limit=`（默认 50，上限 200） |
+| `/api/triggers/:id/rotate-secret` | POST | 轮换 webhook 密钥，明文只返回一次 |
+
+外部入口（哑端点，唯一入口，**不是** `/api/*` 本地信任模型）：
+
+| 路径 | 方法 | 用途 |
+|---|---|---|
+| `/api/hooks/:triggerId` | POST | `Authorization: Bearer <config.secret>`；可选 `Idempotency-Key`（24h 去重 → `duplicate`）；body ≤64 KiB（超出截断并记原始 `payload_bytes`）。202 dispatched / 200 duplicate / 401 / 404（未知 id 或非 webhook source）/ 409 disabled·skipped·failed |
+
+通知与渠道配置：
+
+| 路径 | 方法 | 用途 |
+|---|---|---|
+| `/api/notifications` | GET | `?unread&severity&limit` → `{ items, unreadCount }` |
+| `/api/notifications/:id/read` · `/read-all` | POST | 标已读 |
+| `/api/config/notifications` | GET/PUT | 渠道文件 `~/.pi/server/notifications.json` 的读写；校验：缺 `urlTemplate` / 非 http(s) / 名称重复 → 400，保留平台不建模的字段 |
+| `/api/config/notifications/test` | POST | 单渠道试发（固定样例文案，结果直接回页面，不写通知行） |
+
 ## Worker（调试）
 
 | 路径 | 方法 | 用途 |

@@ -56,7 +56,7 @@ flowchart TD
 |---|---|---|
 | `builtinTools` | 工具启用清单，**清单里只放工具名**：① pi 内置工具（`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `powershell`）；② pi 内置**扩展**工具（`codemode` / `tool_search`）——名字在清单里时 worker 装载 `builtin:<ext>` 并激活对应工具。**缺失 / null = 空=全不启用**。**`mcp` 不是工具，不在本清单**（历史遗留值会被忽略） | worker：`additionalExtensionPaths` + `extensionFactories` 注入 + `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
 | `mcp` | MCP 能力开关 `{ enabled?: boolean }`：`true` = worker 装载 `builtin:mcp` + 补齐 `codemode` / `tool_search` 依赖。**缺失 = `{enabled:false}`** | worker：同上的两步注入；激活不过白名单（MCP 工具按 per-server `exposure` 由 pi 决定） |
-| `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer`），**缺失 = `[]` = 全不给**（平台基础配置模板勾 `sendFileToUser`，callServer 永不预置） | worker customTools 注入 = prompt 可见性 |
+| `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer` / `sendNotifyToUser`），**缺失 = `[]` = 全不给**（平台基础配置模板勾 `sendFileToUser`，callServer 与 sendNotifyToUser 永不预置） | worker customTools 注入 = prompt 可见性 |
 | `capabilities` | `callServer` 方法级授权：**缺失（null/undefined）= opt-in 无任何方法权限**，[]=全禁，数组=精确白名单（session 行缺 key 时回落 agent 行的既有快照语义不变） | master 控制面 dispatch 强制校验 |
 
 四字段都在 `AgentConfig` JSON 列（agents / sessions 共用），加字段零迁移。
@@ -115,6 +115,8 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 | session | `list`（agentId 精确 + title 模糊 + status）、`get` | read（get scoped） | 即时 |
 | session | `update` | write / scoped | model/thinking=即时 IPC+DB；title=改名同步；**config.*=下次 spawn** |
 | session | `restart` | write / scoped | kill + 复用 piSessionPath 重建；busy 拒、placeholder 404；**sessions 行与 session-channel-map 不动** |
+| trigger | `list`、`get`（含最近 runs） | read（`scoped:false`，跨 agent 可读） | 即时 |
+| trigger | `create`、`update`、`delete`、`run` | write / **scoped**（own-agent） | 即时；create 走 `SourceSpec.validateConfig` + 每 agent ≤10 启用；update 重启用会重算 `next_at` |
 | channel / config | （占位空组） | — | 注册即显示 |
 
 内置方法（不参与 allowlist 调用拦截，内容按授权收敛）：
@@ -123,6 +125,10 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 - `detail { method }` — 单能力完整 spec（paramsSchema + returns 含生效时机标注）；**未授权方法拒绝**
 
 `session.update` 的 title 走共享 `services/session-ops.ts`（`renameSession`，HTTP 三入口与控制面同一实现）。
+
+`trigger.*` 的 own-scope 归属由 `authorize.ts` 解析：`trigger.update/delete/run` 用 `resolveTriggerAgent(triggerId)`，`trigger.create` 用入参 `agentId`（省略即调用者自己的 agent）——两者都拿不到归属时**fail closed**。
+
+**`sendNotifyToUser` 不是能力**：它是 server 工具（reverse call），闸门只有 `serverBuiltinTools` 声明；参数面 `{title, body, severity?}`，`sessionId`/`actionUrl` 由 master 填。能力面不重复开一道授权口。
 
 ## 端点
 
