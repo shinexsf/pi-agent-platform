@@ -354,7 +354,7 @@ function useTheme() {
 - **入口**：抽屉一级「触发器」（`meta.navLabel='触发器'` / `navOrder=15` / `navIcon='automation'`）+ header 右侧铃铛（未读 badge，`unreadCount===0` 不渲染）→ `/notifications`；渠道配置挂「配置 → 通知」
 - **状态**：不引 Pinia——`useTriggers()` / `useNotifications()` 用页面级 `ref` + fetch；只有未读数需要跨页共享，用模块级单例 `ref`（30s 轮询 + 路由切换刷新）
 - **列表页**：单表（名称/agent/source/计划/下次/上次/runs/状态）+ 行内 ▶ ✎ 🗑；**不做行内展开**，runs 只在详情页右栏
-- **详情页**：表单按 `source` 渲染（cron 表达式+时区 / once `datetime-local` / webhook 密钥区块），`source` 与 `agent` 创建后只读；webhook 明文 secret 只在「创建成功」与「轮换」两处弹窗显示一次（含 curl 示例）
+- **详情页**：表单按 `source` 渲染（cron 表达式+时区 / once `datetime-local` / webhook 密钥区块），`source` 与 `agent` 创建后只读；`reuse` 模式多一个「目标会话」下拉（选项来自既有 `GET /api/sessions?agent_id=`，第一项 = 留空自动创建）；webhook 明文 secret 只在「创建成功」与「轮换」两处弹窗显示一次（含 curl 示例）
 - **收件箱**：severity 色条 + 筛选 chips + 全部已读；点击标已读并跳 `actionUrl`；**没有输入框**（要回复必须进会话）
 
 细节见 [triggers 文档](pi-agent-server_triggers.md) §9。

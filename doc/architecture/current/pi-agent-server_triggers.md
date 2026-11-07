@@ -64,9 +64,25 @@ flowchart TB
 
 | 表 | 关键列 | 语义 |
 |---|---|---|
-| `triggers` | `agent_id` · `name` · `source` · `config`(JSON) · `prompt` · `session_mode`(`new|reuse`) · `enabled` · `next_at` · `max_runs` · `runs_count` · `session_id` · `last_fired_at` | 一行一个触发器；`next_at` 单独成列并建索引（scheduler 只扫它）；source 专属参数全在 `config` |
+| `triggers` | `agent_id` · `name` · `source` · `config`(JSON) · `prompt` · `session_mode`(`new|reuse`) · `enabled` · `next_at` · `max_runs` · `runs_count` · `session_id` · `last_fired_at` | 一行一个触发器；`next_at` 单独成列并建索引（scheduler 只扫它）；source 专属参数全在 `config`；`session_id` 只在 `reuse` 下有意义（见 §2.1） |
 | `trigger_runs` | `trigger_id` · `status`(`fired|skipped|missed|failed`) · `triggered_by`(`schedule|webhook|manual|capability|plugin|system`) · `idempotency_key` · `started_at`/`finished_at` · `session_id` · `error` · `payload_bytes` | 一次触发尝试一行；`skipped` 的 `error` 写原因（`overlap` / `duplicate` / `disabled`） |
 | `notifications` | `severity` · `title` · `body` · `source`(`agent|trigger|server`) · `source_id` · `action_url` · `read_at` · `deliveries`(JSON) | 收件箱；渠道投递结果只记录，不回滚也不阻塞落库 |
+
+### 2.1 `session_id`：复用目标（可空）
+
+`reuse` 模式下这一列是"这次触发写进哪个会话"，三态：
+
+| 值 | 含义 |
+|---|---|
+| 有值 | **已绑定**：每次触发都写这个会话（idle 被回收后由 `getOrCreate` 自动恢复） |
+| 空（null） | **未绑定**：首次触发自动创建一个会话，成功后回填到本列（此后固定复用） |
+
+规则集中在 `services/trigger/session-binding.ts`（HTTP / capability / dispatcher 共用一份）：
+
+- `sessionId` 只能在 `sessionMode='reuse'` 时给；`new` 模式下传了直接拒（**不静默丢弃**——静默丢字段最容易造出"两个人对写哪儿有不同理解"）
+- 绑定目标必须存在且 `sessions.agent_id` 与触发器同源 → 否则 400（这是复用目标的 own-scope 边界）
+- `PATCH` 语义：传值 = 换绑；传 `''`/`null` = 解绑回"首次触发时创建"；切到 `new` 时**自动清空**
+- `dispatch` 会**再校验一次**：绑定的会话被删/换主时 run 直接 `failed`（`getOrCreate` 对未知 id 会照建一个，不校验就会静默写错地方），并推一条 error 通知
 
 不建渠道表：渠道是 `~/.pi/server/notifications.json`（与 `mcp.json` 同风格）。
 
@@ -114,6 +130,8 @@ GET/PUT /api/config/notifications · POST /api/config/notifications/test
 ```
 
 **脱敏**：列表/详情里 `config.secret` 恒被替换为 `secretEnding`（末 4 位），只有 create 与 rotate 的响应带明文。
+
+**会话绑定字段**：`POST /api/triggers` 与 `PATCH /api/triggers/:id` 都接受 `sessionId`（语义见 §2.1）；列表页展示的会话下拉复用既有 `GET /api/sessions?agent_id=`（不新增查询端点）。
 
 ---
 
@@ -176,7 +194,7 @@ flowchart LR
 
 ## 8. 能力面与插件扩展点
 
-**capability（module `trigger`，全部 `scoped: true` → own-agent 写）**：`trigger.list/get`（读，`scoped:false`）、`trigger.create/update/delete/run`。`sendNotifyToUser` **不是** capability（不是管理操作）。兜底常量：每 agent ≤10 个启用触发器、cron 最小间隔 ≥5 分钟。
+**capability（module `trigger`，全部 `scoped: true` → own-agent 写）**：`trigger.list/get`（读，`scoped:false`）、`trigger.create/update/delete/run`（`create`/`update` 的 `sessionId` 与 HTTP 走同一个校验器）。`sendNotifyToUser` **不是** capability（不是管理操作）。兜底常量：每 agent ≤10 个启用触发器、cron 最小间隔 ≥5 分钟。
 
 **插件**：
 
@@ -195,7 +213,7 @@ host.triggerSources.register({ source, validateConfig, computeNextAt?, housekeep
 | 路由 | 作用 |
 |---|---|
 | `/triggers`（navOrder 15，icon `automation`） | 单表：名称/agent/source/计划/下次/上次/runs/状态 + 行内 ▶ ✎ 🗑（**不做行内展开**，runs 只在详情页） |
-| `/triggers/new` · `/triggers/:id` | 表单按 source 渲染；`source`/`agent` 创建后只读；右栏最近 50 条 runs；webhook secret 弹窗**只显示一次** |
+| `/triggers/new` · `/triggers/:id` | 表单按 source 渲染；`source`/`agent` 创建后只读；`reuse` 模式多一个「目标会话」下拉（该 agent 的会话，第一项 = 留空自动创建）；右栏最近 50 条 runs；webhook secret 弹窗**只显示一次** |
 | `/notifications`（header 铃铛 badge → 此页，`mobileHidden`） | 只读收件箱：severity 色条 + 筛选 + 全部已读 + 点击跳 `actionUrl` |
 | `/config/notifications`（配置二级项「通知」） | 渠道 CRUD + 预设（Bark/ntfy/PushPlus/企业微信机器人）+ 单渠道「测试」 |
 
