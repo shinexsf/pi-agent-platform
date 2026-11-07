@@ -45,19 +45,23 @@ function ownsTarget(
   resolveSessionAgent: (sessionId: string) => string | undefined,
   resolveTriggerAgent: (triggerId: string) => string | undefined,
 ): boolean {
+  // `trigger.create` has NO row yet: its target is `params.agentId`, and the
+  // handler defaults that to `ctx.agentId` when omitted. Checked BEFORE the
+  // generic `id` guard below — that guard would otherwise reject every create.
+  if (def.module === 'trigger' && def.method === 'trigger.create') {
+    const agentIdParam = (params as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof agentIdParam !== 'string' || agentIdParam.length === 0) return true; // → ctx.agentId
+    return agentIdParam === ctx.agentId;
+  }
+
   const id = (params as { id?: unknown } | undefined)?.id;
   if (typeof id !== 'string' || id.length === 0) return false;
   if (def.module === 'agent') return id === ctx.agentId;
   if (def.module === 'session') {
     const owner = resolveSessionAgent(id);
-    return owner !== undefined && owner !== undefined && owner === ctx.agentId;
+    return owner !== undefined && owner === ctx.agentId;
   }
   if (def.module === 'trigger') {
-    // `trigger.create` has no id yet — its target agent is `params.agentId`.
-    const agentIdParam = (params as { agentId?: unknown } | undefined)?.agentId;
-    if (typeof agentIdParam === 'string' && agentIdParam.length > 0) {
-      return agentIdParam === ctx.agentId;
-    }
     const owner = resolveTriggerAgent(id);
     return owner !== undefined && owner === ctx.agentId;
   }
