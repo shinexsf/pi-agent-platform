@@ -74,6 +74,8 @@ export interface CreateTriggerInput {
   enabled: boolean;
   nextAt: number | null;
   maxRuns: number | null;
+  /** Pre-bound reuse target (null = create one on first fire). */
+  sessionId?: string | null;
 }
 
 export interface UpdateTriggerInput {
@@ -107,7 +109,7 @@ export function createTriggerRepo(db: DB) {
           nextAt: input.nextAt,
           maxRuns: input.maxRuns,
           runsCount: 0,
-          sessionId: null,
+          sessionId: input.sessionId ?? null,
           lastFiredAt: null,
           createdAt: now,
           updatedAt: now,

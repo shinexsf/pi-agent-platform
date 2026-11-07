@@ -24,6 +24,8 @@ const logger = childLogger('trigger-runtime');
 
 export interface TriggerRuntime {
   repo: TriggerRepo;
+  /** Needed by session-binding validation (reuse targets own agent's sessions). */
+  sessionRepo: SessionRepo;
   notificationRepo: NotificationRepo;
   notifier: Notifier;
   dispatcher: Dispatcher;
@@ -75,6 +77,7 @@ export function initTriggerRuntime(deps: InitTriggersDeps): TriggerRuntime {
 
   runtime = {
     repo: deps.triggerRepo,
+    sessionRepo: deps.sessionRepo,
     notificationRepo: deps.notificationRepo,
     notifier,
     dispatcher,

@@ -13,6 +13,7 @@ import type { AnyCapabilityDef, TriggerDTO } from '@pi-agent-platform/shared-typ
 import type { TriggerRuntime } from '../../services/trigger/runtime.js';
 import { getTriggerSource, listTriggerSources } from '../../services/trigger/sources.js';
 import { generateWebhookSecret } from '../../services/trigger/sources/webhook.js';
+import { resolveSessionBinding } from '../../services/trigger/session-binding.js';
 import type { InvokeContext } from '@pi-agent-platform/shared-types';
 
 const MAX_TRIGGERS_PER_AGENT = 10;
@@ -96,6 +97,10 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         config: { type: 'object' },
         prompt: { type: 'string' },
         sessionMode: { type: 'string', enum: ['new', 'reuse'] },
+        sessionId: {
+          type: 'string',
+          description: 'reuse 模式下要固定的已有会话 id（必须是本 agent 的会话）；省略 = 首次触发时自动创建',
+        },
         maxRuns: { type: 'number' },
       },
       required: ['name', 'source', 'prompt'],
@@ -110,6 +115,7 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         config?: Record<string, unknown>;
         prompt?: string;
         sessionMode?: 'new' | 'reuse';
+        sessionId?: string | null;
         maxRuns?: number;
       };
       const agentId = p.agentId ?? ctx.agentId;
@@ -126,16 +132,19 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         rawConfig.secret = generateWebhookSecret();
       }
       const config = spec.validateConfig(rawConfig);
+      const sessionMode = p.sessionMode === 'reuse' ? 'reuse' : 'new';
+      const sessionId = resolveSessionBinding(rt.sessionRepo, { agentId, sessionMode, sessionId: p.sessionId });
       const created = repo.create({
         agentId,
         name: String(p.name ?? 'trigger'),
         source: spec.source,
         config,
         prompt: String(p.prompt ?? ''),
-        sessionMode: p.sessionMode === 'reuse' ? 'reuse' : 'new',
+        sessionMode,
         enabled: true,
         nextAt: spec.computeNextAt?.(config, Date.now()) ?? null,
         maxRuns: p.maxRuns && p.maxRuns > 0 ? p.maxRuns : (spec.defaultMaxRuns ?? null),
+        sessionId,
       });
       scheduler.reschedule();
       return spec.hasSecret ? { ...redact(created), secret: config.secret } : redact(created);
@@ -147,7 +156,7 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
     module: 'trigger',
     access: 'write',
     scoped: true,
-    summary: '更新触发器（name / config / prompt / sessionMode / enabled / maxRuns）',
+    summary: '更新触发器（name / config / prompt / sessionMode / sessionId / enabled / maxRuns）',
     paramsSchema: {
       type: 'object',
       properties: {
@@ -156,6 +165,10 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         config: { type: 'object' },
         prompt: { type: 'string' },
         sessionMode: { type: 'string', enum: ['new', 'reuse'] },
+        sessionId: {
+          type: 'string',
+          description: 'reuse 目标会话：传值 = 换绑（必须是本 agent 的会话）；传空串 = 解绑回"首次触发时创建"',
+        },
         enabled: { type: 'boolean' },
         maxRuns: { type: 'number' },
       },
@@ -170,6 +183,7 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         config?: Record<string, unknown>;
         prompt?: string;
         sessionMode?: 'new' | 'reuse';
+        sessionId?: string | null;
         enabled?: boolean;
         maxRuns?: number;
       };
@@ -188,6 +202,21 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
       if (reEnabling && nextAt === undefined) {
         nextAt = spec?.computeNextAt?.(config, Date.now()) ?? null;
       }
+      // Session binding — same rule as routes/triggers.ts (one shared validator):
+      // switching to `new` always clears it; on `reuse` re-validate whatever the
+      // resulting binding is so an agent cannot aim at another agent's session.
+      let sessionId: string | null | undefined;
+      if (p.sessionId !== undefined || p.sessionMode !== undefined) {
+        const sessionMode = p.sessionMode ?? existing.sessionMode;
+        sessionId =
+          sessionMode === 'reuse'
+            ? resolveSessionBinding(rt.sessionRepo, {
+                agentId: existing.agentId,
+                sessionMode,
+                sessionId: p.sessionId === undefined ? existing.sessionId : p.sessionId,
+              })
+            : null;
+      }
       const effectiveMaxRuns = p.maxRuns === undefined ? existing.maxRuns : p.maxRuns;
       if (p.enabled === true && effectiveMaxRuns !== null && existing.runsCount >= effectiveMaxRuns) {
         throw new Error(`已达最大运行次数（${existing.runsCount}/${effectiveMaxRuns}），请先提高 maxRuns`);
@@ -197,6 +226,7 @@ export function triggerCapabilities(rt: TriggerRuntime): AnyCapabilityDef[] {
         config,
         prompt: p.prompt,
         sessionMode: p.sessionMode,
+        ...(sessionId !== undefined ? { sessionId } : {}),
         enabled: p.enabled,
         maxRuns: p.maxRuns,
         ...(nextAt !== undefined ? { nextAt } : {}),

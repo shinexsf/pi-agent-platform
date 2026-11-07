@@ -105,6 +105,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     let sessionId: string;
     let created = false;
     if (event.target.sessionMode === 'reuse' && event.target.sessionId) {
+      // A bound reuse target must still be this agent's session: `getOrCreate`
+      // would happily spawn and write a row for an unknown/foreign id, so the
+      // binding is re-checked here (fail closed — the run fails loudly instead of
+      // silently writing into a session the trigger does not own).
+      const bound = sessionRepo.get(event.target.sessionId);
+      if (!bound) {
+        throw new Error(`触发器绑定的会话不存在（可能已被删除）：${event.target.sessionId}`);
+      }
+      if (bound.agentId !== event.target.agentId) {
+        throw new Error(`触发器绑定的会话 ${event.target.sessionId} 不属于 agent ${event.target.agentId}`);
+      }
       // Lazy revival: idle-killed workers come back via getOrCreate.
       sessionId = event.target.sessionId;
     } else {

@@ -446,6 +446,8 @@ export interface CreateTriggerRequest {
   config?: Record<string, unknown>;
   prompt: string;
   sessionMode?: TriggerSessionMode;
+  /** reuse 模式下绑定已有会话；省略/空 = 首次触发时自动创建并固定下来。 */
+  sessionId?: string | null;
   /** 0/undefined = unbounded. */
   maxRuns?: number;
   enabled?: boolean;
@@ -456,6 +458,8 @@ export interface UpdateTriggerRequest {
   config?: Record<string, unknown>;
   prompt?: string;
   sessionMode?: TriggerSessionMode;
+  /** reuse 目标会话：值 = 换绑 / null 或 '' = 解绑回"首次触发时创建"；切到 new 时自动清空。 */
+  sessionId?: string | null;
   enabled?: boolean;
   maxRuns?: number | null;
   /** Recompute `next_at` from `config` (used after config edits). */

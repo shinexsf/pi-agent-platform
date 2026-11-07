@@ -7,7 +7,7 @@
  * tiny per-source renderer so the UI stays aligned with `SourceSpec.validateConfig`
  * (server is the single validator; this only shapes input).
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { AgentDTO, TriggerDTO, TriggerRunDTO, TriggerSourceInfo } from '@pi-agent-platform/shared-types';
 import AppIcon from '../../components/ui/AppIcon.vue';
@@ -22,6 +22,11 @@ const isNew = computed(() => !route.params.id || route.params.id === 'new');
 const triggerId = computed(() => (isNew.value ? '' : String(route.params.id)));
 
 const agents = ref<AgentDTO[]>([]);
+/** Agent 的会话（reuse 模式下可绑定其中一个；复用既有 GET /api/sessions?agent_id=）。 */
+const agentSessions = ref<Array<{ id: string; title: string | null; updatedAt?: number; model?: string }>>([]);
+const sessionsLoading = ref(false);
+/** 初次填充表单完成前不进 watch 的"换 agent 就清绑定"分支（否则编辑页加载时会被自己清掉）。 */
+const hydrated = ref(false);
 const sources = ref<TriggerSourceInfo[]>([]);
 const recentRuns = ref<TriggerRunDTO[]>([]);
 const saving = ref(false);
@@ -35,6 +40,8 @@ const form = ref({
   source: 'cron',
   prompt: '',
   sessionMode: 'new' as 'new' | 'reuse',
+  /** 空 = 首次触发时自动创建并固定；有值 = 固定写这个会话（必须是本 agent 的）。 */
+  sessionId: '' as string,
   enabled: true,
   maxRuns: '' as string,
   // source-specific
@@ -72,6 +79,47 @@ function buildConfig(): Record<string, unknown> {
   return {};
 }
 
+async function loadAgentSessions() {
+  if (!form.value.agentId) {
+    agentSessions.value = [];
+    return;
+  }
+  sessionsLoading.value = true;
+  try {
+    const res = await fetch(`/api/sessions?agent_id=${encodeURIComponent(form.value.agentId)}&pageSize=100`);
+    if (res.ok) {
+      const data = (await res.json()) as { sessions?: Array<{ id: string; title: string | null; updatedAt?: number; model?: string }> };
+      agentSessions.value = data.sessions ?? [];
+    }
+  } catch {
+    agentSessions.value = [];
+  } finally {
+    sessionsLoading.value = false;
+  }
+}
+
+function sessionLabel(id: string): string {
+  const s = agentSessions.value.find((x) => x.id === id);
+  if (!s) return `${id.slice(0, 8)}…（不在该 agent 的会话列表里）`;
+  const title = s.title || '(未命名)';
+  return `${title} · ${id.slice(0, 8)}${s.updatedAt ? ` · ${relativeTime(s.updatedAt)}` : ''}`;
+}
+
+// Bound session may point at a session outside the first page / another agent's
+// stale id — keep the option visible so the select never silently shows the wrong one.
+const boundSessionMissing = computed(
+  () => !!form.value.sessionId && !agentSessions.value.some((s) => s.id === form.value.sessionId),
+);
+
+// 换 agent 时旧会话列表作废（切换 agent 会清掉绑定）。
+watch(
+  () => form.value.agentId,
+  (next, prev) => {
+    if (hydrated.value && next !== prev) form.value.sessionId = '';
+    void loadAgentSessions();
+  },
+);
+
 async function loadAll() {
   loading.value = true;
   try {
@@ -86,6 +134,9 @@ async function loadAll() {
       const cfg = detail.config as Record<string, unknown>;
       if (typeof cfg.secretEnding === 'string') secretEnding.value = cfg.secretEnding;
     }
+    // 新建页也要立刻有会话可选（agentId 来自 query，watch 不会触发）。
+    await loadAgentSessions();
+    hydrated.value = true;
   } catch (err) {
     toast((err as Error).message, 'error');
   } finally {
@@ -99,6 +150,7 @@ function applyTrigger(t: TriggerDTO) {
   form.value.source = t.source;
   form.value.prompt = t.prompt;
   form.value.sessionMode = t.sessionMode;
+  form.value.sessionId = t.sessionId ?? '';
   form.value.enabled = t.enabled;
   form.value.maxRuns = t.maxRuns === null ? '' : String(t.maxRuns);
   const cfg = t.config as Record<string, unknown>;
@@ -129,6 +181,7 @@ async function save() {
         config: buildConfig(),
         prompt: form.value.prompt,
         sessionMode: form.value.sessionMode,
+        ...(form.value.sessionMode === 'reuse' ? { sessionId: form.value.sessionId || null } : {}),
         enabled: form.value.enabled,
         ...(form.value.maxRuns ? { maxRuns: Number(form.value.maxRuns) } : {}),
       });
@@ -144,6 +197,7 @@ async function save() {
         config: buildConfig(),
         prompt: form.value.prompt,
         sessionMode: form.value.sessionMode,
+        ...(form.value.sessionMode === 'reuse' ? { sessionId: form.value.sessionId || null } : {}),
         enabled: form.value.enabled,
         maxRuns: form.value.maxRuns ? Number(form.value.maxRuns) : null,
         reschedule: true,
@@ -342,6 +396,20 @@ const curlSample = computed(() => {
                 : '所有触发共用一个会话；idle 被回收后下次触发自动恢复' }}
             </span>
           </div>
+
+          <label v-if="form.sessionMode === 'reuse'" class="field">
+            <span>目标会话</span>
+            <select v-model="form.sessionId" class="control" :disabled="sessionsLoading || !form.agentId">
+              <option value="">（留空：首次触发时自动创建，之后固定复用）</option>
+              <option v-if="form.sessionId && boundSessionMissing" :value="form.sessionId">
+                {{ sessionLabel(form.sessionId) }}
+              </option>
+              <option v-for="s in agentSessions" :key="s.id" :value="s.id">{{ sessionLabel(s.id) }}</option>
+            </select>
+            <span class="hint">
+              选了就写这个会话（必须是本 agent 的会话，idle 回收后自动恢复）；选第一项可解绑回"自动创建"
+            </span>
+          </label>
 
           <label class="field">
             <span>最大运行次数</span>

@@ -15,6 +15,7 @@ import type { TriggerDTO, TriggerSessionMode } from '@pi-agent-platform/shared-t
 import type { TriggerRuntime } from '../services/trigger/runtime.js';
 import { getTriggerSource, listTriggerSources } from '../services/trigger/sources.js';
 import { generateWebhookSecret } from '../services/trigger/sources/webhook.js';
+import { resolveSessionBinding } from '../services/trigger/session-binding.js';
 
 /** Per-agent trigger cap (platform guard, not a source concern). */
 export const MAX_TRIGGERS_PER_AGENT = 10;
@@ -95,6 +96,17 @@ export function createTriggersRouter(agentRepo: AgentRepo, rt: TriggerRuntime) {
     }
 
     const sessionMode: TriggerSessionMode = body.sessionMode === 'reuse' ? 'reuse' : 'new';
+    // reuse 目标会话：有值 = 绑定已有会话（必须是本 agent 的），空 = 首次触发时创建。
+    let sessionId: string | null;
+    try {
+      sessionId = resolveSessionBinding(rt.sessionRepo, {
+        agentId: body.agentId,
+        sessionMode,
+        sessionId: body.sessionId,
+      });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
     const maxRuns =
       body.maxRuns === undefined || body.maxRuns === null || body.maxRuns === 0
         ? (spec.defaultMaxRuns ?? null)
@@ -112,6 +124,7 @@ export function createTriggersRouter(agentRepo: AgentRepo, rt: TriggerRuntime) {
       enabled: body.enabled !== false,
       nextAt,
       maxRuns,
+      sessionId,
     });
     scheduler.reschedule();
     const dto = redactSecret(toDTOWithAgent(created, agentRepo));
@@ -163,6 +176,25 @@ export function createTriggersRouter(agentRepo: AgentRepo, rt: TriggerRuntime) {
       body.reschedule || body.config !== undefined || reEnabling
         ? (spec.computeNextAt?.(config, Date.now()) ?? null)
         : undefined;
+    // 会话绑定：切到 new 一律清空；reuse 下带了 sessionId 就校验并换绑/解绑，
+    // 只改 sessionMode 不动 sessionId 时按原有绑定校验（防止绕道改成他 agent 的会话）。
+    let sessionId: string | null | undefined;
+    if (body.sessionId !== undefined || body.sessionMode !== undefined) {
+      const sessionMode = body.sessionMode ?? existing.sessionMode;
+      try {
+        sessionId =
+          sessionMode === 'reuse'
+            ? resolveSessionBinding(rt.sessionRepo, {
+                agentId: existing.agentId,
+                sessionMode,
+                sessionId: body.sessionId === undefined ? existing.sessionId : body.sessionId,
+              })
+            : null;
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
+    }
+
     const effectiveMaxRuns = body.maxRuns === undefined ? existing.maxRuns : body.maxRuns;
     if (body.enabled === true && effectiveMaxRuns !== null && existing.runsCount >= effectiveMaxRuns) {
       return c.json(
@@ -176,6 +208,7 @@ export function createTriggersRouter(agentRepo: AgentRepo, rt: TriggerRuntime) {
       config,
       prompt: body.prompt,
       sessionMode: body.sessionMode,
+      ...(sessionId !== undefined ? { sessionId } : {}),
       enabled: body.enabled,
       maxRuns: body.maxRuns === undefined ? undefined : body.maxRuns,
       ...(nextAt !== undefined ? { nextAt } : {}),
