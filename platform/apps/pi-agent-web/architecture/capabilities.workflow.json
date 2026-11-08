@@ -1,0 +1,324 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "capabilities 控制面：一次 callServer 怎么被放行",
+    "locale": "zh-CN",
+    "output": "platform/apps/pi-agent-web/public/architecture/capabilities.workflow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "db5e363efdea4e39595645d90e7ddeb70ccfa83e"
+    }
+  },
+  "lanes": [
+    {
+      "id": "worker",
+      "label": "Worker（session 进程）"
+    },
+    {
+      "id": "master",
+      "label": "Master 控制面"
+    },
+    {
+      "id": "policy",
+      "label": "授权与拒绝",
+      "variant": "exception"
+    },
+    {
+      "id": "audit",
+      "label": "审计"
+    }
+  ],
+  "phases": [
+    {
+      "id": "call",
+      "label": "调用",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "judge",
+      "label": "判定与授权",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "exec",
+      "label": "执行与留痕",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "double-gate",
+      "label": "授权双道闸",
+      "lane": "policy",
+      "fromCol": 3,
+      "toCol": 4,
+      "variant": "security"
+    },
+    {
+      "id": "audit-trail",
+      "label": "四态审计",
+      "lane": "audit",
+      "fromCol": 1,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "call",
+    "dispatch",
+    "lookup",
+    "authz",
+    "handler",
+    "done"
+  ],
+  "nodes": [
+    {
+      "id": "call",
+      "lane": "worker",
+      "col": 0,
+      "type": "backend",
+      "label": "callServer",
+      "sublabel": "method + params",
+      "tag": "prompt 可见 = serverBuiltinTools",
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/tools.ts",
+          "line": 207,
+          "end_line": 217,
+          "label": "callServer 工具定义"
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "lane": "worker",
+      "col": 5,
+      "type": "backend",
+      "label": "结果回 worker",
+      "sublabel": "结果或可用方法清单",
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/tools.ts",
+          "line": 236,
+          "end_line": 236,
+          "label": "错误回显"
+        }
+      ]
+    },
+    {
+      "id": "dispatch",
+      "lane": "master",
+      "col": 1,
+      "type": "backend",
+      "label": "dispatch 统一入口",
+      "sublabel": "解析 ctx",
+      "tag": "sessions 行优先",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/index.ts",
+          "line": 107,
+          "end_line": 107,
+          "label": "dispatchWithCtx"
+        }
+      ]
+    },
+    {
+      "id": "lookup",
+      "lane": "master",
+      "col": 2,
+      "type": "backend",
+      "label": "查注册表",
+      "sublabel": "method 是否存在",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/registry.ts",
+          "line": 41,
+          "end_line": 41,
+          "label": "getCapability"
+        }
+      ]
+    },
+    {
+      "id": "handler",
+      "lane": "master",
+      "col": 4,
+      "type": "backend",
+      "label": "handler 执行",
+      "sublabel": "repo / workerPool 薄封装",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/handlers/session.ts",
+          "line": 31,
+          "end_line": 31,
+          "label": "session 能力"
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "lane": "policy",
+      "col": 1,
+      "type": "security",
+      "label": "未知方法",
+      "sublabel": "附可用方法列表",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/index.ts",
+          "line": 107,
+          "end_line": 107,
+          "label": "dispatch 分支"
+        }
+      ]
+    },
+    {
+      "id": "authz",
+      "lane": "policy",
+      "col": 3,
+      "type": "security",
+      "label": "双道闸校验",
+      "sublabel": "allowlist × own 安全网",
+      "tag": "固定 read=all / write=own",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/authorize.ts",
+          "line": 32,
+          "end_line": 34,
+          "label": "固定策略与拒绝错误"
+        }
+      ]
+    },
+    {
+      "id": "denied",
+      "lane": "policy",
+      "col": 4,
+      "type": "security",
+      "label": "Capability denied",
+      "sublabel": "越权 / 非 own",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/authorize.ts",
+          "line": 34,
+          "end_line": 34,
+          "label": "CapabilityDeniedError"
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "lane": "audit",
+      "col": 5,
+      "type": "database",
+      "label": "pino 审计",
+      "sublabel": "ok / denied / unknown / error",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/capabilities/audit.ts",
+          "line": 33,
+          "end_line": 33,
+          "label": "auditCapability"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "call-dispatch",
+      "from": "call",
+      "to": "dispatch",
+      "label": "invokeCapability",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "dispatch-lookup",
+      "from": "dispatch",
+      "to": "lookup",
+      "label": "业务方法?",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "lookup-authz",
+      "from": "lookup",
+      "to": "authz",
+      "label": "在注册表",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "lookup-unknown",
+      "from": "lookup",
+      "to": "unknown",
+      "label": "不在注册表",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "authz-denied",
+      "from": "authz",
+      "to": "denied",
+      "label": "拒绝",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "authz-handler",
+      "from": "authz",
+      "to": "handler",
+      "label": "通过",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "handler-done",
+      "from": "handler",
+      "to": "done",
+      "label": "结果",
+      "variant": "emphasis",
+      "role": "return"
+    },
+    {
+      "id": "dispatch-audit",
+      "from": "dispatch",
+      "to": "audit",
+      "label": "每次调用一条",
+      "variant": "dashed",
+      "role": "async"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "双道闸：看见 ≠ 允许",
+      "items": [
+        "道闸 1（prompt 层）：serverBuiltinTools 决定 callServer 注不注入，模型根本看不见工具",
+        "道闸 2（强制层）：dispatch 时校验显式 allowlist + 硬编码 own 安全网，归属解析不到就 fail closed"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "可见性 = 强制性",
+      "items": [
+        "同一个 resolve 函数被五处共享：授权判定、spawn 时的 description 过滤、list、detail、未知方法可用列表",
+        "改授权语义只改 registry 一处，master 是唯一强制点；worker 不做任何授权判断"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "会话快照语义",
+      "items": [
+        "session 行有 capabilities key（数组或显式 null）就用它，缺 key 才回落 agent 行",
+        "null（显式未授权）≠ undefined（没快照过）；能力清单缺失即空，没有全局默认层"
+      ]
+    }
+  ]
+}

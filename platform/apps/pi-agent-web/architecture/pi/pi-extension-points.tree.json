@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "pi 扩展点全景",
+    "locale": "zh-CN",
+    "subtitle": "pi 1.3.0 · ExtensionAPI 是扩展能碰到的全部面；括号里是事件/方法名",
+    "output": "platform/apps/pi-agent-web/public/architecture/pi/pi-extension-points.tree.html",
+    "quality_profile": "showcase"
+  },
+  "nodes": [
+    {
+      "id": "api",
+      "label": "ExtensionAPI",
+      "sublabel": "export default (pi) => …"
+    },
+    {
+      "id": "on",
+      "label": "pi.on() 生命周期 hook",
+      "parent": "api",
+      "sublabel": "41 个事件 · 可观察/可改/可取消"
+    },
+    {
+      "id": "on-session",
+      "label": "会话域 11",
+      "parent": "on",
+      "sublabel": "start/shutdown/info_changed/before_switch/before_fork/before_compact/compact/compact_failed/before_tree/tree/mcp_servers_change"
+    },
+    {
+      "id": "on-run",
+      "label": "运行域 7",
+      "parent": "on",
+      "sublabel": "before_agent_start/agent_start/agent_end/agent_before_settle/agent_settled/turn_start/turn_end"
+    },
+    {
+      "id": "on-message",
+      "label": "消息与输入 9",
+      "parent": "on",
+      "sublabel": "message_start/update/end/context/context_with_system/input/user_bash/ui_prompt_start/ui_prompt_end"
+    },
+    {
+      "id": "on-tool",
+      "label": "工具域 5",
+      "parent": "on",
+      "sublabel": "tool_call/tool_result/tool_execution_start/update/end"
+    },
+    {
+      "id": "on-provider",
+      "label": "provider 域 5",
+      "parent": "on",
+      "sublabel": "before_provider_request/before_provider_headers/after_provider_response/provider_stream_event/cache_warming_decision"
+    },
+    {
+      "id": "on-select",
+      "label": "资源与选择 4",
+      "parent": "on",
+      "sublabel": "resources_discover/project_trust/model_select/thinking_level_select"
+    },
+    {
+      "id": "tool",
+      "label": "pi.registerTool()",
+      "parent": "api",
+      "sublabel": "模型可见的工具：name + 描述 + TypeBox schema + execute()"
+    },
+    {
+      "id": "cmd",
+      "label": "命令与快捷键",
+      "parent": "api",
+      "sublabel": "registerCommand / registerShortcut / registerFlag / getFlag"
+    },
+    {
+      "id": "provider",
+      "label": "provider 与 MCP",
+      "parent": "api",
+      "sublabel": "registerProvider / registerMcpServer / registerVirtualModel（各带 unregister）"
+    },
+    {
+      "id": "inject",
+      "label": "注入消息与条目",
+      "parent": "api",
+      "sublabel": "sendUserMessage / sendMessage / appendEntry / setLabel / setSessionName"
+    },
+    {
+      "id": "control",
+      "label": "会话控制",
+      "parent": "api",
+      "sublabel": "setActiveTools / setModel / setThinkingLevel / getSettings / getCommands"
+    },
+    {
+      "id": "render",
+      "label": "渲染（TUI）",
+      "parent": "api",
+      "sublabel": "registerMessageRenderer / registerEntryRenderer / registerToolRenderer / registerMarkdownTransformer"
+    },
+    {
+      "id": "bus",
+      "label": "pi.events",
+      "parent": "api",
+      "sublabel": "扩展之间通信的 EventBus"
+    },
+    {
+      "id": "ctx",
+      "label": "ctx（handler 第二参数）",
+      "parent": "api",
+      "sublabel": "ExtensionContext · 不是注册口，是运行期能力"
+    },
+    {
+      "id": "ctx-session",
+      "label": "会话动作",
+      "parent": "ctx",
+      "sublabel": "newSession / fork / switch / waitForIdle / compact / shutdown"
+    },
+    {
+      "id": "ctx-state",
+      "label": "状态查询",
+      "parent": "ctx",
+      "sublabel": "getModel / isIdle / isProjectTrusted / getContextUsage / getSystemPrompt"
+    },
+    {
+      "id": "ctx-nested",
+      "label": "嵌套能力",
+      "parent": "ctx",
+      "sublabel": "executeTool / signal（abort 联动）/ ui（TUI 原语）"
+    },
+    {
+      "id": "factory",
+      "label": "装载位",
+      "parent": "api",
+      "sublabel": "~/.pi/agent/extensions/ 或 .pi/extensions/，也可 --extension 直接加载"
+    },
+    {
+      "id": "pi-ext",
+      "label": "pi package",
+      "parent": "factory",
+      "sublabel": "npm / git 分发（pi install）"
+    },
+    {
+      "id": "local-ext",
+      "label": "本地文件",
+      "parent": "factory",
+      "sublabel": "jiti 直跑 .ts，无需编译"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "能观察到 ≠ 能改结果",
+      "items": [
+        "只有带 Result 类型的事件才能改：before_agent_start（prompt/sections/tools）、message_end（换消息）、tool_call（改参数或阻止）、tool_result（链式合成）、context（改对话消息）、input（改用户输入）",
+        "其余是通知型：agent_start / agent_end / agent_settled / message_start 等，返回值无效"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "factory 里别起长生命周期资源",
+      "items": [
+        "有些调用会加载扩展但不启动会话，所以 socket / watcher / timer 要放到 session_start 或具体命令里",
+        "session_shutdown 必须幂等；纯 SDK 嵌入时 dispose() 不发它 → 资源会泄漏到进程退出"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "同名注册的赢家",
+      "items": [
+        "工具同名：先注册者赢（packages 顺序），冲突只进 extensionsResult.errors，不卸载任何一方",
+        "行为由扩展顺序决定 → 需要稳定顺序就别让两个扩展抢同一个名字"
+      ]
+    }
+  ]
+}

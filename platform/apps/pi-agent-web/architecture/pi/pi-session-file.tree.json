@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "pi 对话历史文件结构",
+    "locale": "zh-CN",
+    "subtitle": "pi 1.3.0 · ~/.pi/agent/sessions/--<path>--/<ts>_<id>.jsonl，一行一个 entry，靠 id/parentId 组成树",
+    "output": "platform/apps/pi-agent-web/public/architecture/pi/pi-session-file.tree.html",
+    "quality_profile": "showcase"
+  },
+  "nodes": [
+    {
+      "id": "file",
+      "label": "session.jsonl",
+      "sublabel": "JSONL · 追加写 · 一行一个 entry"
+    },
+    {
+      "id": "header",
+      "label": "session（首行 header）",
+      "parent": "file",
+      "sublabel": "version 3 · id · timestamp · cwd · 可选 parentSession"
+    },
+    {
+      "id": "body",
+      "label": "对话本体（进 LLM 上下文）",
+      "parent": "file",
+      "sublabel": "type: message · 承载 AgentMessage"
+    },
+    {
+      "id": "m-user",
+      "label": "message · user",
+      "parent": "body",
+      "sublabel": "content: string 或内容块数组"
+    },
+    {
+      "id": "m-assistant",
+      "label": "message · assistant",
+      "parent": "body",
+      "sublabel": "provider/model/usage/stopReason/thinkingLevel + 内容块"
+    },
+    {
+      "id": "m-tool",
+      "label": "message · toolResult",
+      "parent": "body",
+      "sublabel": "toolCallId / toolName / isError"
+    },
+    {
+      "id": "m-system",
+      "label": "message · system",
+      "parent": "body",
+      "sublabel": "sections + toolsAdded/toolsRemoved（按名 patch，null 删除）"
+    },
+    {
+      "id": "rewrite",
+      "label": "上下文改写",
+      "parent": "file",
+      "sublabel": "只影响后续请求，原始行不删"
+    },
+    {
+      "id": "compaction",
+      "label": "compaction",
+      "parent": "rewrite",
+      "sublabel": "summary + firstKeptEntryId（必填）+ systemMessage 检查点"
+    },
+    {
+      "id": "context-edit",
+      "label": "context_edit",
+      "parent": "rewrite",
+      "sublabel": "targetId + replacement（null = 从上下文剔除）"
+    },
+    {
+      "id": "branch",
+      "label": "branch_summary",
+      "parent": "rewrite",
+      "sublabel": "fromId + summary（切分支时总结废弃路径）"
+    },
+    {
+      "id": "state",
+      "label": "会话状态",
+      "parent": "file",
+      "sublabel": "回放顺序即当前值"
+    },
+    {
+      "id": "model",
+      "label": "model_change",
+      "parent": "state",
+      "sublabel": "provider + modelId（可为 virtual model）"
+    },
+    {
+      "id": "thinking",
+      "label": "thinking_level_change",
+      "parent": "state",
+      "sublabel": "thinkingLevel"
+    },
+    {
+      "id": "info",
+      "label": "session_info",
+      "parent": "state",
+      "sublabel": "name（/name 或 pi.setSessionName）"
+    },
+    {
+      "id": "label",
+      "label": "label",
+      "parent": "state",
+      "sublabel": "targetId + label（书签，可清空）"
+    },
+    {
+      "id": "ext",
+      "label": "扩展与统计",
+      "parent": "file",
+      "sublabel": "两条不进上下文，一条进"
+    },
+    {
+      "id": "custom",
+      "label": "custom",
+      "parent": "ext",
+      "sublabel": "customType + data · 扩展状态，不进 LLM 上下文"
+    },
+    {
+      "id": "custom-msg",
+      "label": "custom_message",
+      "parent": "ext",
+      "sublabel": "customType + content + display · 进上下文（display 只控 TUI）"
+    },
+    {
+      "id": "usage",
+      "label": "usage",
+      "parent": "ext",
+      "sublabel": "kind + usage · 不进上下文，只计入 token/成本（如 cache_warm）"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "位置与版本",
+      "items": [
+        "路径：~/.pi/agent/sessions/--<路径打平>--/<时间戳>_<session-id>.jsonl；--session-id 可自定义",
+        "v1 线性 → v2 id/parentId 树 → v3 把 hookMessage 角色统一成 custom；加载旧文件时自动迁移到 v3"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "树不是一个文件一棵",
+      "items": [
+        "branch 不新建文件：在原文件里从更早的 entry 继续长孩子；leaf 就是\"你现在在哪\"",
+        "模型上下文 = 从 leaf 回溯到 root 的路径（再叠加 compaction / context_edit）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "回放怎么还原",
+      "items": [
+        "system prompt 没有独立状态行：第一条 system 消息带全部 sections + 工具声明，之后变更以 system 消息按名 patch（null 删除），顺序回放即当前值",
+        "compaction 之前的条目被 summary 替代，firstKeptEntryId 起保留；retain-none 时它指向自己",
+        "context_edit 只改未来上下文：raw 行、UI、导出、计费都不变，切到 edit 之前的节点还能看到原文"
+      ]
+    }
+  ]
+}

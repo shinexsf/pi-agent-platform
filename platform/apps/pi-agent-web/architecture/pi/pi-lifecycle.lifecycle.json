@@ -1,0 +1,203 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "pi 运行与事件生命周期",
+    "locale": "zh-CN",
+    "subtitle": "pi 1.3.0 · 一次 run 从输入到 agent_settled，以及换会话才发的 session_start / session_shutdown",
+    "output": "platform/apps/pi-agent-web/public/architecture/pi/pi-lifecycle.lifecycle.html",
+    "quality_profile": "showcase"
+  },
+  "mainPath": [
+    "idle",
+    "starting",
+    "turn",
+    "settling",
+    "settled"
+  ],
+  "states": [
+    {
+      "id": "idle",
+      "type": "start",
+      "label": "空闲",
+      "sublabel": "没有进行中的 run",
+      "tag": "可接收输入",
+      "step": "01"
+    },
+    {
+      "id": "starting",
+      "type": "active",
+      "label": "启动 run",
+      "sublabel": "before_agent_start",
+      "tag": "此刻已算 busy",
+      "step": "02"
+    },
+    {
+      "id": "turn",
+      "type": "active",
+      "label": "一轮 turn",
+      "sublabel": "agent_start → turn_start",
+      "tag": "模型流式 + 工具",
+      "step": "03"
+    },
+    {
+      "id": "settling",
+      "type": "decision",
+      "label": "agent_before_settle",
+      "sublabel": "最后可行动边界",
+      "tag": "可 continue 一次",
+      "step": "04"
+    },
+    {
+      "id": "settled",
+      "type": "success",
+      "label": "agent_settled",
+      "sublabel": "不会再自动继续",
+      "tag": "notify only",
+      "step": "05"
+    },
+    {
+      "id": "tooling",
+      "type": "active",
+      "label": "工具执行",
+      "sublabel": "tool_execution_start → end",
+      "tag": "可并行"
+    },
+    {
+      "id": "compacting",
+      "type": "active",
+      "label": "压缩上下文",
+      "sublabel": "compaction_start → end",
+      "tag": "threshold / overflow / manual"
+    },
+    {
+      "id": "retrying",
+      "type": "waiting",
+      "label": "自动重试",
+      "sublabel": "agent_end.willRetry = true",
+      "tag": "pi 内部"
+    },
+    {
+      "id": "switching",
+      "type": "active",
+      "label": "换会话",
+      "sublabel": "/new · /resume · /fork · reload",
+      "tag": "唯一发 session_start 的路径"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "idle-starting",
+      "from": "idle",
+      "to": "starting",
+      "label": "prompt()"
+    },
+    {
+      "id": "starting-turn",
+      "from": "starting",
+      "to": "turn",
+      "label": "agent_start"
+    },
+    {
+      "id": "turn-tooling",
+      "from": "turn",
+      "to": "tooling",
+      "label": "有 toolCall"
+    },
+    {
+      "id": "tooling-turn",
+      "from": "tooling",
+      "to": "turn",
+      "label": "toolResult"
+    },
+    {
+      "id": "turn-compacting",
+      "from": "turn",
+      "to": "compacting",
+      "label": "超阈值",
+      "variant": "dashed"
+    },
+    {
+      "id": "compacting-turn",
+      "from": "compacting",
+      "to": "turn",
+      "label": "重建"
+    },
+    {
+      "id": "turn-retrying",
+      "from": "turn",
+      "to": "retrying",
+      "label": "error",
+      "variant": "security"
+    },
+    {
+      "id": "retrying-turn",
+      "from": "retrying",
+      "to": "turn",
+      "label": "重试"
+    },
+    {
+      "id": "turn-settling",
+      "from": "turn",
+      "to": "settling",
+      "label": "agent_end"
+    },
+    {
+      "id": "settling-turn",
+      "from": "settling",
+      "to": "turn",
+      "label": "continue:true",
+      "variant": "emphasis"
+    },
+    {
+      "id": "settling-settled",
+      "from": "settling",
+      "to": "settled",
+      "label": "无 continuation"
+    },
+    {
+      "id": "settled-idle",
+      "from": "settled",
+      "to": "idle",
+      "label": "等下一条"
+    },
+    {
+      "id": "idle-switching",
+      "from": "idle",
+      "to": "switching",
+      "label": "/new · /resume"
+    },
+    {
+      "id": "switching-idle",
+      "from": "switching",
+      "to": "idle",
+      "label": "session_start"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "agent_end 不是结束",
+      "items": [
+        "agent_end 之后 pi 还可能 auto-retry、auto-compact、跑队列里的 followUp → 所以 agent_end 带 willRetry",
+        "busy 从 before_agent_start 就开始算：此时发消息会进同一趟 run，而不是新开一趟"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "session_start / session_shutdown 只在换会话时发",
+      "items": [
+        "SDK 的 createAgentSession 不调 bindExtensions → 嵌入门必须自己 await session.bindExtensions({...})，否则挂 session_start 的扩展永不初始化",
+        "reason 有 5 种：startup / reload / new / resume / fork；dispose() 不发 shutdown"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "两个可行动边界",
+      "items": [
+        "turn_end 与 agent_before_settle 的 handler 可以链式追加 custom / custom_message / context_edit / compaction，并 return continue: true",
+        "agent_settled 只是通知：它保证 pi 不会再自动继续，适合挂\"首轮结束后命名\"这类副作用"
+      ]
+    }
+  ]
+}

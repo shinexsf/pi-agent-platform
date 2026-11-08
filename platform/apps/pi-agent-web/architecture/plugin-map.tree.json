@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "插件扩展点地图",
+    "locale": "zh-CN",
+    "subtitle": "按执行位置分：每个叶子都是今天真实存在的挂载点，标出只有单点的地方",
+    "output": "platform/apps/pi-agent-web/public/architecture/plugin-map.tree.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "db5e363efdea4e39595645d90e7ddeb70ccfa83e"
+    }
+  },
+  "nodes": [
+    {
+      "id": "root",
+      "label": "插件扩展点",
+      "sublabel": "register · init · mount",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 284,
+          "end_line": 305,
+          "label": "PluginRegistrationHost"
+        }
+      ]
+    },
+    {
+      "id": "srv",
+      "label": "server 进程",
+      "parent": "root",
+      "sublabel": "插件代码与平台同权"
+    },
+    {
+      "id": "server-facet",
+      "label": "server facet · init(host)",
+      "parent": "srv",
+      "sublabel": "提供 HTTP 端点",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 305,
+          "end_line": 305,
+          "label": "PluginServerInit"
+        }
+      ]
+    },
+    {
+      "id": "routes",
+      "label": "global.routes",
+      "parent": "server-facet",
+      "sublabel": "自建路由 → 前缀 /api/p/<id>/",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 202,
+          "end_line": 208,
+          "label": "RouteRegistration"
+        }
+      ]
+    },
+    {
+      "id": "triggers-fire",
+      "label": "triggers.fire / list",
+      "parent": "server-facet",
+      "sublabel": "进程内触发，不过 HTTP",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 277,
+          "end_line": 283,
+          "label": "PluginTriggersHost"
+        }
+      ]
+    },
+    {
+      "id": "triggers-source",
+      "label": "triggerSources.register",
+      "parent": "server-facet",
+      "sublabel": "与 cron / once / webhook 同表",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 260,
+          "end_line": 275,
+          "label": "TriggerSourceRegistration"
+        }
+      ]
+    },
+    {
+      "id": "web-register",
+      "label": "web facet · register(host)",
+      "parent": "srv",
+      "sublabel": "声明界面要什么（DOM-free）",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 308,
+          "end_line": 308,
+          "label": "PluginWebRegister"
+        }
+      ]
+    },
+    {
+      "id": "menus",
+      "label": "global.menus",
+      "parent": "web-register",
+      "sublabel": "parent 今天只有 config",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 169,
+          "end_line": 169,
+          "label": "PluginMenuParent"
+        }
+      ]
+    },
+    {
+      "id": "pages",
+      "label": "global.pages",
+      "parent": "web-register",
+      "sublabel": "→ /plugin-page/:id/:page",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-web/src/main.ts",
+          "line": 197,
+          "end_line": 197,
+          "label": "插件页静态路由"
+        }
+      ]
+    },
+    {
+      "id": "surfaces",
+      "label": "session.surfaces",
+      "parent": "web-register",
+      "sublabel": "槽位今天只有 chat.rail.right",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 49,
+          "end_line": 49,
+          "label": "PluginSlotName"
+        }
+      ]
+    },
+    {
+      "id": "toolcards",
+      "label": "session.toolCards",
+      "parent": "web-register",
+      "sublabel": "replace 整卡 / regions 局部",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 210,
+          "end_line": 226,
+          "label": "ToolCardRegistration"
+        }
+      ]
+    },
+    {
+      "id": "wrk",
+      "label": "worker 进程",
+      "parent": "root",
+      "sublabel": "每个会话一个"
+    },
+    {
+      "id": "worker-facet",
+      "label": "worker facet · activate(ctx)",
+      "parent": "wrk",
+      "sublabel": "工具与中间件",
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 642,
+          "end_line": 650,
+          "label": "插件 facet 装载"
+        }
+      ]
+    },
+    {
+      "id": "emit",
+      "label": "bridge.emit",
+      "parent": "worker-facet",
+      "sublabel": "→ plugin_event → SSE plugin",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 320,
+          "end_line": 331,
+          "label": "PluginWorkerBridge"
+        }
+      ]
+    },
+    {
+      "id": "onemit",
+      "label": "bridge.onEmit",
+      "parent": "worker-facet",
+      "sublabel": "浏览器 emit → worker",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 320,
+          "end_line": 331,
+          "label": "PluginWorkerBridge"
+        }
+      ]
+    },
+    {
+      "id": "bridge-log",
+      "label": "bridge.log",
+      "parent": "worker-facet",
+      "sublabel": "自动带 pluginId 进主日志",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 320,
+          "end_line": 331,
+          "label": "PluginWorkerBridge"
+        }
+      ]
+    },
+    {
+      "id": "ext-facet",
+      "label": "extension facet",
+      "parent": "wrk",
+      "sublabel": "pi 原生扩展写法",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 333,
+          "end_line": 336,
+          "label": "ExtensionFacetContext"
+        }
+      ]
+    },
+    {
+      "id": "ext-tools",
+      "label": "pi 工具 / 工具拦截",
+      "parent": "ext-facet",
+      "sublabel": "与原生扩展同一份代码",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 333,
+          "end_line": 336,
+          "label": "bridge 可选"
+        }
+      ]
+    },
+    {
+      "id": "ext-bridged",
+      "label": "bridged mode",
+      "parent": "ext-facet",
+      "sublabel": "inline 包装注入 bridge",
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 647,
+          "end_line": 650,
+          "label": "bridgeFor"
+        }
+      ]
+    },
+    {
+      "id": "web",
+      "label": "浏览器",
+      "parent": "root",
+      "sublabel": "SPA 内，只能渲染进 el"
+    },
+    {
+      "id": "web-mount",
+      "label": "web facet · mount(el, host)",
+      "parent": "web",
+      "sublabel": "渲染本体",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/web.ts",
+          "line": 95,
+          "end_line": 95,
+          "label": "PluginWebMount"
+        }
+      ]
+    },
+    {
+      "id": "host-data",
+      "label": "host.data",
+      "parent": "web-mount",
+      "sublabel": "subscribe 下行 / emit 上行",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/web.ts",
+          "line": 51,
+          "end_line": 66,
+          "label": "PluginWebHost.data"
+        }
+      ]
+    },
+    {
+      "id": "host-api",
+      "label": "host.api",
+      "parent": "web-mount",
+      "sublabel": "get / post / put / del / blob",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/web.ts",
+          "line": 67,
+          "end_line": 76,
+          "label": "PluginWebHost.api"
+        }
+      ]
+    },
+    {
+      "id": "host-ui",
+      "label": "host.ui",
+      "parent": "web-mount",
+      "sublabel": "sheet / toast",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/web.ts",
+          "line": 77,
+          "end_line": 85,
+          "label": "PluginWebHost.ui"
+        }
+      ]
+    },
+    {
+      "id": "host-toolcard",
+      "label": "host.toolCard",
+      "parent": "web-mount",
+      "sublabel": "卡片专属 · shell",
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/web.ts",
+          "line": 34,
+          "end_line": 48,
+          "label": "ToolCardHostExtras"
+        }
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "单点不是遗漏",
+      "items": [
+        "menus 的 parent 只允许 config、surface 只有 chat.rail.right —— 有真客户才扩，不为假设的第三方提前定规则",
+        "新增一个槽位 = PLUGIN_SLOT_NAMES 加一项 + 宿主加渲染；注册契约不变"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "注册在 server，渲染在浏览器",
+      "items": [
+        "register(host) 由 server 进程执行，注册表只有一份真相 → 三个标签页看到同一份贡献",
+        "代价：register 必须 DOM-free，靠约定 + registerError 可见，不能静态强制"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "新开一类口子的纪律",
+      "items": [
+        "未知槽位 / id 冲突 / register 抛错 → rejected 或 registerError，绝不被静默吞掉",
+        "本地 ideas 记录的前瞻：插件若再开放 capability 方法与 WebUI 表单面，必须同样强制声明 access / scoped / 生效时机"
+      ]
+    }
+  ]
+}

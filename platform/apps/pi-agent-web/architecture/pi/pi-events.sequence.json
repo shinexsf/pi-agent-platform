@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "一条消息在 pi 里发出哪些事件",
+    "locale": "zh-CN",
+    "subtitle": "pi 1.3.0 · 顺序取自 agent-loop.js 的 emit 点与 AgentSession._handleAgentEvent",
+    "output": "platform/apps/pi-agent-web/public/architecture/pi/pi-events.sequence.html",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "input",
+      "type": "external",
+      "label": "输入",
+      "sublabel": "prompt / steer"
+    },
+    {
+      "id": "session",
+      "type": "backend",
+      "label": "AgentSession",
+      "sublabel": "pi 会话对象"
+    },
+    {
+      "id": "loop",
+      "type": "backend",
+      "label": "agent-loop",
+      "sublabel": "pi-agent-core"
+    },
+    {
+      "id": "ext",
+      "type": "backend",
+      "label": "扩展",
+      "sublabel": "pi.on()"
+    },
+    {
+      "id": "provider",
+      "type": "cloud",
+      "label": "provider",
+      "sublabel": "模型 API"
+    },
+    {
+      "id": "file",
+      "type": "database",
+      "label": "session.jsonl",
+      "sublabel": "entry 追加"
+    },
+    {
+      "id": "sink",
+      "type": "external",
+      "label": "订阅者",
+      "sublabel": "TUI / SDK / SSE"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 320,
+      "label": "① 输入与启动"
+    },
+    {
+      "from": 336,
+      "to": 500,
+      "label": "② run 开始"
+    },
+    {
+      "from": 522,
+      "to": 820,
+      "label": "③ 模型一轮"
+    },
+    {
+      "from": 836,
+      "to": 1144,
+      "label": "④ 工具执行"
+    },
+    {
+      "from": 1166,
+      "to": 1420,
+      "label": "⑤ 收尾"
+    }
+  ],
+  "messages": [
+    {
+      "from": "input",
+      "to": "session",
+      "y": 180,
+      "label": "prompt()",
+      "variant": "emphasis"
+    },
+    {
+      "from": "session",
+      "to": "ext",
+      "y": 224,
+      "label": "before_agent_start",
+      "variant": "default"
+    },
+    {
+      "from": "ext",
+      "to": "session",
+      "y": 268,
+      "label": "sections / tools",
+      "variant": "return"
+    },
+    {
+      "from": "session",
+      "to": "loop",
+      "y": 312,
+      "label": "agent.prompt()",
+      "variant": "emphasis"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 344,
+      "label": "agent_start",
+      "variant": "default"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 388,
+      "label": "turn_start",
+      "variant": "default"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 432,
+      "label": "message_start/end",
+      "variant": "default",
+      "note": "user 消息在 turn 开头就落一次"
+    },
+    {
+      "from": "session",
+      "to": "sink",
+      "y": 476,
+      "label": "queue_update",
+      "variant": "dashed"
+    },
+    {
+      "from": "loop",
+      "to": "provider",
+      "y": 518,
+      "label": "请求：system + tools",
+      "variant": "emphasis"
+    },
+    {
+      "from": "provider",
+      "to": "loop",
+      "y": 562,
+      "label": "流式 delta",
+      "variant": "return"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 606,
+      "label": "message_start",
+      "variant": "default"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 650,
+      "label": "message_update ×N",
+      "variant": "dashed"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 702,
+      "label": "message_end",
+      "variant": "default"
+    },
+    {
+      "from": "session",
+      "to": "file",
+      "y": 746,
+      "label": "append message",
+      "variant": "emphasis"
+    },
+    {
+      "from": "session",
+      "to": "sink",
+      "y": 790,
+      "label": "entry_appended",
+      "variant": "dashed"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 862,
+      "label": "tool_execution_start",
+      "variant": "default"
+    },
+    {
+      "from": "session",
+      "to": "ext",
+      "y": 906,
+      "label": "tool_call",
+      "variant": "security",
+      "note": "可改参数 / 阻止执行"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 962,
+      "label": "tool_execution_update ×N",
+      "variant": "dashed"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 1006,
+      "label": "tool_execution_end",
+      "variant": "default"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 1050,
+      "label": "message_start/end",
+      "variant": "default",
+      "note": "role = toolResult"
+    },
+    {
+      "from": "session",
+      "to": "file",
+      "y": 1104,
+      "label": "append toolResult",
+      "variant": "emphasis"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 1148,
+      "label": "turn_end",
+      "variant": "default"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 1198,
+      "label": "turn_start",
+      "variant": "dashed",
+      "note": "还有 tool 结果就再来一轮"
+    },
+    {
+      "from": "loop",
+      "to": "sink",
+      "y": 1252,
+      "label": "agent_end",
+      "variant": "default",
+      "note": "带 willRetry"
+    },
+    {
+      "from": "session",
+      "to": "ext",
+      "y": 1306,
+      "label": "agent_before_settle",
+      "variant": "default"
+    },
+    {
+      "from": "ext",
+      "to": "session",
+      "y": 1350,
+      "label": "continue: true",
+      "variant": "return"
+    },
+    {
+      "from": "session",
+      "to": "sink",
+      "y": 1394,
+      "label": "agent_settled",
+      "variant": "default",
+      "note": "带 aborted"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "session",
+      "from": 170,
+      "to": 330,
+      "type": "backend"
+    },
+    {
+      "participant": "loop",
+      "from": 302,
+      "to": 1160,
+      "type": "backend"
+    },
+    {
+      "participant": "provider",
+      "from": 508,
+      "to": 574,
+      "type": "cloud"
+    },
+    {
+      "participant": "file",
+      "from": 738,
+      "to": 760,
+      "type": "database"
+    },
+    {
+      "participant": "ext",
+      "from": 214,
+      "to": 280,
+      "type": "backend"
+    },
+    {
+      "participant": "ext",
+      "from": 896,
+      "to": 920,
+      "type": "backend"
+    },
+    {
+      "participant": "ext",
+      "from": 1296,
+      "to": 1360,
+      "type": "backend"
+    },
+    {
+      "participant": "session",
+      "from": 1296,
+      "to": 1404,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "事件分两套，别混",
+      "items": [
+        "AgentSessionEvent（subscribe 能收）：agent_start/end、turn_start/end、message_*、tool_execution_*、agent_settled、queue_update、compaction_start/end、entry_appended、session_info_changed",
+        "扩展的 pi.on() 事件是更大的集合（37 个）：多出 before_agent_start、tool_call/tool_result、context*、provider_*、input 等 hook"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "落盘时机",
+      "items": [
+        "message_end 之后才 append：assistant / user / system / toolResult → SessionMessageEntry；role=custom → CustomMessageEntry",
+        "compactionSummary / branchSummary 不走 message_end，由各自流程单独写"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "排障顺序",
+      "items": [
+        "事件没到订阅者：先看 agent-loop 有没有发（agent-loop.js 的 emit 点），再看 AgentSession._handleAgentEvent 是否过滤",
+        "扩展没收到：先确认 bindExtensions 调过（session_start 依赖它），再确认 handler 注册在 emit 之前"
+      ]
+    }
+  ]
+}
