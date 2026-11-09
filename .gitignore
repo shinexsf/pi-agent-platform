@@ -43,6 +43,9 @@ node_modules/
 # Integration-test agent workspace (agent-facing fixtures; local only)
 /test-workspace/
 
+# 临时屏蔽：android-app 为开发中目录，待正式版设计定稿后随首次提交入库
+/android-app/
+
 # Misc
 /tmp/
 /nul
