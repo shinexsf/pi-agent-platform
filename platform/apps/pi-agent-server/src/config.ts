@@ -4,7 +4,9 @@
  * Validates types and exits on invalid values.
  */
 
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { childLogger } from './logger.js';
 
 const logger = childLogger('config');
@@ -28,6 +30,13 @@ export interface ServerConfig {
    * Server definitions live ONLY here — the DB stores just the names an agent selected.
    */
   mcpConfigPath: string;
+  /**
+   * Skills bundled with the server package (change: server-builtin-skills).
+   * `<dir>/<name>/SKILL.md`; undefined when the directory is absent (trimmed install) —
+   * the catalogue is then empty and every configured name is reported as invalid.
+   * NOT a user directory: never written to, never listed by `GET /api/config/skills`.
+   */
+  serverBuiltinSkillsDir: string | undefined;
   /**
    * 插件安装根 `~/.pi/server/plugins`（change: plugin-mechanism）。
    * `registry.json` 在其中；安装只能走 `pi-server plugin add`（无 HTTP 端点）。
@@ -92,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     workspaceRoot: env.WORKSPACE_ROOT ?? process.cwd(),
     agentDir,
     mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
+    serverBuiltinSkillsDir: resolveServerBuiltinSkillsDir(env),
     pluginsDir: env.PI_SERVER_PLUGINS_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugins'),
     notificationsConfigPath:
       env.PI_SERVER_NOTIFICATIONS_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'notifications.json'),
@@ -113,3 +123,35 @@ function defaultAgentDir(): string {
 }
 
 export const config = loadConfig();
+/**
+ * Locate `skills/builtin` inside the installed server package.
+ *
+ * The depth differs between the two layouts, so a candidate list is used instead of one
+ * hard-coded `../`:
+ *   dev       apps/pi-agent-server/src/config.ts   → ../skills/builtin
+ *   packaged  dist/server/config.js                → ./skills/builtin
+ * `PI_SERVER_BUILTIN_SKILLS_DIR` overrides both (mirrors PI_SERVER_MCP_CONFIG).
+ *
+ * Returns undefined (with a warn) when nothing exists — a trimmed install must still boot;
+ * the catalogue then lists nothing and configured names surface as config issues.
+ */
+function resolveServerBuiltinSkillsDir(env: NodeJS.ProcessEnv): string | undefined {
+  const explicit = env.PI_SERVER_BUILTIN_SKILLS_DIR?.trim();
+  if (explicit) {
+    if (existsSync(explicit)) return explicit;
+    logger.warn({ dir: explicit }, 'PI_SERVER_BUILTIN_SKILLS_DIR does not exist — builtin skill catalogue disabled');
+    return undefined;
+  }
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, '../skills/builtin'),                 // dev: apps/pi-agent-server/src → apps/pi-agent-server/skills/builtin
+    path.resolve(here, 'skills/builtin'),                     // packaged: dist/server → dist/server/skills/builtin
+    path.resolve(process.cwd(), 'skills/builtin'),            // cwd = server package root
+    path.resolve(process.cwd(), 'apps/pi-agent-server/skills/builtin'), // cwd = monorepo platform root
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  logger.warn({ candidates }, 'builtin skill directory not found — serverBuiltinSkills will be empty');
+  return undefined;
+}

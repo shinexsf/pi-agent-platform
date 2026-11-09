@@ -18,6 +18,7 @@ import type { ServerConfig } from '../config.js';
 import { uploadSingleExtension, extractExtensionNames, readSettings } from '../services/extension-utils.js';
 import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
 import { childLogger } from '../logger.js';
+import { listServerBuiltinSkills } from '../services/server-builtin-skills.js';
 import {
   McpCatalogError,
   createMcpServer,
@@ -557,6 +558,10 @@ export function createConfigRouter(config: ServerConfig) {
   });
 
   // ========== Skills ==========
+
+  // GET /api/config/server-builtin-skills — 平台随包 skill（只读，无写端点）
+  // change: server-builtin-skills。刻意不并进 `/skills`：那是用户的 `~/.pi/agent/skills`。
+  router.get('/server-builtin-skills', (c) => c.json(listServerBuiltinSkills()));
 
   // GET /api/config/skills
   router.get('/skills', async (c) => {

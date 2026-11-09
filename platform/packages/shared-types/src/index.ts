@@ -51,6 +51,13 @@ export interface AgentConfig {
   // Independent from `builtinTools` (which governs pi builtin tools + builtin extension tools).
   serverBuiltinTools?: string[];
 
+  // Server-shipped skill whitelist (change: server-builtin-skills). Names refer to the
+  // skill dirs bundled with the server package (`skills/builtin/<name>/SKILL.md`), NOT to
+  // the user's `~/.pi/agent/skills` — that is what `skills` above governs. Semantics:
+  // missing/null = empty (all off). The two lists are separate name spaces on purpose:
+  // platform assets are read-only and versioned with the package, user assets are editable.
+  serverBuiltinSkills?: string[];
+
   // callServer method-level allowlist. null/undefined = use the global default
   // policy (control-plane default: reads on, writes off); [] = deny all business
   // methods (list/detail stay available); array = explicit allowlist.
@@ -73,6 +80,7 @@ export interface ResolvedAgentConfig extends AgentConfig {
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
   serverBuiltinTools: string[];
+  serverBuiltinSkills: string[];
   capabilities: string[] | null;
 }
 
@@ -105,6 +113,7 @@ export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgent
     builtinTools: c.builtinTools ?? [],
     mcp: { enabled: c.mcp?.enabled === true, servers: c.mcp?.servers ?? [] },
     serverBuiltinTools,
+    serverBuiltinSkills: c.serverBuiltinSkills ?? [],
     capabilities: serverBuiltinTools.includes('callServer') ? (c.capabilities ?? null) : [],
   };
 }
@@ -138,6 +147,7 @@ export interface ConfigIssue {
     | 'prompts'
     | 'builtinTools'
     | 'serverBuiltinTools'
+    | 'serverBuiltinSkills'
     | 'capabilities'
     | 'model'
     | 'mcp.servers';
@@ -157,6 +167,8 @@ export interface ConfigAvailability {
   models?: string[];
   tools?: string[];
   serverTools?: string[];
+  /** Names bundled with the server package (`GET /api/config/server-builtin-skills`). */
+  serverBuiltinSkills?: string[];
   /** Server names from the platform catalog (`GET /api/config/mcp-servers`). */
   mcpServers?: string[];
 }
@@ -193,6 +205,12 @@ export function findConfigIssues(
     config?.builtinTools,
     available.tools ?? [...PLATFORM_BUILTIN_TOOLS],
     '工具不存在',
+  );
+  check(
+    'serverBuiltinSkills',
+    config?.serverBuiltinSkills,
+    available.serverBuiltinSkills,
+    '平台 Skill 不存在或未随此版本发布',
   );
   check(
     'serverBuiltinTools',

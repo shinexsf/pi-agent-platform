@@ -13,12 +13,14 @@ import {
   type ConfigIssue,
 } from '@pi-agent-platform/shared-types';
 import { listCapabilities } from '../capabilities/registry.js';
+import { listServerBuiltinSkillNames } from './server-builtin-skills.js';
 import { config as serverConfig } from '../config.js';
 import { listMcpServerNames, readMcpCatalog } from './mcp-catalog.js';
 
 export function collectConfigIssues(config?: AgentConfig | null): ConfigIssue[] {
   return findConfigIssues(config, {
     capabilities: listCapabilities().map((d) => d.method),
+    serverBuiltinSkills: listServerBuiltinSkillNames(),
     mcpServers: listMcpServerNames(
       readMcpCatalog({
         mcpConfigPath: serverConfig.mcpConfigPath,

@@ -149,6 +149,10 @@ export class WorkerPool extends EventEmitter {
         // Platform MCP catalog — the worker reads the definitions from here and registers only
         // the servers the agent selected (change: platform-mcp-catalog).
         PI_SERVER_MCP_CONFIG: config.mcpConfigPath,
+        // Server-shipped skill dir (change: server-builtin-skills). The worker intersects it with
+        // `config.serverBuiltinSkills` and feeds the hits to pi's `additionalSkillPaths`.
+        // Empty string = nothing bundled (trimmed install) → worker injects nothing.
+        PI_SERVER_BUILTIN_SKILLS_DIR: config.serverBuiltinSkillsDir ?? '',
       },
       // On Windows, spawning a child from a detached/GUI process would otherwise
       // pop up a new console window for the worker. Hide it; logs still go to

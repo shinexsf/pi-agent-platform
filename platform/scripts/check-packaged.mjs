@@ -87,11 +87,28 @@ function checkArtifacts() {
     ['dist/server/public/web/index.html', 'web SPA'],
     ['dist/server/public/ide/index.html', 'ide SPA'],
   ];
+  // 平台随包 skill 的固定清单（change: server-builtin-skills）。目录在、文件不在时
+  // 打包照样成功，只有装完才会发现 available_skills 里什么都没有 —— 必须静态断言。
+  const requiredBuiltinSkills = ['pi-trigger-usage', 'pi-capabilities-usage', 'pi-plugin-authoring'];
+  const requiredExamples = [
+    'pi-plugin-authoring/examples/hello-plugin/package.json',
+    'pi-plugin-authoring/examples/kitchen-sink/package.json',
+  ];
   // dist/ 自身在 distRoot 下时，上面的路径要相对 CLI_DIR 解析
   const base = distRoot.endsWith(`${path.sep}dist`) ? path.dirname(distRoot) : distRoot;
   for (const [file, hint] of required) {
     const abs = path.join(base, file);
     if (!existsSync(abs)) fail('A.artifact', { file, detail: `缺少${hint}` });
+  }
+
+  // 内置 skill：SKILL.md + 示例工程（示例是 agent 的唯一可读参考，缺了技能价值减半）
+  for (const name of requiredBuiltinSkills) {
+    const abs = path.join(base, 'dist', 'server', 'skills', 'builtin', name, 'SKILL.md');
+    if (!existsSync(abs)) fail('A.builtinSkill', { file: rel(abs), detail: `缺少内置 skill ${name}/SKILL.md` });
+  }
+  for (const relPath of requiredExamples) {
+    const abs = path.join(base, 'dist', 'server', 'skills', 'builtin', relPath);
+    if (!existsSync(abs)) fail('A.builtinSkill', { file: rel(abs), detail: `缺少内置 skill 示例 ${relPath}` });
   }
 
   // SPA 只有 index.html 没有 assets 是典型事故（复制漏掉 assets / 构建静默失败）：

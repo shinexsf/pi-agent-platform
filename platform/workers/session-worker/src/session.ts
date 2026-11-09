@@ -714,6 +714,28 @@ export async function createSession(
     ...pluginExtensionFactories,
   ];
 
+  // Server-shipped skills (change: server-builtin-skills). The catalogue lives inside the
+  // installed server package; master passes its location via env and the *selection* via
+  // `config.serverBuiltinSkills` (explicit list, [] = all off). Only the selected dirs are
+  // injected, so nothing unselected can leak through the temporary-scope exemption below.
+  const serverBuiltinSkillsDir = process.env.PI_SERVER_BUILTIN_SKILLS_DIR?.trim();
+  const selectedBuiltinSkills = agentConfig?.serverBuiltinSkills ?? [];
+  const serverBuiltinSkillPaths: string[] = [];
+  if (selectedBuiltinSkills.length > 0) {
+    if (!serverBuiltinSkillsDir) {
+      logger.warn(
+        { sessionId, selected: selectedBuiltinSkills },
+        'serverBuiltinSkills configured but PI_SERVER_BUILTIN_SKILLS_DIR is empty — nothing injected',
+      );
+    } else {
+      for (const name of selectedBuiltinSkills) {
+        const dir = join(serverBuiltinSkillsDir, name);
+        if (existsSync(join(dir, 'SKILL.md'))) serverBuiltinSkillPaths.push(dir);
+        else logger.warn({ sessionId, name, dir }, 'serverBuiltinSkill not found in this release — skipped');
+      }
+    }
+  }
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspacePath,
     agentDir,
@@ -752,6 +774,12 @@ export async function createSession(
       logger.debug({ count: result.extensions.length }, 'extensionsOverride: after');
       return result;
     } : undefined,
+    // Server-shipped skills ride in as extra paths → pi classifies them `temporary`, which
+    // `createSkillsFilter` keeps unconditionally. That is the contract, not an oversight:
+    // the user's `skills` whitelist must not be able to kill a platform skill, and it must
+    // not be the switch for one either (that is `serverBuiltinSkills`). Do NOT add a special
+    // case for builtin skills to resource-filters.ts.
+    additionalSkillPaths: serverBuiltinSkillPaths.length > 0 ? serverBuiltinSkillPaths : undefined,
     skillsOverride: agentConfig?.skills ? createSkillsFilter(agentConfig.skills) : undefined,
     promptsOverride: agentConfig?.prompts ? createPromptsFilter(agentConfig.prompts) : undefined,
   });

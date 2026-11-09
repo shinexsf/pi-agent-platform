@@ -478,6 +478,16 @@ export interface TriggerRunsResponse {
   items: TriggerRunDTO[];
 }
 
+/** 平台随包发布的 skill（change: server-builtin-skills）——只读，无写接口。 */
+export interface ServerBuiltinSkillInfo {
+  name: string;
+  /** 取自 `SKILL.md` frontmatter；缺失时为空串（条目仍然列出）。 */
+  description: string;
+  /** `SKILL.md` 的绝对路径（供排障与 UI 提示）。 */
+  path: string;
+  builtin: true;
+}
+
 /** Returned by create / rotate-secret — the only place a webhook secret is plaintext. */
 export interface TriggerSecretResponse {
   id: string;
