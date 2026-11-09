@@ -57,6 +57,26 @@ export function createExtensionsRouter(deps: PluginRuntimeRouterDeps): Hono {
 export function createPluginDispatcherRouter(deps: PluginRuntimeRouterDeps): Hono {
   const app = new Hono();
 
+  // Read per request (registry is fs.watch-invalidated): a plugin installed after
+  // startup must become routable without a restart.
+  const matchPluginId = (rawAfter: string): { pluginId: string; path: string } | null => {
+    const pluginIds = listPluginIds(deps.pluginsDir);
+    const pick = (after: string): { pluginId: string; path: string } | null => {
+      const candidates = pluginIds.filter((id) => after === id || after.startsWith(`${id}/`));
+      const pluginId = candidates.sort((a, b) => b.length - a.length)[0];
+      return pluginId ? { pluginId, path: after.slice(pluginId.length) || '/' } : null;
+    };
+    const direct = pick(rawAfter);
+    if (direct) return direct;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawAfter);
+    } catch {
+      return null; // malformed escape → treat as unknown route, not 500
+    }
+    return decoded === rawAfter ? null : pick(decoded);
+  };
+
   const isEnabled = (id: string): boolean => {
     if (killSwitchActive()) return false;
     const plugin = getPluginSnapshot(deps.pluginsDir).plugins.find((p) => p.entry.id === id);
@@ -66,14 +86,16 @@ export function createPluginDispatcherRouter(deps: PluginRuntimeRouterDeps): Hon
   app.all('/*', async (c) => {
     const fullPath = c.req.path;
     const after = fullPath.startsWith('/api/p/') ? fullPath.slice('/api/p/'.length) : '';
-    const candidates = listPluginIds(deps.pluginsDir).filter(
-      (id) => after === id || after.startsWith(`${id}/`),
-    );
-    const pluginId = candidates.sort((a, b) => b.length - a.length)[0];
-    if (!pluginId) {
+    // Scoped ids (`@scope/name`) arrive percent-encoded from the browser
+    // (`/api/p/%40scope%2Fname/...`) because plugin code calls `host.api.*`, which
+    // encodes the id. The raw path still contains the `%2F`, so a plain prefix match
+    // misses it — try the raw form first (no behavior change for plain ids / encoded
+    // slashes inside a plugin's own route), then the decoded form.
+    const matched = matchPluginId(after);
+    if (!matched) {
       return c.json({ error: 'no such plugin route', path: after }, 404);
     }
-    const path = after.slice(pluginId.length) || '/';
+    const { pluginId, path } = matched;
 
     if (!isEnabled(pluginId)) {
       return c.json({ error: 'plugin endpoint not available', pluginId }, 404);
