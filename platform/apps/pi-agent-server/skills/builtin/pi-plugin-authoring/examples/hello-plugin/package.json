@@ -1,0 +1,9 @@
+{
+  "name": "@demo/hello-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "最小可运行平台插件：一个配置二级页 + 一个 HTTP 端点（无依赖、无构建）",
+  "piServer": {
+    "apiVersion": "1"
+  }
+}
