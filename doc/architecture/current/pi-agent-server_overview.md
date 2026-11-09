@@ -79,6 +79,7 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | **packaging** | **[`pi-agent-server_packaging.md`](pi-agent-server_packaging.md)** | ✅ **已定**（pi-server npm tarball + `PI_SERVER_CLI` 双模式启动） |
 | **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证；debug 代码解耦三约束） |
 | **logging** | **[`pi-agent-server_logging.md`](pi-agent-server_logging.md)** | ✅ **已定**（pino JSON 单时间线 + worker stderr tee + RollingFileSink 固定名滚动 + console 桥） |
+| **builtin-skills** | **[`pi-agent-server_builtin-skills.md`](pi-agent-server_builtin-skills.md)** | ✅ **已上线**（平台随包 skill：`serverBuiltinSkills` 显式清单 + 包内只读发布 + worker `additionalSkillPaths` 注入 + 只读清单接口） |
 | **triggers** | **[`pi-agent-server_triggers.md`](pi-agent-server_triggers.md)** | ✅ **已上线**（触发器调度 + 通知收件箱：适配层 resolve → `dispatch(event)`；cron/once/webhook + 插件 source；`<system-event>` 信封；`sendNotifyToUser` 工具） |
 
 ## 待决项

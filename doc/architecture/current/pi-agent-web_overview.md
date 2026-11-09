@@ -350,6 +350,15 @@ function useTheme() {
 - [`pi-agent-web_architecture-diagrams.md`](pi-agent-web_architecture-diagrams.md) —— `/architecture` 架构图集（集合 × 图切换、图源 spec 与编译产物、加图流程）
 - OpenSpec change `responsive-web-layout`（本地工作流产物，不引用路径）—— 本次重构的完整设计文档（proposal/design/tasks/specs）
 
+## 资源表单里的「Server Builtin Skills」组（2026-11-09）
+
+agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Builtin Skills**（与 `Server Builtin Tools` 对称）：
+
+- 数据源是只读接口 `GET /api/config/server-builtin-skills`，勾选写进 `config.serverBuiltinSkills`
+- 每项带「平台」徽标 + `description` 作为 tooltip；名字失效时按既有 `issueIndex` 标黄并可「清理无效项」
+- 三条软提示（不拦保存）：能力已授权但没勾用法说明（`pi-capabilities-usage` / `pi-trigger-usage`）、勾了 skill 但没开 `read`
+- 内置 skill **不出现在** `配置 → Skill`（那是用户的 `~/.pi/agent/skills`）
+
 ## 触发器与通知页（2026-11-06）
 
 - **入口**：抽屉一级「触发器」（`meta.navLabel='触发器'` / `navOrder=15` / `navIcon='automation'`）+ header 右侧铃铛（未读 badge，`unreadCount===0` 不渲染）→ `/notifications`；渠道配置挂「配置 → 通知」

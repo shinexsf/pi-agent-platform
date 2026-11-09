@@ -53,8 +53,8 @@
 |---|---|---|---|---|
 | `server` | 主进程 | `export function init(host: PluginServerHost)` | 注册菜单/页面/HTTP 端点/UI 槽位/工具卡片 | 直接碰 worker / DB / 会话 |
 | `worker` | session worker | `export function activate(ctx: { bridge: PluginWorkerBridge })` | 用 pi SDK 加工具/中间件、`bridge.emit` 上行 | 阻塞会话启动 |
-| `extension` | worker（作为 pi extension 装载） | `export default async function ({ bridge }) => ({ name, factory })` | **主力形态**：注册工具 / 工具拦截 / 读文件 | 无 `bridge` 时（未启用 bridged 模式）拿不到 `emit` |
-| `web` | 浏览器（SPA 内） | `export function mount(el, host): () => void` | 在自己的 `el` 里渲染任意框架、`host.data.subscribe`、`host.api.post` | 写全局 CSS / teleport 到 `el` 外 / flush 会话 |
+| `extension` | worker（作为 pi extension 装载） | `export default async function (pi, { bridge })` | **主力形态**：注册工具 / 工具拦截 / 读文件 | 无 `bridge` 时（未启用 bridged 模式）拿不到 `emit` |
+| `web` | 浏览器（SPA 内） | `export function mount(el, host): () => void`（必须返回 dispose） | 在自己的 `el` 里渲染任意框架、`host.data.subscribe/emit`、`host.api.get/post` | 写全局 CSS / teleport 到 `el` 外 / flush 会话 |
 
 ```ts
 // extension facet：加工具（和原生 pi 扩展代码完全一样）
@@ -119,7 +119,8 @@ export default async ({ bridge }) => ({
 export function init(host) {
   host.global.menus.register({ id: 'demo', label: '演示页', page: 'about', order: 1050 });
   host.global.pages.register({ id: 'about', title: '演示页', entry: 'page' });   // → web/page.js
-  host.global.routes.register({ method: 'GET', path: '/echo', handler: (c) => c.json({ ok: true }) });
+  // handler 收到 { method, path, query, body(原始文本), header(name) }，返回 { status?, headers?, json? | body? }
+  host.global.routes.register({ method: 'GET', path: '/echo', handler: (req) => ({ json: { ok: true, query: req.query } }) });
   host.session.surfaces.register({ id: 'hud', slot: 'chat.rail.right', title: 'HUD', icon: 'layers', entry: 'panel' });
   host.session.toolCards.register({ tool: 'sendFileToUser', mode: 'replace', entry: 'card' });
 }
@@ -135,6 +136,7 @@ export function init(host) {
 
 - 内置槽位：`chat.rail.right`（轨道按钮 **+ 抽屉面板**，一个槽位 = 一个完整入口）
 - 托管路径：`GET /plugins/<id>/web/<file>`、`GET /plugin-page/<id>/<page>`、`GET /api/p/<id>/*`，**同源**提供
+- scoped id（`@scope/name`）：浏览器侧 `host.api.*` 会把 id 编码成 `%40scope%2Fname`，`/api/p/*` 分发器先按原始 path 前缀匹配、未命中再解码重试（见 changelog 049）；资产路由本就解码
 - 挂载协议：`mount(el, host)` 返回 `dispose`；关闭顺序 **停推数据 → dispose() → 移除 el**
 - 六层查询：`/api/extensions`（全局）· `/api/sessions/:id/extensions`（会话）· `/api/plugins/:id/extensions`（单插件全集，含 `rejected`）· `/plugins/*`（资产）· `/plugin-page/*`（页面）· `/api/p/*`（端点）
 - 主题：只保证白名单 CSS 变量存在于 `el` 祖先链上（`--bg` `--surface` `--fg` `--fg-dim` `--border` `--accent` `--ok` `--warn` `--err`）

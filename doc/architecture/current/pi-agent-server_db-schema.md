@@ -117,6 +117,7 @@ interface AgentConfig {
   prompts?: string[];
 
   // Server 侧工具白名单（sendFileToUser / callServer / sendNotifyToUser；缺失 = [] = 全不给）
+  // serverBuiltinSkills：平台随包 skill 名单（与用户 skills 两套名字空间；缺失 = [] = 全关）
   serverBuiltinTools?: string[];
 
   // callServer 方法级授权（opt-in：未配置 = 无任何方法权限，[] = 全禁，数组 = 白名单；
