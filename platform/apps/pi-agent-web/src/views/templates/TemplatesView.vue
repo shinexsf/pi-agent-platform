@@ -49,6 +49,7 @@ function emptyTarget(): TemplateTargetConfig {
       servers: [...BASE_AGENT_CONFIG.mcp.servers],
     },
     serverBuiltinTools: [...BASE_AGENT_CONFIG.serverBuiltinTools],
+    serverBuiltinSkills: [...BASE_AGENT_CONFIG.serverBuiltinSkills],
     capabilities: null,
     extensions: [...BASE_AGENT_CONFIG.extensions],
     skills: [...BASE_AGENT_CONFIG.skills],
@@ -64,6 +65,7 @@ function toTarget(t: AgentTemplateDTO): TemplateTargetConfig {
       servers: [...(t.config.mcp?.servers ?? [])],
     },
     serverBuiltinTools: [...(t.config.serverBuiltinTools ?? [])],
+    serverBuiltinSkills: [...(t.config.serverBuiltinSkills ?? [])],
     capabilities:
       t.config.capabilities === null || t.config.capabilities === undefined
         ? null

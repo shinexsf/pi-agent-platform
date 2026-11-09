@@ -35,6 +35,7 @@ const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityIn
 const availableSkills = computed(() => issues.available.value.skills ?? []);
 const availablePrompts = computed(() => issues.available.value.prompts ?? []);
 const availableExtensions = computed(() => issues.available.value.extensions ?? []);
+const availableServerBuiltinSkills = computed(() => issues.available.value.serverBuiltinSkills ?? []);
 const has = computed(() => issues.buildIssueIndex(props.modelValue, null));
 
 /** 模板里引用了但环境里不存在的项（含 capabilities）。 */
@@ -82,7 +83,7 @@ function toggleCapability(method: string, checked: boolean): void {
 
 /** 勾选/取消一个「字符串数组」字段里的值 */
 function toggleValue(
-  field: 'builtinTools' | 'serverBuiltinTools' | 'extensions' | 'skills' | 'prompts',
+  field: 'builtinTools' | 'serverBuiltinTools' | 'serverBuiltinSkills' | 'extensions' | 'skills' | 'prompts',
   value: string,
   checked: boolean,
 ): void {
@@ -93,7 +94,7 @@ function toggleValue(
 }
 
 function pruneField(
-  field: 'builtinTools' | 'extensions' | 'skills' | 'prompts' | 'capabilities',
+  field: 'builtinTools' | 'serverBuiltinSkills' | 'extensions' | 'skills' | 'prompts' | 'capabilities',
 ): void {
   const current = props.modelValue[field] ?? [];
   props.modelValue[field] = issues.pruneInvalid(field, current);
@@ -188,6 +189,32 @@ onMounted(async () => {
           class="tag-check checked tag-invalid" title="平台工具不存在">
           <input type="checkbox" :checked="true" @change="toggleValue('serverBuiltinTools', t, false)" />
           <span>{{ t }}（无效）</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Server builtin skills（平台随包，只读） -->
+    <div class="resource-group">
+      <div class="resource-group-header">
+        <span class="resource-group-title">Server Builtin Skills</span>
+        <InfoTip text="随平台包发布的只读 skill（与 Skills 里的用户 skill 是两套名字空间）。" :width="300" />
+        <span class="resource-group-count">{{ props.modelValue.serverBuiltinSkills.length }} / {{ availableServerBuiltinSkills.length }}</span>
+        <span class="resource-edit-actions">
+          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinSkills = [...availableServerBuiltinSkills]">全选</button>
+          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinSkills = []">清空</button>
+        </span>
+      </div>
+      <div class="tag-list editable">
+        <label v-for="s in availableServerBuiltinSkills" :key="s" class="tag-check"
+          :class="{ checked: props.modelValue.serverBuiltinSkills.includes(s) }">
+          <input type="checkbox" :checked="props.modelValue.serverBuiltinSkills.includes(s)"
+            @change="toggleValue('serverBuiltinSkills', s, ($event.target as HTMLInputElement).checked)" />
+          <span>{{ s }}</span>
+        </label>
+        <label v-for="s in props.modelValue.serverBuiltinSkills.filter(x => !availableServerBuiltinSkills.includes(x))" :key="'g-' + s"
+          class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
+          <input type="checkbox" :checked="true" @change="toggleValue('serverBuiltinSkills', s, false)" />
+          <span>{{ s }}（无效）</span>
         </label>
       </div>
     </div>

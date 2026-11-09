@@ -76,6 +76,8 @@ const thinkingLevel = ref('');
 const builtinTools = ref<string[]>([...BASE_AGENT_CONFIG.builtinTools]);
 const mcp = ref<{ enabled: boolean; servers: string[] }>({ enabled: false, servers: [] });
 const serverBuiltinTools = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinTools]);
+/** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
+const serverBuiltinSkills = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinSkills]);
 // callServer 方法级授权：null = 走全局策略（唯一保留的 tri-state）、[] = 全禁、数组 = 白名单
 const capabilities = ref<string[] | null>(null);
 const extensions = ref<string[]>([]);
@@ -87,6 +89,7 @@ const issueIndex = computed(() => issues.buildIssueIndex(
   {
     builtinTools: builtinTools.value,
     serverBuiltinTools: serverBuiltinTools.value,
+    serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
     skills: skills.value,
     prompts: prompts.value,
@@ -99,6 +102,7 @@ const configIssues = computed(() => issues.issuesFor(
   {
     builtinTools: builtinTools.value,
     serverBuiltinTools: serverBuiltinTools.value,
+    serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
     skills: skills.value,
     prompts: prompts.value,
@@ -137,6 +141,7 @@ watch(mcpEnabled, (on) => {
 const availableSkills = ref<{ name: string }[]>([]);
 const availablePrompts = ref<{ name: string }[]>([]);
 const availableExtensions = ref<{ names: string[] }>({ names: [] });
+const availableServerBuiltinSkills = ref<Array<{ name: string; description?: string }>>([]);
 const skillNames = computed(() => availableSkills.value.map(i => i.name));
 const promptNames = computed(() => availablePrompts.value.map(i => i.name));
 
@@ -176,6 +181,7 @@ function currentTemplateTarget() {
     builtinTools: builtinTools.value,
     mcp: { enabled: mcp.value.enabled === true, servers: [...mcp.value.servers] },
     serverBuiltinTools: serverBuiltinTools.value,
+    serverBuiltinSkills: serverBuiltinSkills.value,
     capabilities: capabilities.value,
     extensions: extensions.value,
     skills: skills.value,
@@ -187,6 +193,7 @@ function applyTarget(next: ReturnType<typeof currentTemplateTarget>): void {
   builtinTools.value = next.builtinTools;
   mcp.value = next.mcp;
   serverBuiltinTools.value = next.serverBuiltinTools;
+  serverBuiltinSkills.value = next.serverBuiltinSkills;
   capabilities.value = next.capabilities;
   extensions.value = next.extensions;
   skills.value = next.skills;
@@ -236,13 +243,14 @@ async function saveAsTemplate(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes] = await Promise.all([
+    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes, builtinSkillsRes] = await Promise.all([
       fetch(`/api/sessions/${sessionId.value}`),
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
       fetch('/api/capabilities'),
+      fetch('/api/config/server-builtin-skills'),
     ]);
 
     if (!sessionRes.ok) throw new Error(`HTTP ${sessionRes.status}`);
@@ -251,6 +259,8 @@ onMounted(async () => {
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as { name: string }[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as { name: string }[];
     if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (builtinSkillsRes.ok)
+      availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<{ name: string; description?: string }>;
     if (capsRes.ok) {
       const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
       capabilityModules.value = data.modules ?? [];
@@ -279,6 +289,7 @@ onMounted(async () => {
       servers: [...(((pick('mcp') as { servers?: string[] } | null)?.servers) ?? [])],
     };
     serverBuiltinTools.value = [...(pick('serverBuiltinTools') as string[])];
+    serverBuiltinSkills.value = [...(pick('serverBuiltinSkills') as string[])];
     extensions.value = [...(pick('extensions') as string[])];
     skills.value = [...(pick('skills') as string[])];
     prompts.value = [...(pick('prompts') as string[])];
@@ -312,6 +323,7 @@ async function save(): Promise<void> {
       builtinTools: [...builtinTools.value],
       mcp: { enabled: mcp.value.enabled, servers: [...mcp.value.servers] },
       serverBuiltinTools: [...serverBuiltinTools.value],
+      serverBuiltinSkills: [...serverBuiltinSkills.value],
       capabilities: capabilities.value,
       extensions: [...extensions.value],
       skills: [...skills.value],
@@ -343,6 +355,10 @@ function openChat(): void {
 function selectAllBuiltinTools(): void {
   builtinTools.value = [...BUILTIN_TOOL_NAMES];
 }
+function selectAllServerBuiltinSkills(): void {
+  serverBuiltinSkills.value = [...availableServerBuiltinSkills.value.map((s) => s.name)];
+}
+
 function selectAllServerTools(): void {
   serverBuiltinTools.value = [...SERVER_BUILTIN_TOOLS];
 }
@@ -608,6 +624,37 @@ function workerUptime(ms: number): string {
                 <template v-for="t in serverBuiltinTools" :key="'bad-' + t">
                   <label v-if="issueIndex('serverBuiltinTools', t)" class="tag-check checked tag-invalid" title="平台工具不存在">
                     <input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}（无效）</span>
+                  </label>
+                </template>
+              </div>
+            </div>
+
+            <!-- Server Builtin Skills（平台随包，只读） -->
+            <div class="sd-resource-group">
+              <div class="sd-resource-header">
+                <span class="sd-resource-title">Server Builtin Skills</span>
+                <InfoTip text="随平台包发布的只读 skill（与 Skills 里的用户 skill 两套名字空间）。仅下次 spawn 生效。" :width="300" />
+                <span class="sd-resource-count">{{ serverBuiltinSkills.length }} / {{ availableServerBuiltinSkills.length }} 项</span>
+                <span v-if="!isView" class="resource-edit-actions">
+                  <button type="button" class="btn-link" @click="selectAllServerBuiltinSkills">全选</button>
+                  <button type="button" class="btn-link" @click="serverBuiltinSkills = []">清空</button>
+                </span>
+              </div>
+              <div v-if="isView" class="tag-list">
+                <span v-for="s in serverBuiltinSkills" :key="s" class="tag">{{ s }}</span>
+                <span v-if="serverBuiltinSkills.length === 0" class="sd-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="s in availableServerBuiltinSkills" :key="s.name" class="tag-check"
+                  :class="{ checked: serverBuiltinSkills.includes(s.name) }" :title="s.description || s.name">
+                  <input type="checkbox" :value="s.name" v-model="serverBuiltinSkills" /><span>{{ s.name }}</span>
+                </label>
+                <span v-if="availableServerBuiltinSkills.length === 0" class="sd-empty">本版本未随包发布 Skill</span>
+              </div>
+              <div v-if="!isView" class="tag-list editable">
+                <template v-for="s in serverBuiltinSkills" :key="'bad-' + s">
+                  <label v-if="issueIndex('serverBuiltinSkills', s)" class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
+                    <input type="checkbox" :value="s" v-model="serverBuiltinSkills" /><span>{{ s }}（无效）</span>
                   </label>
                 </template>
               </div>

@@ -83,6 +83,8 @@ const loadError = ref<string | null>(null);
 const allModels = ref<ModelOption[]>([]);
 const availableSkills = ref<NamedItem[]>([]);
 const availablePrompts = ref<NamedItem[]>([]);
+/** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
+const availableServerBuiltinSkills = ref<Array<NamedItem & { description?: string }>>([]);
 const availableExtensions = ref<{ names: string[] }>({ names: [] });
 
 function baseFormConfig() {
@@ -92,6 +94,7 @@ function baseFormConfig() {
     builtinTools: [...BASE_AGENT_CONFIG.builtinTools],
     mcp: { ...BASE_AGENT_CONFIG.mcp },
     serverBuiltinTools: [...BASE_AGENT_CONFIG.serverBuiltinTools],
+    serverBuiltinSkills: [...BASE_AGENT_CONFIG.serverBuiltinSkills],
     capabilities: null as string[] | null,
     extensions: [...BASE_AGENT_CONFIG.extensions],
     skills: [...BASE_AGENT_CONFIG.skills],
@@ -118,6 +121,7 @@ const canSave = computed(
 );
 
 const skillNames = computed(() => availableSkills.value.map((item) => item.name));
+const serverBuiltinSkillNames = computed(() => availableServerBuiltinSkills.value.map((item) => item.name));
 const promptNames = computed(() => availablePrompts.value.map((item) => item.name));
 
 // ---- 配置模板（agent-templates）：填充是显式覆盖，只改表单本地状态 ----
@@ -189,6 +193,27 @@ watch(callServerEnabled, (on) => {
 const capabilityGroups = computed(() => capabilityModules.value.filter((g) => g.capabilities.length > 0));
 const allCapabilityMethods = computed(() => capabilityModules.value.flatMap((g) => g.capabilities.map((c) => c.method)));
 
+/** 已授权的方法名集合（用于"能力开了但用法说明没勾"的软提示）。 */
+const authorizedCapabilities = computed(() => new Set(form.value.config.capabilities ?? []));
+const triggerCapabilityOn = computed(() =>
+  [...authorizedCapabilities.value].some((m) => m.startsWith('trigger.')),
+);
+/** 软提示：能力开了、平台用法说明没开（不阻止保存）。 */
+const capabilitySkillHints = computed(() => {
+  const picked = form.value.config.serverBuiltinSkills;
+  const hints: string[] = [];
+  if (authorizedCapabilities.value.size > 0 && !picked.includes('pi-capabilities-usage')) {
+    hints.push('已授权 server 能力，但没勾「pi-capabilities-usage」——agent 会用错参数、也不懂被拒的原因。');
+  }
+  if (triggerCapabilityOn.value && !picked.includes('pi-trigger-usage')) {
+    hints.push('已授权 trigger.* 能力，但没勾「pi-trigger-usage」——agent 会建出没人收尾的触发器。');
+  }
+  if (picked.length > 0 && !form.value.config.builtinTools.includes('read')) {
+    hints.push('平台 Skill 需要 read 工具才能被模型读取（当前 builtinTools 未勾 read），勾了也不会生效。');
+  }
+  return hints;
+});
+
 function capabilitiesSummary(items: string[] | null): string {
   if (items === null) return '未授权';
   if (items.length === 0) return '0 项';
@@ -198,19 +223,24 @@ function capabilitiesSummary(items: string[] | null): string {
 onMounted(async () => {
   void loadMcpCatalog();
   try {
-    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes, capsRes] = await Promise.all([
+    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes, capsRes, builtinSkillsRes] = await Promise.all([
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
       routeId.value ? fetch(`/api/agents/${routeId.value}`) : Promise.resolve(null),
       fetch('/api/capabilities'),
+      fetch('/api/config/server-builtin-skills'),
     ]);
 
     if (modelsRes.ok) allModels.value = (await modelsRes.json()) as ModelOption[];
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as NamedItem[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as NamedItem[];
     if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (builtinSkillsRes.ok)
+      availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<
+        NamedItem & { description?: string }
+      >;
     if (capsRes.ok) {
       const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
       capabilityModules.value = data.modules ?? [];
@@ -231,6 +261,7 @@ onMounted(async () => {
           builtinTools: [...resolved.builtinTools],
           mcp: { enabled: resolved.mcp.enabled, servers: [...resolved.mcp.servers] },
           serverBuiltinTools: [...resolved.serverBuiltinTools],
+          serverBuiltinSkills: [...resolved.serverBuiltinSkills],
           capabilities: resolved.capabilities,
           extensions: [...resolved.extensions],
           skills: [...resolved.skills],
@@ -297,12 +328,22 @@ function selectAllExtensions(): void {
 function selectAllSkills(): void {
   form.value.config.skills = [...skillNames.value];
 }
+function selectAllServerBuiltinSkills(): void {
+  form.value.config.serverBuiltinSkills = [...serverBuiltinSkillNames.value];
+}
 function selectAllPrompts(): void {
   form.value.config.prompts = [...promptNames.value];
 }
 /** 清理某字段里当前环境中不存在的项。 */
 function pruneField(
-  field: 'extensions' | 'skills' | 'prompts' | 'capabilities' | 'builtinTools' | 'serverBuiltinTools',
+  field:
+    | 'extensions'
+    | 'skills'
+    | 'prompts'
+    | 'capabilities'
+    | 'builtinTools'
+    | 'serverBuiltinTools'
+    | 'serverBuiltinSkills',
 ): void {
   if (field === 'capabilities') {
     const caps = form.value.config.capabilities;
@@ -529,6 +570,46 @@ watch(mcpEnabled, (on) => {
                     <span>{{ tool }}（无效）</span>
                   </label>
                 </template>
+              </div>
+            </div>
+
+            <!-- Server builtin skills（平台随包发布，change: server-builtin-skills） -->
+            <div class="resource-group">
+              <div class="resource-group-header">
+                <span class="resource-group-title">Server Builtin Skills</span>
+                <InfoTip text="随平台包发布的只读 skill（与上面「Skills」里的用户 skill 是两套名字空间）。勾上后该 agent 的会话会加载对应 SKILL.md，模型按需读取。" />
+                <span class="resource-group-count">{{ resourceSummary(form.config.serverBuiltinSkills, availableServerBuiltinSkills.length) }}</span>
+                <span class="resource-edit-actions" v-if="!isView">
+                  <button type="button" class="btn-link" @click="selectAllServerBuiltinSkills">全选</button>
+                  <button type="button" class="btn-link" @click="form.config.serverBuiltinSkills = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('serverBuiltinSkills')">清理无效项</button>
+                </span>
+              </div>
+              <div v-if="isView" class="tag-list">
+                <span v-for="s in form.config.serverBuiltinSkills" :key="s" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('serverBuiltinSkills', s) }">{{ s }}</span>
+                <span v-if="form.config.serverBuiltinSkills.length === 0" class="resource-empty">无</span>
+              </div>
+              <div v-else class="tag-list editable">
+                <label v-for="s in availableServerBuiltinSkills" :key="s.name" class="tag-check"
+                  :class="{ checked: form.config.serverBuiltinSkills.includes(s.name) }"
+                  :title="s.description || s.name">
+                  <input type="checkbox" :value="s.name" v-model="form.config.serverBuiltinSkills" />
+                  <span>{{ s.name }}</span>
+                  <span class="resource-badge">平台</span>
+                </label>
+                <span v-if="availableServerBuiltinSkills.length === 0" class="resource-empty">本版本未随包发布 Skill</span>
+              </div>
+              <div v-if="!isView && form.config.serverBuiltinSkills.length" class="tag-list editable">
+                <template v-for="s in form.config.serverBuiltinSkills" :key="'bad-' + s">
+                  <label v-if="issueIndex('serverBuiltinSkills', s)" class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
+                    <input type="checkbox" :value="s" v-model="form.config.serverBuiltinSkills" />
+                    <span>{{ s }}（无效）</span>
+                  </label>
+                </template>
+              </div>
+              <div v-if="!isView && capabilitySkillHints.length" class="hint-list">
+                <span v-for="h in capabilitySkillHints" :key="h" class="hint-warn">⚠ {{ h }}</span>
               </div>
             </div>
 
@@ -981,6 +1062,28 @@ watch(mcpEnabled, (on) => {
   flex-wrap: wrap;
   gap: 4px 14px;
   color: var(--text-secondary);
+}
+
+.resource-badge {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+}
+
+.hint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.hint-warn {
+  font-size: 0.76rem;
+  color: #b45309;
 }
 
 .tag-invalid,

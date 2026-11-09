@@ -72,6 +72,8 @@ export const BASE_AGENT_CONFIG = {
   prompts: [] as string[],
   mcp: { enabled: false, servers: [] as string[] },
   serverBuiltinTools: ['sendFileToUser'],
+  /** 平台随包 skill（change: server-builtin-skills）——默认全关，按需勾选。 */
+  serverBuiltinSkills: [] as string[],
   capabilities: null as string[] | null,
 };
 

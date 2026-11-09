@@ -4,6 +4,7 @@
  * 数据源（均为既有只读接口）：
  * - 插件   GET /api/config/extensions   → { names }
  * - Skill  GET /api/config/skills       → [{ name }]
+ * - 平台 Skill GET /api/config/server-builtin-skills → [{ name }]
  * - Prompt GET /api/config/prompts      → [{ name }]
  * - 授权   GET /api/capabilities        → { modules: [{ capabilities: [{ method }] }] }
  * - 模型   GET /api/models              → [{ provider, modelId }]
@@ -55,6 +56,8 @@ const KNOWN_FIELD = (available: ConfigAvailability, field: IssueField): string[]
       return available.tools;
     case 'serverBuiltinTools':
       return available.serverTools;
+    case 'serverBuiltinSkills':
+      return available.serverBuiltinSkills;
     case 'mcp.servers':
       return available.mcpServers;
     default:
@@ -70,13 +73,14 @@ export function useConfigIssues(): ConfigIssuesApi {
 
   async function loadAvailability(): Promise<void> {
     try {
-      const [extRes, skillsRes, promptsRes, capsRes, modelsRes, mcpRes] = await Promise.all([
+      const [extRes, skillsRes, promptsRes, capsRes, modelsRes, mcpRes, builtinSkillRes] = await Promise.all([
         fetch('/api/config/extensions'),
         fetch('/api/config/skills'),
         fetch('/api/config/prompts'),
         fetch('/api/capabilities'),
         fetch('/api/models'),
         fetch('/api/config/mcp-servers'),
+        fetch('/api/config/server-builtin-skills'),
       ]);
       const next: ConfigAvailability = { ...available.value };
       if (extRes.ok) {
@@ -85,6 +89,9 @@ export function useConfigIssues(): ConfigIssuesApi {
       }
       if (skillsRes.ok) {
         next.skills = ((await skillsRes.json()) as Array<{ name: string }>).map((s) => s.name);
+      }
+      if (builtinSkillRes.ok) {
+        next.serverBuiltinSkills = ((await builtinSkillRes.json()) as Array<{ name: string }>).map((s) => s.name);
       }
       if (promptsRes.ok) {
         next.prompts = ((await promptsRes.json()) as Array<{ name: string }>).map((p) => p.name);

@@ -15,6 +15,8 @@ export interface TemplateTargetConfig {
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
   serverBuiltinTools: string[];
+  /** 平台随包 skill（change: server-builtin-skills）——与 skills 分开的名字空间。 */
+  serverBuiltinSkills: string[];
   capabilities: string[] | null;
   extensions: string[];
   skills: string[];
@@ -29,6 +31,7 @@ export function templateSnapshot(config: TemplateTargetConfig): AgentConfig {
     builtinTools: mcpOn ? withMcpDependencies([...config.builtinTools]) : [...config.builtinTools],
     mcp: { enabled: mcpOn, servers: [...config.mcp.servers] },
     serverBuiltinTools: [...config.serverBuiltinTools],
+    serverBuiltinSkills: [...config.serverBuiltinSkills],
     capabilities: config.capabilities === null ? null : [...config.capabilities],
     extensions: [...config.extensions],
     skills: [...config.skills],
@@ -50,6 +53,7 @@ export function applyTemplate<T extends TemplateTargetConfig>(config: T, templat
       : [...(c.builtinTools ?? [])],
     mcp: { enabled: c.mcp?.enabled === true, servers: [...(c.mcp?.servers ?? [])] },
     serverBuiltinTools: [...(c.serverBuiltinTools ?? [])],
+    serverBuiltinSkills: [...(c.serverBuiltinSkills ?? [])],
     capabilities: c.capabilities === null || c.capabilities === undefined ? null : [...c.capabilities],
     extensions: [...(c.extensions ?? [])],
     skills: [...(c.skills ?? [])],
