@@ -22,6 +22,7 @@ import {
   BUILTIN_TOOL_NAMES,
   withMcpDependencies,
   SERVER_BUILTIN_TOOLS,
+  SERVER_BUILTIN_TOOL_HINTS,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
 import { useMcpCatalog } from '../../composables/useMcpCatalog';
@@ -558,6 +559,7 @@ watch(mcpEnabled, (on) => {
               </div>
               <div v-else class="tag-list editable">
                 <label v-for="tool in SERVER_BUILTIN_TOOLS" :key="tool" class="tag-check"
+                  :title="SERVER_BUILTIN_TOOL_HINTS[tool] ?? ''"
                   :class="{ checked: form.config.serverBuiltinTools.includes(tool) }">
                   <input type="checkbox" :value="tool" v-model="form.config.serverBuiltinTools" />
                   <span>{{ tool }}</span>

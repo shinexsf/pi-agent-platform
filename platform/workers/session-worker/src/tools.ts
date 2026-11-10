@@ -84,16 +84,17 @@ function createSendFileToUserTool(
   };
 }
 
-// ── sendNotifyToUser ────────────────────────────────────────────────────────
+// ── postNotification ────────────────────────────────────────────────────────
 
 /**
- * Push a notification to the user's inbox (change: trigger-scheduling).
+ * Write a message into the server notification inbox (change: trigger-scheduling;
+ * renamed from `sendNotifyToUser` — the platform does not promise delivery).
  *
  * This is the ONLY way an agent can notify: notifications are never derived
  * from assistant messages. `sessionId` / `actionUrl` are filled by the master,
  * so the schema deliberately has no routing fields.
  */
-const sendNotifyToUserSchema = {
+const postNotificationSchema = {
   type: 'object',
   properties: {
     title: { type: 'string', description: 'Short subject line (<= 120 chars)' },
@@ -108,36 +109,37 @@ const sendNotifyToUserSchema = {
   additionalProperties: false,
 } as const;
 
-interface SendNotifyToUserParams {
+interface PostNotificationParams {
   title: string;
   body: string;
   severity?: 'info' | 'warning' | 'error';
 }
 
-function createSendNotifyToUserTool(
+function createPostNotificationTool(
   sessionId: string,
   callMaster: CallMasterFn,
 ): ToolDefinition {
   return {
-    name: 'sendNotifyToUser',
-    label: 'Notify User',
-    description: 'Send a notification to the user inbox when the user is not here to see the answer',
-    promptSnippet: 'Push a notification (title + body) to the user inbox',
+    name: 'postNotification',
+    label: 'Post Notification',
+    description:
+      '向 server 通知中心发送一条消息（写进 /notifications 收件箱，供用户稍后查看；平台不做外部推送）',
+    promptSnippet: 'Post a message to the server notification inbox',
     promptGuidelines: [
-      'Use sendNotifyToUser when the result matters while the user is away — scheduled/long tasks, failures, or explicit "tell me when done" requests.',
+      'Use postNotification when the result matters while the user is away — scheduled/long tasks, failures, or explicit "tell me when done" requests.',
       'Do NOT use it for ordinary replies: if the user is chatting with you, answer in the conversation.',
       'severity: info for progress, warning for something the user should look at, error for failures.',
     ],
-    parameters: sendNotifyToUserSchema as any,
+    parameters: postNotificationSchema as any,
     execute: async (
       _toolCallId: string,
-      params: SendNotifyToUserParams,
+      params: PostNotificationParams,
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       _ctx: unknown,
     ) => {
       try {
-        const result = await callMaster('sendNotifyToUser', [sessionId, params]);
+        const result = await callMaster('postNotification', [sessionId, params]);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result ?? { ok: true }) }],
           details: result ?? { ok: true },
@@ -259,8 +261,8 @@ export function createServerTools(
   if (enabled.has('sendFileToUser')) {
     tools.push(createSendFileToUserTool(sessionId, callMaster));
   }
-  if (enabled.has('sendNotifyToUser')) {
-    tools.push(createSendNotifyToUserTool(sessionId, callMaster));
+  if (enabled.has('postNotification')) {
+    tools.push(createPostNotificationTool(sessionId, callMaster));
   }
   if (enabled.has('callServer')) {
     tools.push(createCallServerTool(callMaster, opts.capabilityIndex ?? []));

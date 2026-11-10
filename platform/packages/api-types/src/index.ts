@@ -15,7 +15,6 @@ export type {
   TriggerSourceInfo,
   NotificationDTO,
   NotificationSeverity,
-  NotificationDeliveryDTO,
   AgentTemplateDTO,
   AgentConfig,
   SessionDTO,

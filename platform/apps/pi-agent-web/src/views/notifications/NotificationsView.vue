@@ -57,7 +57,7 @@ async function readAll() {
       <div class="page-heading-copy">
         <h1 id="notifications-title" class="page-title">通知</h1>
         <p class="page-subtitle">
-          只读收件箱 —— 通知由 agent 主动调用 <code>sendNotifyToUser</code>，或触发器失败产生；要回复请进会话
+          只读收件箱 —— 通知由 agent 主动调用 <code>postNotification</code>，或触发器失败产生；要回复请进会话
         </p>
       </div>
       <div class="page-actions">
@@ -99,7 +99,7 @@ async function readAll() {
           <span class="state-icon"><AppIcon name="bell" :size="23" /></span>
           <h2 class="state-title">暂无通知</h2>
           <p class="state-copy">
-            通知只在三种情况下出现：agent 主动调用 <code>sendNotifyToUser</code>、触发器执行失败、平台自身异常。
+            通知只在三种情况下出现：agent 主动调用 <code>postNotification</code>、触发器执行失败、平台自身异常。通知只写进这个收件箱，平台不做外部推送。
           </p>
         </div>
       </div>

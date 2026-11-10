@@ -5,7 +5,7 @@
  * only touch triggers belonging to its own agent (authorize.ts resolves the
  * owner via `resolveTriggerAgent` / `params.agentId`).
  *
- * `sendNotifyToUser` is deliberately NOT a capability — it is a server tool
+ * `postNotification` is deliberately NOT a capability — it is a server tool
  * (reverse call), because it is not a management operation.
  */
 

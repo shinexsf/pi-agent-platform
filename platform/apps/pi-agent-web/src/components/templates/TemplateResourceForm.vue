@@ -13,6 +13,7 @@ import McpSelectionGroup from '../config/McpSelectionGroup.vue';
 import {
   BUILTIN_TOOL_NAMES,
   SERVER_BUILTIN_TOOLS,
+  SERVER_BUILTIN_TOOL_HINTS,
   withMcpDependencies,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
@@ -180,6 +181,7 @@ onMounted(async () => {
       </div>
       <div class="tag-list editable">
         <label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check"
+          :title="SERVER_BUILTIN_TOOL_HINTS[t] ?? ''"
           :class="{ checked: props.modelValue.serverBuiltinTools.includes(t) }">
           <input type="checkbox" :checked="props.modelValue.serverBuiltinTools.includes(t)"
             @change="toggleValue('serverBuiltinTools', t, ($event.target as HTMLInputElement).checked)" />

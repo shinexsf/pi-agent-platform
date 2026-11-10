@@ -136,7 +136,7 @@ export const PLATFORM_BUILTIN_TOOLS = [
 ] as const;
 
 /** Worker-registered platform tools (`AgentConfig.serverBuiltinTools`). */
-export const PLATFORM_SERVER_TOOLS = ['sendFileToUser', 'callServer', 'sendNotifyToUser'] as const;
+export const PLATFORM_SERVER_TOOLS = ['sendFileToUser', 'callServer', 'postNotification'] as const;
 
 /** A stored config value that no longer resolves (renamed tool, uninstalled extension, …). */
 export interface ConfigIssue {
@@ -672,13 +672,6 @@ export interface TriggerSourceInfo {
 
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 
-export interface NotificationDeliveryDTO {
-  channel: string;
-  ok: boolean;
-  error?: string;
-  at: number;
-}
-
 export interface NotificationDTO {
   id: string;
   severity: NotificationSeverity;
@@ -692,7 +685,6 @@ export interface NotificationDTO {
   actionUrl: string | null;
   readAt: number | null;
   createdAt: number;
-  deliveries: NotificationDeliveryDTO[];
 }
 
 /**

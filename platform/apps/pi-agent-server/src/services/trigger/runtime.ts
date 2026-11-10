@@ -42,7 +42,6 @@ export interface InitTriggersDeps {
   triggerRepo: TriggerRepo;
   notificationRepo: NotificationRepo;
   workerPool: WorkerPool;
-  notificationsConfigPath: string;
   triggersDisabled: boolean;
 }
 
@@ -57,10 +56,7 @@ export function initTriggerRuntime(deps: InitTriggersDeps): TriggerRuntime {
   }
 
   const flags = { disabled: deps.triggersDisabled };
-  const notifier = createNotifier({
-    notificationRepo: deps.notificationRepo,
-    notificationsConfigPath: deps.notificationsConfigPath,
-  });
+  const notifier = createNotifier({ notificationRepo: deps.notificationRepo });
   const dispatcher = createDispatcher({
     agentRepo: deps.agentRepo,
     sessionRepo: deps.sessionRepo,

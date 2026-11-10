@@ -142,8 +142,7 @@ export const triggerRuns = sqliteTable(
   }),
 );
 
-/** Notification inbox (client-agnostic). `deliveries` is a JSON array of
- *  per-channel outcomes; a failing channel never blocks the row. */
+/** System notification table: write-once facts, read by any client. No delivery state. */
 export const notifications = sqliteTable(
   'notifications',
   {
@@ -156,7 +155,6 @@ export const notifications = sqliteTable(
     actionUrl: text('action_url'),
     readAt: integer('read_at'),
     createdAt: integer('created_at').notNull(),
-    deliveries: text('deliveries'), // JSON array
   },
   (t) => ({
     createdAtIdx: index('idx_notifications_created_at').on(t.createdAt),

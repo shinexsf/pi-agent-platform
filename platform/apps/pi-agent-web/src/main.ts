@@ -29,7 +29,6 @@ import ConfigView from './views/config/ConfigView.vue';
 import ModelsConfig from './views/config/ModelsConfig.vue';
 import DefaultSettings from './views/config/DefaultSettings.vue';
 import McpServersView from './views/config/McpServersView.vue';
-import NotificationsConfig from './views/config/NotificationsConfig.vue';
 import PluginsView from './views/config/PluginsView.vue';
 import SkillsConfig from './views/config/SkillsConfig.vue';
 import PromptsConfig from './views/config/PromptsConfig.vue';
@@ -140,12 +139,6 @@ const baseRoutes = [
         meta: { crumbTitleFromParam: 'name', crumbTitle: '编辑 Provider' },
       },
       { path: 'settings', name: 'config-settings', component: DefaultSettings },
-      {
-        path: 'notifications',
-        name: 'config-notifications',
-        component: NotificationsConfig,
-        meta: { crumbTitle: '通知渠道' },
-      },
       {
         path: 'mcp',
         name: 'config-mcp',

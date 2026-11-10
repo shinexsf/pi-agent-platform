@@ -17,7 +17,6 @@ export interface ConfigSectionMeta {
 export const CONFIG_SECTIONS: readonly ConfigSectionMeta[] = [
   { id: 'models', label: '模型 API', icon: '🔧' },
   { id: 'settings', label: '默认设置', icon: '⚙️' },
-  { id: 'notifications', label: '通知', icon: '🔔' },
   { id: 'mcp', label: 'MCP', icon: '🔌' },
   { id: 'skills', label: 'Skills', icon: '📚' },
   { id: 'prompts', label: 'Prompts', icon: '💬' },

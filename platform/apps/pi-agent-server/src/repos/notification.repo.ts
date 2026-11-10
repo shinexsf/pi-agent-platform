@@ -1,32 +1,19 @@
 /**
- * Notification repository (change: trigger-scheduling).
+ * Notification repository — the system notification table.
  *
  * Notifications are an inbox: write once, read N times, never edited.
- * Channel deliveries are a JSON array on the row so a failing channel
- * never blocks persistence.
+ * No delivery state: the platform does not push anywhere (see services/notifier.ts).
  */
 
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { DB } from '../db/init.js';
 import { notifications } from '../db/schema.js';
-import type {
-  NotificationDTO,
-  NotificationDeliveryDTO,
-  NotificationSeverity,
-} from '@pi-agent-platform/shared-types';
+import type { NotificationDTO, NotificationSeverity } from '@pi-agent-platform/shared-types';
 
 type Row = typeof notifications.$inferSelect;
 
 function rowToDTO(row: Row): NotificationDTO {
-  let deliveries: NotificationDeliveryDTO[] = [];
-  if (row.deliveries) {
-    try {
-      deliveries = JSON.parse(row.deliveries) as NotificationDeliveryDTO[];
-    } catch {
-      deliveries = [];
-    }
-  }
   return {
     id: row.id,
     severity: row.severity as NotificationSeverity,
@@ -37,7 +24,6 @@ function rowToDTO(row: Row): NotificationDTO {
     actionUrl: row.actionUrl,
     readAt: row.readAt,
     createdAt: row.createdAt,
-    deliveries,
   };
 }
 
@@ -50,7 +36,6 @@ export function createNotificationRepo(db: DB) {
       source: string;
       sourceId?: string | null;
       actionUrl?: string | null;
-      deliveries?: NotificationDeliveryDTO[];
     }): NotificationDTO {
       const id = randomUUID();
       db.insert(notifications)
@@ -64,7 +49,6 @@ export function createNotificationRepo(db: DB) {
           actionUrl: input.actionUrl ?? null,
           readAt: null,
           createdAt: Date.now(),
-          deliveries: input.deliveries && input.deliveries.length > 0 ? JSON.stringify(input.deliveries) : null,
         })
         .run();
       return rowToDTO(this.getRow(id)!);

@@ -86,7 +86,6 @@ async function main() {
     triggerRepo,
     notificationRepo,
     workerPool,
-    notificationsConfigPath: config.notificationsConfigPath,
     triggersDisabled: config.triggersDisabled,
   });
 
@@ -118,12 +117,13 @@ async function main() {
   app.route('/api/hooks', createHooksRouter(triggerRt));
   app.route('/api/notifications', createNotificationsRouter(notificationRepo));
 
-  // `sendNotifyToUser` — server tool (same shape as sendFileToUser, but inbox).
-  workerPool.registerReverseCallHandler('sendNotifyToUser', async (sessionId, args) => {
+  // `postNotification` — server tool: writes one row into the system notification
+  // table (same reverse-call shape as sendFileToUser). Inbox only: no delivery.
+  workerPool.registerReverseCallHandler('postNotification', async (sessionId, args) => {
     const [, params] = args as [string, { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
     const title = (params?.title ?? '').trim();
     const body = (params?.body ?? '').trim();
-    if (!title && !body) throw new Error('sendNotifyToUser: title/body required');
+    if (!title && !body) throw new Error('postNotification: title/body required');
     const session = sessionRepo.get(sessionId);
     return triggerRt.notifier.notify({
       severity: params?.severity ?? 'info',

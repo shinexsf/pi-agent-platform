@@ -97,4 +97,11 @@ export function withMcpDependencies(selected: readonly string[]): string[] {
 }
 
 /** Server-side custom tools (AgentConfig.serverBuiltinTools) — separate axis from pi tools. */
-export const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer'];
+export const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer', 'postNotification'];
+
+/** 每个 server 工具对用户的一句话说明（勾选清单里的 tooltip）。 */
+export const SERVER_BUILTIN_TOOL_HINTS: Record<string, string> = {
+  sendFileToUser: '把一个文件发给用户（会话内下载）。',
+  callServer: '通过 callServer 使用平台能力面（capabilities 授权后才能调）。',
+  postNotification: '向 server 通知中心写一条消息，出现在 /notifications 收件箱（平台不对外推送）。',
+};

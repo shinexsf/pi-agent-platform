@@ -134,8 +134,7 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       source_id TEXT,
       action_url TEXT,
       read_at INTEGER,
-      created_at INTEGER NOT NULL,
-      deliveries TEXT
+      created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
     CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at);
