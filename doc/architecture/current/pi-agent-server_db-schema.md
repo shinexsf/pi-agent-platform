@@ -116,7 +116,7 @@ interface AgentConfig {
   skills?: string[];
   prompts?: string[];
 
-  // Server 侧工具白名单（sendFileToUser / callServer / sendNotifyToUser；缺失 = [] = 全不给）
+  // Server 侧工具白名单（sendFileToUser / callServer / postNotification；缺失 = [] = 全不给）
   // serverBuiltinSkills：平台随包 skill 名单（与用户 skills 两套名字空间；缺失 = [] = 全关）
   serverBuiltinTools?: string[];
 
@@ -292,12 +292,11 @@ CREATE TABLE notifications (
   severity   TEXT NOT NULL CHECK (severity IN ('info','warning','error')),
   title      TEXT NOT NULL,
   body       TEXT NOT NULL,
-  source     TEXT NOT NULL,               -- agent | trigger | server
+  source     TEXT NOT NULL,               -- agent | trigger | server（自由文本，新增调用方无需改表）
   source_id  TEXT,
   action_url TEXT,                        -- 平台生成深链，不接受外部传入
   read_at    INTEGER,
   created_at INTEGER NOT NULL,
-  deliveries TEXT                         -- JSON 数组：逐渠道投递结果
 );
 CREATE INDEX idx_notifications_created_at ON notifications(created_at);
 CREATE INDEX idx_notifications_unread     ON notifications(read_at);

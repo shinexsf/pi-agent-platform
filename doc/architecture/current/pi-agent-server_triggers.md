@@ -1,8 +1,8 @@
-# 触发器与通知（trigger-scheduling）
+# 触发器（trigger-scheduling）
 
-> agent 的"无人值守"入口与出口：**触发器**决定它什么时候跑，**通知**决定结果怎么回来。
+> agent 的"无人值守"入口：**触发器**决定它什么时候跑。结果怎么回到人，是**独立的系统通知子系统**的事——见 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)。
 
-对应代码：`apps/pi-agent-server/src/{services/trigger/*, services/system-envelope.ts, services/notifier.ts, routes/{triggers,hooks,notifications}.ts, repos/{trigger,notification}.repo.ts}`、`workers/session-worker/src/tools.ts`、`apps/pi-agent-web/src/{views/triggers/*, views/notifications/*, views/config/NotificationsConfig.vue}`。
+对应代码：`apps/pi-agent-server/src/{services/trigger/*, services/system-envelope.ts, routes/{triggers,hooks}.ts, repos/trigger.repo.ts}`、`apps/pi-agent-web/src/views/triggers/*`。（`postNotification` 工具与收件箱属通知子系统，不在本文范围。）
 
 ---
 
@@ -66,7 +66,7 @@ flowchart TB
 |---|---|---|
 | `triggers` | `agent_id` · `name` · `source` · `config`(JSON) · `prompt` · `session_mode`(`new|reuse`) · `enabled` · `next_at` · `max_runs` · `runs_count` · `session_id` · `last_fired_at` | 一行一个触发器；`next_at` 单独成列并建索引（scheduler 只扫它）；source 专属参数全在 `config`；`session_id` 只在 `reuse` 下有意义（见 §2.1） |
 | `trigger_runs` | `trigger_id` · `status`(`fired|skipped|missed|failed`) · `triggered_by`(`schedule|webhook|manual|capability|plugin|system`) · `idempotency_key` · `started_at`/`finished_at` · `session_id` · `error` · `payload_bytes` | 一次触发尝试一行；`skipped` 的 `error` 写原因（`overlap` / `duplicate` / `disabled`） |
-| `notifications` | `severity` · `title` · `body` · `source`(`agent|trigger|server`) · `source_id` · `action_url` · `read_at` · `deliveries`(JSON) | 收件箱；渠道投递结果只记录，不回滚也不阻塞落库 |
+| `notifications` | 见 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md) §3 | **独立子系统**的表。触发器只是它的调用方之一（run 失败时写一行 `source='trigger'`） |
 
 ### 2.1 `session_id`：复用目标（可空）
 
@@ -82,9 +82,7 @@ flowchart TB
 - `sessionId` 只能在 `sessionMode='reuse'` 时给；`new` 模式下传了直接拒（**不静默丢弃**——静默丢字段最容易造出"两个人对写哪儿有不同理解"）
 - 绑定目标必须存在且 `sessions.agent_id` 与触发器同源 → 否则 400（这是复用目标的 own-scope 边界）
 - `PATCH` 语义：传值 = 换绑；传 `''`/`null` = 解绑回"首次触发时创建"；切到 `new` 时**自动清空**
-- `dispatch` 会**再校验一次**：绑定的会话被删/换主时 run 直接 `failed`（`getOrCreate` 对未知 id 会照建一个，不校验就会静默写错地方），并推一条 error 通知
-
-不建渠道表：渠道是 `~/.pi/server/notifications.json`（与 `mcp.json` 同风格）。
+- `dispatch` 会**再校验一次**：绑定的会话被删/换主时 run 直接 `failed`（`getOrCreate` 对未知 id 会照建一个，不校验就会静默写错地方），并写一条 error 通知进收件箱
 
 ---
 
@@ -124,10 +122,9 @@ DELETE /api/triggers/:id
 POST   /api/triggers/:id/run                          { payload? }
 GET    /api/triggers/:id/runs?limit=
 POST   /api/triggers/:id/rotate-secret                → { id, secret }（明文只此一次）
-GET    /api/notifications?unread&severity&limit=      → { items, unreadCount }
-POST   /api/notifications/:id/read · /read-all
-GET/PUT /api/config/notifications · POST /api/config/notifications/test
 ```
+
+通知的读写端点在通知子系统里（`/api/notifications*`），与触发器无关。
 
 **脱敏**：列表/详情里 `config.secret` 恒被替换为 `secretEnding`（末 4 位），只有 create 与 rotate 的响应带明文。
 
@@ -171,30 +168,24 @@ GET/PUT /api/config/notifications · POST /api/config/notifications/test
 
 ---
 
-## 7. 通知
+## 7. 与通知的关系（只有一条线）
+
+触发器**不是**通知系统的一部分，只做一件事：run 变成 `failed` 时写一行系统通知。
 
 ```mermaid
 flowchart LR
-  T1["agent 工具<br/>sendNotifyToUser"] --> N["notifier.notify()"]
-  T2["触发器失败<br/>(dispatch catch)"] --> N
-  T3["server 自身异常<br/>(显式调用)"] --> N
-  N --> DB[("notifications 落库")]
-  DB --> CH["渠道模板投递<br/>~/.pi/server/notifications.json"]
-  DB --> UI["/notifications 收件箱"]
+  R["trigger run → failed<br/>(dispatch catch)"] --> N["notifier.notify()<br/>source='trigger'<br/>actionUrl=/triggers/:id"]
+  N --> DB[("notifications")]
 ```
 
-- **只有这三处**能让通知出现；绝不从 assistant message 派生
-- `sendNotifyToUser` 是 serverBuiltinTool（worker 注册工具 + master `registerReverseCallHandler`，与 `sendFileToUser` 同款）。闸门就是 `serverBuiltinTools` 是否声明；参数只有 `{title, body, severity?}`，`sessionId`/`actionUrl` 由平台填
-- `action_url` 由平台按来源生成：agent → `/chat/<sessionId>`，trigger 失败 → `/triggers/<id>`
-- 渠道 = URL 模板（`{{title}}` `{{body}}` `{{severity}}`，URL 编码替换）+ 可选 POST JSON body 模板；`minSeverity` 全局门槛，渠道可覆盖
-- 投递 5s 超时、**不重试不合并**，结果写进 `deliveries`（`[{channel, ok, error?, at}]`）；失败只 warn 日志
-- 收件箱只读：要回复请进会话
+- agent 想在跑完后主动汇报，是自己在会话里调 `postNotification` 工具（闸门 `serverBuiltinTools`），触发器不代劳
+- 通知的模型、读写接口、收件箱 UI、以及"平台不投递"的取舍 → 全部在 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)
 
 ---
 
 ## 8. 能力面与插件扩展点
 
-**capability（module `trigger`，全部 `scoped: true` → own-agent 写）**：`trigger.list/get`（读，`scoped:false`）、`trigger.create/update/delete/run`（`create`/`update` 的 `sessionId` 与 HTTP 走同一个校验器）。`sendNotifyToUser` **不是** capability（不是管理操作）。兜底常量：每 agent ≤10 个启用触发器、cron 最小间隔 ≥5 分钟。
+**capability（module `trigger`，全部 `scoped: true` → own-agent 写）**：`trigger.list/get`（读，`scoped:false`）、`trigger.create/update/delete/run`（`create`/`update` 的 `sessionId` 与 HTTP 走同一个校验器）。`postNotification` **不是** capability（不是管理操作）。兜底常量：每 agent ≤10 个启用触发器、cron 最小间隔 ≥5 分钟。
 
 **插件**：
 
@@ -214,10 +205,9 @@ host.triggerSources.register({ source, validateConfig, computeNextAt?, housekeep
 |---|---|
 | `/triggers`（navOrder 15，icon `automation`） | 单表：名称/agent/source/计划/下次/上次/runs/状态 + 行内 ▶ ✎ 🗑（**不做行内展开**，runs 只在详情页） |
 | `/triggers/new` · `/triggers/:id` | 表单按 source 渲染；`source`/`agent` 创建后只读；`reuse` 模式多一个「目标会话」下拉（该 agent 的会话，第一项 = 留空自动创建）；右栏最近 50 条 runs；webhook secret 弹窗**只显示一次** |
-| `/notifications`（header 铃铛 badge → 此页，`mobileHidden`） | 只读收件箱：severity 色条 + 筛选 + 全部已读 + 点击跳 `actionUrl` |
-| `/config/notifications`（配置二级项「通知」） | 渠道 CRUD + 预设（Bark/ntfy/PushPlus/企业微信机器人）+ 单渠道「测试」 |
+| `/notifications`（header 铃铛 badge → 此页，`mobileHidden`） | 只读收件箱（属通知子系统，见其文档） |
 
-未读数由模块级单例 `useNotifications().unreadCount` 共享（30s 轮询 + 路由切换刷新），不引 Pinia。
+
 
 ---
 
@@ -225,6 +215,6 @@ host.triggerSources.register({ source, validateConfig, computeNextAt?, housekeep
 
 - **不做权限收窄**：触发器必须绑专用 agent；交互 agent 不该挂触发器（本期靠约定，不靠代码）
 - **不做 webhook 语义**：无条件过滤/字段模板/去抖/重试——事件逻辑留在外部系统，平台是哑端点
-- **不做通知合并/digest/分诊**：语义交给 prompt，平台只记事实 + 提供通道
+- **不做通知合并/digest/分诊**：语义交给 prompt，平台只记事实（详见通知子系统文档）
 - **不做重试与补跑**：失败只记录；错过只记 `missed`
 - 会话归因靠标题前缀与 `session_id` 回填，`sessions` 表无 `creator`/`origin` 列（**改表要等权限那条线一起做**）

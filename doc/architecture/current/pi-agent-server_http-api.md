@@ -209,10 +209,8 @@ interface SessionContextDTO {
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/notifications` | GET | `?unread&severity&limit` → `{ items, unreadCount }` |
-| `/api/notifications/:id/read` · `/read-all` | POST | 标已读 |
-| `/api/config/notifications` | GET/PUT | 渠道文件 `~/.pi/server/notifications.json` 的读写；校验：缺 `urlTemplate` / 非 http(s) / 名称重复 → 400，保留平台不建模的字段 |
-| `/api/config/notifications/test` | POST | 单渠道试发（固定样例文案，结果直接回页面，不写通知行） |
+| `/api/notifications` | GET | `?unread&severity&limit` → `{ items, unreadCount }`（系统通知读接口，见 [notifications 文档](pi-agent-server_notifications.md)） |
+| `/api/notifications/:id/read` · `/read-all` | POST | 标已读。**没有创建端点**（写入口只有内部 `notify()`），也没有 `since` 游标 |
 
 ## Worker（调试）
 

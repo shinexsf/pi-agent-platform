@@ -80,7 +80,8 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证；debug 代码解耦三约束） |
 | **logging** | **[`pi-agent-server_logging.md`](pi-agent-server_logging.md)** | ✅ **已定**（pino JSON 单时间线 + worker stderr tee + RollingFileSink 固定名滚动 + console 桥） |
 | **builtin-skills** | **[`pi-agent-server_builtin-skills.md`](pi-agent-server_builtin-skills.md)** | ✅ **已上线**（平台随包 skill：`serverBuiltinSkills` 显式清单 + 包内只读发布 + worker `additionalSkillPaths` 注入 + 只读清单接口） |
-| **triggers** | **[`pi-agent-server_triggers.md`](pi-agent-server_triggers.md)** | ✅ **已上线**（触发器调度 + 通知收件箱：适配层 resolve → `dispatch(event)`；cron/once/webhook + 插件 source；`<system-event>` 信封；`sendNotifyToUser` 工具） |
+| **triggers** | **[`pi-agent-server_triggers.md`](pi-agent-server_triggers.md)** | ✅ **已上线**（触发器调度：适配层 resolve → `dispatch(event)`；cron/once/webhook + 插件 source；`<system-event>` 信封；失败写通知） |
+| **notifications** | **[`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)** | ✅ **已上线**（**独立子系统**：系统通知表 + `notify()` 内部写入口 + `postNotification` 工具 + 只读收件箱；**平台不对外投递**） |
 
 ## 待决项
 

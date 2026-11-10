@@ -72,7 +72,6 @@ src/views/
 │   ├── ModelsConfig.vue         /config/models
 │   ├── ProviderEditorView.vue   /config/models/new | :name/edit
 │   ├── DefaultSettings.vue      /config/settings
-│   ├── NotificationsConfig.vue  /config/notifications（通知渠道 + 单渠道测试）
 │   ├── SkillsConfig.vue         /config/skills/:name?（ListEditor 包装）
 │   ├── ResourceEditorView.vue   /config/skills/new | /config/prompts/new
 │   ├── PromptsConfig.vue        /config/prompts/:name?（ListEditor 包装）
@@ -100,7 +99,6 @@ src/views/
 /config                              ConfigView（嵌套壳）
   /config                            → redirect config-models
   /config/models                     ModelsConfig
-  /config/notifications              NotificationsConfig
   /config/models/new                 ProviderEditorView
   /config/models/:name/edit          ProviderEditorView
   /config/settings                   DefaultSettings
@@ -361,10 +359,10 @@ agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Buil
 
 ## 触发器与通知页（2026-11-06）
 
-- **入口**：抽屉一级「触发器」（`meta.navLabel='触发器'` / `navOrder=15` / `navIcon='automation'`）+ header 右侧铃铛（未读 badge，`unreadCount===0` 不渲染）→ `/notifications`；渠道配置挂「配置 → 通知」
+- **入口**：抽屉一级「触发器」（`meta.navLabel='触发器'` / `navOrder=15` / `navIcon='automation'`）+ header 右侧铃铛（未读 badge，`unreadCount===0` 不渲染）→ `/notifications`。**「配置 → 通知」渠道页已删**（平台不做外部投递，见 [notifications 文档](pi-agent-server_notifications.md)）
 - **状态**：不引 Pinia——`useTriggers()` / `useNotifications()` 用页面级 `ref` + fetch；只有未读数需要跨页共享，用模块级单例 `ref`（30s 轮询 + 路由切换刷新）
 - **列表页**：单表（名称/agent/source/计划/下次/上次/runs/状态）+ 行内 ▶ ✎ 🗑；**不做行内展开**，runs 只在详情页右栏
 - **详情页**：表单按 `source` 渲染（cron 表达式+时区 / once `datetime-local` / webhook 密钥区块），`source` 与 `agent` 创建后只读；`reuse` 模式多一个「目标会话」下拉（选项来自既有 `GET /api/sessions?agent_id=`，第一项 = 留空自动创建）；webhook 明文 secret 只在「创建成功」与「轮换」两处弹窗显示一次（含 curl 示例）
 - **收件箱**：severity 色条 + 筛选 chips + 全部已读；点击标已读并跳 `actionUrl`；**没有输入框**（要回复必须进会话）
 
-细节见 [triggers 文档](pi-agent-server_triggers.md) §9。
+细节见 [triggers 文档](pi-agent-server_triggers.md) §9；收件箱本身属独立子系统，见 [notifications 文档](pi-agent-server_notifications.md) §6。
