@@ -20,15 +20,16 @@ Server 通过 per-session worker pool 隔离会话，多渠道接入（IDE / Web
 
 ## 快速开始
 
-需要 Node.js ≥ 22、pnpm ≥ 11。
+需要 Node.js ≥ 22.19、pnpm ≥ 11。**所有命令在 `platform/` 下执行**（仓库根没有 `package.json`）。
 
 ```bash
+cd platform
 pnpm install
-pnpm --filter @pi-agent-platform/session-worker build
-pnpm --filter @pi-agent-platform/server dev
+pnpm dev:server     # http://localhost:3000，dev 态 tsx 直跑源码，无需 build
+pnpm build:web      # 构建 Web SPA 到 server 托管目录（/web/）
 ```
 
-Server 默认监听 `http://localhost:8787`，Web UI 在 `/web/`。
+Dev server 默认监听 `http://localhost:3000`（`platform/apps/pi-agent-server/scripts/dev.mjs` 钉死；打包态默认 9102）。Web UI 在 `/web/`，需先 `pnpm build:web`。
 
 Web UI 顶部的“架构图”入口可查看交互式项目架构，支持明暗主题、视觉样式切换和导出。
 在 `platform/` 下运行 `pnpm dev:web` 后访问 `http://localhost:5173/architecture`；

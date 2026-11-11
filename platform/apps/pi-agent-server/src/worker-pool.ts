@@ -35,7 +35,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Prefer the compiled dist (no loader needed); fall back to .ts source under tsx.
+// Dev mode prefers the .ts source (tsx loader); packaged mode uses WORKER_DIST_DIR.
 // Note: under tsx, import.meta.url may point to a temp location; use process.cwd() + relative path as fallback.
 import { existsSync } from 'node:fs';
 
