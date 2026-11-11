@@ -72,5 +72,5 @@ grep '"name":"session-worker"' <log>   # worker 侧日志
 
 ## 相关
 
-- `doc/architecture/current/pi-agent-server_debug-testing.md` —— stderrTail 双通道的 debug 面
+- `doc/architecture/pi-agent-server_debug-testing.md` —— stderrTail 双通道的 debug 面
 - `.pi/skills/agent-testing/SKILL.md`「看日志」——测试流程中的日志检查规范

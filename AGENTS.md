@@ -14,7 +14,11 @@
 |---|-------------------------------------------------|---|
 | [`doc/architecture/`](doc/architecture/) | 架构文档: [README.md](doc/architecture/README.md)   | 用户要求或询问后更新，不可私自修改 |
 
-> 个人开发日志、私域调研、OpenSpec 工作流等本地文档不随仓库发布（gitignored），由用户在本地维护。
+> `openspec/`（OpenSpec 工作流）、`tmp/`、`test-workspace/` 在主仓库根、gitignored，由用户在本地维护。
+>
+> 开发日志 / 想法 / 架构变更史 / pi 源码知识库属于**私域文档**，在独立仓库里维护，读写流程由 `arch-docs` / `dev-journal` / `ideas` / `pi-knowledge` 四个 skill 各自说明；主仓库 `doc/` 下不要再新建私域目录。
+>
+> **文档自包含**：主仓库 `doc/` 下的公开文档只引用仓库内文件，不得出现私域文档、`openspec/`、`tmp/`、`reference/` 等仓库外路径（要提就写主题名）。
 
 ## 人机协作规则
 
@@ -22,18 +26,19 @@
 
 - 调研、写文档、写代码
 - 改代码前**必读**对应目录的 README
-- **pi 知识库双挂钩**（规则详见 [`.pi/skills/pi-knowledge/SKILL.md`](.pi/skills/pi-knowledge/SKILL.md)）：**翻之前**——任何任务只要即将打开 pi 官方 docs / 源码 / dist，先读 `reference/pi-knowledge/README.md` 索引（命中可能免翻，未命中带着“已有什么”去翻）；**翻之后**——获得了有价值信息（官方 docs 没写的、反直觉的、实证过的坑/契约/坐标）**直接沉淀**进知识库，不需用户点名“沉淀”
+- **pi 知识库双挂钩**（`pi-knowledge` skill）：**翻之前**——即将打开 pi 官方 docs / 源码 / dist 时，先查知识库索引（命中可能免翻，未命中带着“已有什么”去翻）；**翻之后**——有价值信息（官方 docs 没写的、反直觉的、实证过的坑/契约/坐标）**直接沉淀**，不需用户点名“沉淀”
 - **提议**（不主动做）：changelog 条目、AGENTS.md 修订、新增子项目
 - **日志统一走 pino logger**（JSON 结构化，单时间线）：server 用 `apps/pi-agent-server/src/logger.ts` 的 `childLogger('<module>')`，worker 用 `workers/session-worker/src/logger.ts`（stderr 输出，自动 tee 进主日志并带 sessionId/workerPid，同时保留 `stderrTail` 供 `/debug/sessions/:id`）。级别约定：运行事件 info/warn/error，诊断信息用 debug（`LOG_LEVEL=debug` 才可见）
+- **私域仓库交付**：改完一批私域文档或 skill 后，按对应 skill 的「收尾」步骤提交并推送（含 skill 自身更新）；主仓库改动不提交，交人 review
 - **临时文件统一放 `tmp/YYYY-MM-dd/`**（已 gitignore）：诊断脚本、测试 payload、抓包/截图、导出的 json 等都放这里；不要在仓库根留 `.tmp-*` 之类散落目录
-- **mermaid 图校验**：写/改文档里的 mermaid 代码块后，跑 `cd platform && node scripts/check-mermaid.mjs`（真实 `mermaid.parse`，全量扫 `doc/`；坏块报 `文件:行号` 并退出 1；也可传路径只验指定文件）。mermaid + jsdom 是 workspace devDependencies；`update-arch-docs` skill 已内置这一步，更新架构文档带图变更时必须过
+- **mermaid 图校验**：写/改文档里的 mermaid 代码块后，跑 `cd platform && node scripts/check-mermaid.mjs`（真实 `mermaid.parse`，全量扫 `doc/`；坏块报 `文件:行号` 并退出 1；也可传路径只验指定文件）。mermaid + jsdom 是 workspace devDependencies；`arch-docs` skill 已内置这一步，更新架构文档带图变更时必须过
 
 ### agent 不做（红线）
 
 - ❌ **主动 commit / push** —— 人来 review
 - ❌ **删除文件 / 目录** —— 改前先问
 - ❌ **修改本文件核心规则** —— 必须人确认
-- ❌ **写测试除非明确要求** —— 不主动加（**debug 接口 + curl 端到端验证是首选**——见 `doc/architecture/current/pi-agent-server_debug-testing.md`）
+- ❌ **写测试除非明确要求** —— 不主动加（**debug 接口 + curl 端到端验证是首选**——见 `doc/architecture/pi-agent-server_debug-testing.md`）
 - ❌ **用 `console.*` 打日志** —— 统一用 pino logger（见上）；console 已被桥接进 logger，只留给第三方 SDK 输出与启动横幅
 
 ### 测试产物一律放 `test-workspace/`（硬约定）
@@ -46,7 +51,7 @@
 - 测试结束**在报告里标注产物**（agent 名 / session id / 目录），清理用 `POST /api/agents/:id/delete`
 - 理由：`test-workspace/` 已 gitignore；避免污染业务仓库、避免把真实配置/密钥写到错误目录、避免留下指向真实项目的僵尸 agent
 
-细节（自检 agent 的 skill/fixture 布局、断言流程）见 [`.pi/skills/llm-integration-testing/SKILL.md`](.pi/skills/llm-integration-testing/SKILL.md)。
+细节（自检 agent 的 skill/fixture 布局、断言流程）见 `llm-integration-testing` skill。
 
 ### 打包态验证走 `packaged-test` skill（只在容器里测）
 
@@ -71,7 +76,7 @@ $SK/scripts/packtest.sh verify    # 从 WSL curl 127.0.0.1:9911 冒烟
    - dev 态 tsx 直跑源码、**无需 build**；dist 产物只在打包部署（`pnpm pack:cli`）时才需要，见「开发环境启停与生效」。
 2. **部署到开发环境**：按「开发环境启停与生效」执行 —— 后端改动启停 `dev:server`（启动 `pnpm dev:server` / 停止 `pnpm stop:server`），前端改动 `pnpm build:web` / `pnpm build:ide` 打包部署到 server 托管目录
 3. **验证**：
-   - **接口：自己验证** —— debug 接口 + curl 端到端（见 `doc/architecture/current/pi-agent-server_debug-testing.md`），通过才算修好
+   - **接口：自己验证** —— debug 接口 + curl 端到端（见 `doc/architecture/pi-agent-server_debug-testing.md`），通过才算修好
    - **UI / 聊天软件（IM）实际集成测试：通知用户**"新代码已部署到开发环境"，由用户做实际集成验证
 
 **例外**：特别确定、非常明显的 bug（拼写错误、明显类型错误）可简化处理（可跳过部署验证），但仍应告知用户。
@@ -96,7 +101,7 @@ pnpm stop:server       # 停止（只 kill 3000 端口那一个 PID；停其他�
 
 - `public/web` / `public/ide` 不存在时 server 启动会跳过静态挂载 —— 首次 build 后需重启一次 server
 - 改 `ide-bridge` 的 method 契约需与 Kotlin 侧同步（即使 Kotlin 代码没改）
-- 只有打包态（`pi-server` CLI / `pnpm pack:cli`）才需要 dist 产物，见 `doc/architecture/current/pi-agent-server_packaging.md`
+- 只有打包态（`pi-server` CLI / `pnpm pack:cli`）才需要 dist 产物，见 `doc/architecture/pi-agent-server_packaging.md`
 - **新增/改动跨包 runtime import（`@pi-agent-platform/*`）或打包脚本 → 必须跑一次 `pnpm pack:cli`**：它内置 `scripts/check-packaged.mjs` 静态自检（产物完整性 / channels manifest / manifest 指向 / 模块说明符 / 未声明依赖），dev 态永远暴露不了这类问题（tsx + pnpm symlink 会静默解析成功）；自检不过不产 tgz，启动与功能验证交给部署测试环境
 
 ## 必读
@@ -142,7 +147,7 @@ pi-agent-platform/                      仓库根
 
 > **注**：`pi-agent-idea/`（IntelliJ 插件）跟 `platform/`（Node.js monorepo）**平行**，在仓库根。`platform/apps/pi-agent-ide/`（Vue SPA）是 server 通过 `/ide/` 路径静态托管的 IDE 端 UI，跟 `pi-agent-idea/` 插件配合使用——JCEF 内嵌加载 `pi-agent-ide/`，跟 Kotlin 端通过 `ide-bridge` RPC 通信。
 >
-> **架构详情**见 `doc/architecture/current/` 子模块文档（特别是 `pi-agent-idea_overview.md` + `pi-agent-idea_ide-bridge.md`）。
+> **架构详情**见 `doc/architecture/` 子模块文档（特别是 `pi-agent-idea_overview.md` + `pi-agent-idea_ide-bridge.md`）。
 
 ## 关键架构原则（P1）
 

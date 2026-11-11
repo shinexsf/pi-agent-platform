@@ -143,7 +143,7 @@ export class Session {
 3. **返回完整状态**：不分页，**一次性返回所有相关字段**（caller 一次看全）
 4. **dev-only gating**：跟全局 `/debug` 一样的 `config.isDev` 判断
 5. **大字段缓存到 entry**：超过 1KB 的字段（如 systemPrompt）必须在 spawn 时缓存到 entry，不走 IPC
-6. **写 dev-journal**：在 `doc/dev-journal/YYYY-MM-DD_<name>.md` 记录端点路径、返回结构、验证步骤
+6. **写 dev-journal**（私域文档，不随本仓库发布）：按 `YYYY-MM-DD_<name>.md` 记录端点路径、返回结构、验证步骤
 
 **模板**：
 
@@ -255,10 +255,10 @@ curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 - ❌ **不要让 debug 端点分页**（一次性返回完整状态，caller 自己挑）
 - ❌ **不要跳过 dev-journal 记录**（即使简单端点也要写一条，方便后人复用模式）
 
-## 相关 dev-journal
+## 相关经验（来源：私域 dev-journal，不引用路径）
 
-- [dev-journal 010: IM Gateway 调通](../../dev-journal/2026-08-28_im-gateway-debug-and-real-flow.md) —— "debug 接口是开发期必备 — 比每次手动改 server 状态验证快很多"
-- [dev-journal 015: worker 不加载 AGENTS.md](../../dev-journal/2026-08-29_worker-agents-md-reload.md) —— "debug 接口盲区" 引出 016
-- [dev-journal 016: worker 接管 systemPrompt + debug 接口](../../dev-journal/2026-08-30_custom-systemprompt-takeover.md) —— `/:id/context.systemPrompt` debug 接口设计
+- IM Gateway 调通：「debug 接口是开发期必备 — 比每次手动改 server 状态验证快很多」
+- worker 不加载 AGENTS.md → 暴露「debug 接口盲区」，引出 `/:id/context.systemPrompt`
+- worker 接管 systemPrompt + debug 接口 → `/:id/context.systemPrompt` 的设计来源
 
 ## 关联决策

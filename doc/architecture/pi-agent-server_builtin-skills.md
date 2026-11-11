@@ -115,4 +115,4 @@ pi 的 skill scope 由物理位置判定（`loadSkills()` 的 `getSource` + `get
 
 - **不做热加载**：`SKILL.md` 内容随包发布，改文案要重新打包/重启；清单有 2s 缓存（dev 改文件后最多 2s 生效，注入发生在 spawn）。
 - **不做用户可编辑**：内置 skill 不可在页面改、不可上传覆盖。要定制请复制到 `~/.pi/agent/skills`（那时它就成了用户 skill，归 `skills` 管）。
-- **不与应用层权限耦合**：本轮是"显式勾选"，不做"授权了某能力就自动附带某说明"的隐式映射（曾评估，见 `doc/ideas/builtin-skills-and-trigger-usage.md`）。
+- **不与应用层权限耦合**：本轮是"显式勾选"，不做"授权了某能力就自动附带某说明"的隐式映射（曾评估「跟着 capabilities 自动附带」方案后否决，理由同前；完整讨论在私域想法库 `builtin-skills-and-trigger-usage`）。

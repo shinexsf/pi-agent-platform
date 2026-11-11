@@ -85,10 +85,10 @@ pnpm pack:cli
 7. 拷贝 `worker/dist/` 到 `cli/dist/worker/`
 8. 拷贝 `channels/{manifest.json,<name>/dist/}` 到 `cli/dist/server/channels/`（排除 admin/__tests__/d.ts/map）
 9. 扫描 `channels/*/package.json` 的 `dependencies`，合并去重写入 `cli/package.json`
-9b. **产物静态自检**（[`scripts/check-packaged.mjs`](../../../platform/scripts/check-packaged.mjs)），不过则 exit 1、不产 tgz
+9b. **产物静态自检**（[`scripts/check-packaged.mjs`](../../platform/scripts/check-packaged.mjs)），不过则 exit 1、不产 tgz
 10. `pnpm pack` 在 `packages/cli/` 下产 `pi-server-X.Y.Z.tgz`
 
-构建脚本：[`scripts/build-cli.mjs`](../../../platform/scripts/build-cli.mjs)（plain Node.js + ESM）。
+构建脚本：[`scripts/build-cli.mjs`](../../platform/scripts/build-cli.mjs)（plain Node.js + ESM）。
 **跨平台**：命令执行走 `spawn(cmd, args, { cwd })`，不拼 `cd /d`（cmd.exe 专用语法）——
 Windows / WSL / Linux 都能直接跑 `pnpm pack:cli`。
 
@@ -249,7 +249,7 @@ IM channels（wechat + qq）在 dev 态直接 `import('channels/<name>/src/index
 - 用 npm ≥ 11 安装/发布时 postinstall 可能被默认策略跳过 → 显式 `--allow-scripts=better-sqlite3,@google/genai,protobufjs`
   （后者是 `@google/genai` 的必需后置脚本，缺它会在运行时才炸）
 
-详细 workaround 见 [`packages/cli/README.md`](../../../platform/packages/cli/README.md) 的 Troubleshooting 段。
+详细 workaround 见 [`packages/cli/README.md`](../../platform/packages/cli/README.md) 的 Troubleshooting 段。
 
 ## 进程守护
 
@@ -283,8 +283,8 @@ CLI `stop` 命令：
 ## 与 OpenSpec / dev-journal 的关系
 
 - **OpenSpec change `cli-packaging`**（本地工作流产物，gitignored，不引用路径）：本架构变更的 proposal / design / specs / tasks 文档，49/49 tasks done
-- **dev-journal**（`doc/dev-journal/`，gitignored）：开发过程记录 + 踩坑实录
-- **architecture changelog**（私域，gitignored）：架构变更轨迹
+- **dev-journal**（私域，随平台私域仓库版本化，不进本仓库）：开发过程记录 + 踩坑实录
+- **architecture changelog**（私域，随平台私域仓库版本化）：架构变更轨迹
 - **本文档**：公开的"打包架构是什么"，不含决策过程
 
 ## 不在 MVP 范围

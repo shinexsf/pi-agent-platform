@@ -2,7 +2,7 @@
 /.idea/
 /.vscode/
 
-# Pi SDK state
+# Pi state + private docs/skills: separate git repo at .pi/.git (ignored here on purpose)
 /.pi/
 
 # Dev logs (rotating, written by the unified logger)
@@ -10,13 +10,6 @@
 
 # Personal — not for public
 /openspec/
-/reference/projects/
-/reference/pi-knowledge/
-/doc/dev-journal/
-/doc/ideas/
-/doc/notes/
-/doc/research/
-/doc/architecture/changelog/
 
 # Build artefacts
 *.tgz

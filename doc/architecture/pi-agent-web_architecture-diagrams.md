@@ -118,7 +118,7 @@ node <skill>/bin/archify.mjs finalize <type> \
 2. 跑 `archify finalize`（带 `ARCHIFY_CHROME`），失败就按诊断改，别整体重写
 3. `constants/architecture-diagrams.ts` 里对应集合的 `diagrams` 加一项（`slugs` 不能撞）
 4. `pnpm build:web` → 刷新页面验证 tab 与深链
-5. 平台图改完顺手核对受影响的 `doc/architecture/current/` 文档
+5. 平台图改完顺手核对受影响的 `doc/architecture/` 文档
 
 ## 已知约束与坑
 

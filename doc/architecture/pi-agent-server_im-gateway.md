@@ -305,9 +305,9 @@ IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护(工�
 
 ## 相关决策
 
-- [`doc/architecture/current/pi-agent-server_overview.md`](pi-agent-server_overview.md) — 系统全景（IM 渠道已实施）
-- [`doc/architecture/current/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度
-- [`doc/architecture/current/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机
-- [`doc/architecture/current/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
-- [`doc/architecture/current/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 架构 hard rules（含“主包零渠道知识”硬约束，见 `## IM 网关主包零渠道知识`）
+- [`doc/architecture/pi-agent-server_overview.md`](pi-agent-server_overview.md) — 系统全景（IM 渠道已实施）
+- [`doc/architecture/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度
+- [`doc/architecture/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机
+- [`doc/architecture/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
+- [`doc/architecture/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 架构 hard rules（含“主包零渠道知识”硬约束，见 `## IM 网关主包零渠道知识`）
 - OpenSpec change `im-gateway`（工作流产物已归档，不引用路径）— 提案 163 行 / 设计 955 行 16 个 D / 实施任务 65 个 / 调研笔记
