@@ -1,6 +1,6 @@
 /**
  * SQLite schema via drizzle-orm.
- * Matches doc/architecture/current/pi-agent-server_db-schema.md.
+ * Matches doc/architecture/pi-agent-server_db-schema.md.
  */
 
 import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';

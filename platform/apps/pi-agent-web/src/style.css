@@ -1031,7 +1031,7 @@ textarea.control {
 }
 
 /* 断点契约：< 768px compact，768–1023px medium，>= 1024px desktop。
-   见 openspec/changes/responsive-web-layout/design.md D4。 */
+   与 composables/useMediaQuery.ts 的 BP 常量保持同步。 */
 @media (max-width: 1023px) {
   .app-header-inner {
     gap: 8px;

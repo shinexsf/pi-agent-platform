@@ -4,9 +4,7 @@
  * JCEF 内聊天页面样式 —— 跟旧插件 JcefChatPanel 的 LIGHT_CSS / DARK_CSS 保持一致。
  * 视觉风格不变，只把硬编码颜色改成 CSS variables（Kotlin 端通过 bridge 注入）。
  *
- * 旧插件参考：reference/projects/personal-agent-manage/agent-manage-plugin/
- *   src/main/kotlin/com/personalagent/agent/ui/JcefChatPanel.kt
- *   §LIGHT_CSS / DARK_CSS
+ * 色板沿用旧 IntelliJ 插件 JcefChatPanel 的 LIGHT_CSS / DARK_CSS（历史实现已不入库，以本文件为准）。
  */
 
 :root {

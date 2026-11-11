@@ -104,7 +104,7 @@ const PLATFORM_DIAGRAMS: readonly ArchitectureDiagram[] = [
  * 原生 pi 的模块图。
  *
  * 证据形态与平台图不同：pi 装在 node_modules 里（gitignored），没有仓库 sources 可引，
- * 所以版本钉在标题（pi 1.3.0）、结论写在卡片里，调研结果回流 `reference/pi-knowledge/`。
+ * 所以版本钉在标题（pi 1.3.0）、结论写在卡片里，调研结果回流私域 pi 知识库（`.pi/` 仓库，不进本仓库）。
  * 加图 = 往 `diagrams` 里加一项，spec 放 `architecture/pi/`、产物放 `public/architecture/pi/`。
  */
 const PI_DIAGRAMS: readonly ArchitectureDiagram[] = [

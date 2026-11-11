@@ -11,10 +11,9 @@
  * responsibility (e.g. HTTP upload endpoint restricts to images; IM adapter
  * accepts anything).
  *
- * NOTE: read-tool images do NOT flow through this store. They are owned by
- * the source filesystem path the model chose to read. See the spec at
- * `openspec/changes/image-attachments-via-server/specs/session-deletion-cascade-attachments`
- * for the boundary rules.
+ * NOTE: read-tool images do NOT flow through this store — they are owned by the
+ * source filesystem path the model chose to read. This store backs user-uploaded
+ * attachments only, and cascades on session deletion.
  */
 
 import { createHash, randomUUID } from 'node:crypto';

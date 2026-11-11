@@ -1,7 +1,7 @@
 /**
  * Path normalization for cross-OS compatibility.
  *
- * Rules (per doc/architecture/current/pi-agent-server_db-schema.md):
+ * Rules (per doc/architecture/pi-agent-server_db-schema.md):
  * 1. Convert \ to /
  * 2. Lowercase Windows drive letter (C: → c:)
  * 3. Strip trailing / (keep root /)

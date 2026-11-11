@@ -6,7 +6,7 @@
  * - `server/index.js` 的 `init(host)` —— 声明 HTTP 端点
  * 第三个 `mount(el, host)` 在浏览器里，与本模块无关。
  *
- * 设计要点（详见 doc/architecture/current/pi-agent-server_plugins-runtime.md）：
+ * 设计要点（详见 doc/architecture/pi-agent-server_plugins-runtime.md）：
  * - 注册表在 server 内存里，是唯一真相；浏览器只消费查询结果
  * - 作用域写在 API 形状里（`global.*` / `session.*`），不靠可选字段推断
  * - 无效注册一律进 `rejected`，绝不静默丢弃

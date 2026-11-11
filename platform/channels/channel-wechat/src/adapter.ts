@@ -18,9 +18,7 @@
  *
  * Auto-reconnect: SDK has built-in polling + reconnect (HTTP long-poll).
  *
- * Reference: reference/projects/personal-agent-manage/reference/projects/pi-wechat-bot
- * The reference uses `await bot.login({force: true, callbacks})` then `bot.start().catch(...)`.
- * We follow the exact same pattern.
+ * Login pattern: `await bot.login({force: true, callbacks})` then `bot.start().catch(...)`.
  *
  * Dev mock: set WECHAT_MOCK_QR=1 to skip the real SDK and emit synthetic events.
  */

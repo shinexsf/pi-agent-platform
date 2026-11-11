@@ -9,7 +9,7 @@
  */
 import { onBeforeUnmount, ref, type Ref } from 'vue';
 
-/** 布局断点契约（见 openspec/changes/responsive-web-layout/design.md D4）。 */
+/** 布局断点契约：三档边界只由视口宽度决定，抽屉模式随档位切换（常量即契约）。 */
 export const BP = {
   /** 紧凑：抽屉为覆盖层，内容单栏，section 切换用顶部分段控件 */
   compact: '(max-width: 767px)',

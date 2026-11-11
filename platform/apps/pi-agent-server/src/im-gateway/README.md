@@ -74,7 +74,7 @@ Coverage:
 
 ## Design references
 
-- `openspec/changes/im-gateway/` — full design + specs + tasks
-- `doc/architecture/current/pi-agent-server_im-gateway.md` — architecture summary
-- `doc/architecture/current/pi-agent-server_db-schema.md` — channel table ownership rules
-- `reference/projects/personal-agent-manage/pi-qq-bot/` + `pi-wechat-bot/` — historical implementations (read-only)
+- `doc/architecture/pi-agent-server_im-gateway.md` — architecture summary
+- `doc/architecture/pi-agent-server_db-schema.md` — channel table ownership rules
+
+> 设计与规格过程记录在私域工作区，不随本仓库发布，也不在此引用（避免悬空路径）。

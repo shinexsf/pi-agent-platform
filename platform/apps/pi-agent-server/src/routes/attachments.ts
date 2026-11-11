@@ -3,9 +3,9 @@
  *   POST /api/sessions/:id/attachments — upload user-pasted image (idempotent by content-addressed sha)
  *   GET  /api/sessions/:id/attachments — list session attachments (metadata only, no path)
  *
- * NOTE: read-tool images do NOT flow through these endpoints. See
- * `openspec/changes/image-attachments-via-server/specs/image-attachments-api/spec.md`
- * for the user-attachment boundary.
+ * NOTE: read-tool images do NOT flow through these endpoints — they stay on the
+ * source filesystem path the model read. These endpoints only handle user-uploaded
+ * attachments (session-scoped, content-addressed).
  */
 
 import { Hono } from 'hono';
