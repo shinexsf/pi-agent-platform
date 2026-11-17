@@ -42,22 +42,16 @@ import { resolveBuiltinExtensionInjection } from './builtin-extensions.js';
 import { loadSelectedMcpServers } from './mcp-catalog.js';
 import { logger } from './logger.js';
 
-/** 浏览器 → worker 的插件入口；每个 worker 只有一个会话，所以按 pluginId 存即可。 */
-const pluginEmitHandlers = new Map<string, (name: string, data: unknown) => void | Promise<void>>();
-
 /**
  * 浏览器 `emit` 的分发入口；返回插件是否注册了处理器。
  *
- * 做成模块级函数而不是 adapter 方法：adapter 是普通对象，插件这条通道与
- * SessionHandle 无关，挂在模块上更省事（每个 worker 只有一个会话）。
+ * 走的是 worker 侧方法注册表（`plugin.<id>.emit`）——与 master 主动调这条路
+ * 完全同一条分发路径，没有单独的"插件消息通道"。
  */
 export async function emitToPluginMessage(pluginId: string, name: string, data: unknown): Promise<boolean> {
-  const handler = pluginEmitHandlers.get(pluginId);
-  if (!handler) {
-    return false;
-  }
+  if (!hasPluginMethod(pluginId, 'emit')) return false;
   try {
-    await handler(name, data);
+    await callPluginMethod(pluginId, 'emit', [{ name, data }]);
     return true;
   } catch (err) {
     logger.error({ pluginId, name, err: String(err) }, 'plugin emit handler failed');
@@ -67,6 +61,7 @@ export async function emitToPluginMessage(pluginId: string, name: string, data: 
 import type { WorkerEvent, WorkerEventKind, WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
 import type { PluginWorkerBridge } from '@pi-agent-platform/plugin-types';
 import { createServerTools, type CallMasterFn } from './tools.js';
+import { callPluginMethod, forwardRegistry, hasPluginMethod, registerPluginMethod } from './methods.js';
 
 export type EventEmitter = (event: Omit<WorkerEvent, 'kind'>) => void;
 
@@ -556,15 +551,20 @@ function buildTakeoverPrompt(opts: NormalizedBuildSystemPromptOptions): string {
 
 /**
  * Create a real pi SDK session and wire up event emission.
+ *
+ * Takes the ONE payload master sends (`RuntimeConfig`): `sessionId` / `model` /
+ * `thinkingLevel` / `config` / `existingSessionPath` are the session-row snapshot,
+ * `workspacePath` / `capabilityIndex` are platform-injected, `plugins` is derived.
  */
 export async function createSession(
-  config: RuntimeConfig,
-  sessionId: string,
+  payload: RuntimeConfig,
   emit: EventEmitter,
   callMaster: CallMasterFn,
-  existingSessionPath?: string,
-  plugins?: WorkerPluginSpec[],
 ): Promise<{ session: PiSessionAdapter; handle: SessionHandle }> {
+  const config = payload;
+  const sessionId = payload.sessionId;
+  const existingSessionPath = payload.existingSessionPath;
+  const plugins = payload.plugins;
   const agentDir = process.env.PI_AGENT_DIR ?? defaultAgentDir();
   const acc = new DeltaAccumulator();
 
@@ -654,10 +654,17 @@ export async function createSession(
   });
 
   // ---- 插件 facet（change: plugin-mechanism，骨架）--------------------------------
-  // 只加载 `enabled` 的条目；任一条失败只让该 facet 不可用，不得影响会话。
+  // 下发的是**完整**插件集合（含 `enabled:false` + `reason`），使单会话日志能回答
+  // "为什么这个插件没装载"。只加载 `enabled` 条目；任一条失败只让该 facet 不可用，
+  // 不得影响会话。
+  for (const p of plugins ?? []) {
+    if (!p.enabled) {
+      logger.debug({ sessionId, pluginId: p.id, reason: p.reason }, 'plugin not loaded for session');
+    }
+  }
   const enabledPlugins = (plugins ?? []).filter((p) => p.enabled);
 
-  /** 每个插件的上行桥：`bridge.emit()` 是本设计里浏览器唯一能收到插件数据的入口。 */
+  /** 每个插件的桥：平台与插件之间只交换纯数据 + 方法注册，插件不碰裸 IPC。 */
   const bridgeFor = (pluginId: string): PluginWorkerBridge => ({
     pluginId,
     emit(name, data) {
@@ -666,8 +673,22 @@ export async function createSession(
     log(level, message, extra) {
       logger[level]({ pluginId, ...extra }, message);
     },
-    onEmit(handler) {
-      pluginEmitHandlers.set(pluginId, handler);
+    registerMethod(name, handler) {
+      // 封装层职责 1（拼前缀）：插件只说 name，`plugin.<id>.` 由这里补。
+      const ok = registerPluginMethod(pluginId, name, (args) =>
+        handler((args[0] ?? {}) as unknown),
+      );
+      if (!ok) {
+        logger.error(
+          { pluginId, name, rejected: forwardRegistry.rejected().slice(-1)[0] },
+          'plugin method registration rejected',
+        );
+      }
+    },
+    async call(method, args) {
+      // 封装层职责 3（限制可调面）：只能走反向表。正向方法名在这里没有意义，
+      // master 侧的反向注册表会以 `unknown method` 拒掉。
+      return callMaster(method, args ?? []);
     },
   });
 

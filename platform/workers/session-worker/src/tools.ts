@@ -68,7 +68,7 @@ function createSendFileToUserTool(
       _ctx: unknown,
     ) => {
       try {
-        const result = await callMaster('sendFileToUser', [sessionId, params]);
+        const result = await callMaster('plugin.im.sendFile', [params]);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result) }],
           details: result,
@@ -139,7 +139,7 @@ function createPostNotificationTool(
       _ctx: unknown,
     ) => {
       try {
-        const result = await callMaster('postNotification', [sessionId, params]);
+        const result = await callMaster('plugin.notifications.post', [params]);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result ?? { ok: true }) }],
           details: result ?? { ok: true },
@@ -225,7 +225,7 @@ function createCallServerTool(
       _ctx: unknown,
     ) => {
       try {
-        const result = await callMaster('invokeCapability', [params.method, params.params]);
+        const result = await callMaster('plugin.admin.invoke', [params.method, params.params]);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result ?? null) }],
           details: result,

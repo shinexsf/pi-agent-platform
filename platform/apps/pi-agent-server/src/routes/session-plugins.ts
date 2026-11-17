@@ -147,13 +147,13 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
       return c.json({ error: 'name is required' }, 400);
     }
     const { pluginId } = body;
+    // 下行只走插件自己注册的方法：`plugin.<id>.emit`。没有这个方法（插件未注册 /
+    // 插件被禁用）会得到 `unknown method`，而不是"静默吞掉"。
     try {
-      const handled = await deps.workerPool.call<boolean>(sessionId, 'pluginEmit', [
-        pluginId,
-        body.name,
-        body.data ?? null,
+      await deps.workerPool.call(sessionId, `plugin.${pluginId}.emit`, [
+        { name: body.name, data: body.data ?? null },
       ]);
-      return c.json({ handled: Boolean(handled) });
+      return c.json({ handled: true });
     } catch (err) {
       logger.warn({ sessionId, pluginId, err: String(err) }, 'plugin emit could not reach worker');
       return c.json({ handled: false });

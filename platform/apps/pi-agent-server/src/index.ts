@@ -33,6 +33,7 @@ import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
 import { startPluginRuntime } from './services/plugins.js';
 import { createServerLogsRouter } from './routes/server-logs.js';
+import { createRuntimeMethodsRouter } from './routes/runtime-methods.js';
 import { AttachmentStore } from './services/attachment-store.js';
 import { startTimeoutScanner } from './session-timeout-scanner.js';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
@@ -117,24 +118,30 @@ async function main() {
   app.route('/api/hooks', createHooksRouter(triggerRt));
   app.route('/api/notifications', createNotificationsRouter(notificationRepo));
 
-  // `postNotification` — server tool: writes one row into the system notification
-  // table (same reverse-call shape as sendFileToUser). Inbox only: no delivery.
-  workerPool.registerReverseCallHandler('postNotification', async (sessionId, args) => {
-    const [, params] = args as [string, { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
-    const title = (params?.title ?? '').trim();
-    const body = (params?.body ?? '').trim();
-    if (!title && !body) throw new Error('postNotification: title/body required');
-    const session = sessionRepo.get(sessionId);
-    return triggerRt.notifier.notify({
-      severity: params?.severity ?? 'info',
-      title: title.slice(0, 200),
-      body: body.slice(0, 4000),
-      source: 'agent',
-      sourceId: sessionId,
-      // Deep link is built by the platform, never by the caller.
-      actionUrl: `/chat/${sessionId}`,
-    });
-  });
+  // `plugin.notifications.post` — reverse method behind the `postNotification` tool:
+  // writes one row into the system notification table. Inbox only: no delivery.
+  workerPool.registerService(
+    'plugin:notifications',
+    { kind: 'plugin', descriptions: { 'plugin.notifications.post': '写一条系统通知（inbox only，不投递）' } },
+    {
+      'plugin.notifications.post': async (sessionId, args) => {
+        const [params] = args as [{ title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
+        const title = (params?.title ?? '').trim();
+        const body = (params?.body ?? '').trim();
+        if (!title && !body) throw new Error('postNotification: title/body required');
+        const session = sessionRepo.get(sessionId);
+        return triggerRt.notifier.notify({
+          severity: params?.severity ?? 'info',
+          title: title.slice(0, 200),
+          body: body.slice(0, 4000),
+          source: 'agent',
+          sourceId: sessionId,
+          // Deep link is built by the platform, never by the caller.
+          actionUrl: `/chat/${sessionId}`,
+        });
+      },
+    },
+  );
   // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
   app.route('/api/extensions', createExtensionsRouter({ pluginsDir: config.pluginsDir }));
   app.route('/api/p', createPluginDispatcherRouter({ pluginsDir: config.pluginsDir }));
@@ -145,6 +152,8 @@ async function main() {
   void startPluginRuntime(config.pluginsDir);
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
+  // IPC 方法清单（注册表的可观测面；只读诊断）
+  app.route('/api/runtime/methods', createRuntimeMethodsRouter(workerPool));
 
   // Capability control plane — SINGLE entry for all server-management abilities
   // exposed to agents via the callServer tool (register → dispatch → authorize → audit).
@@ -155,8 +164,12 @@ async function main() {
     workerPool,
     serverOpts: { nodeEnv: config.nodeEnv, port: config.port, maxWorkers: config.maxWorkers },
   });
-  installControlPlane({ agentRepo, sessionRepo, workerPool, registerReverseCallHandler: (m, h) => workerPool.registerReverseCallHandler(m, h) });
-
+  installControlPlane({
+    agentRepo,
+    sessionRepo,
+    workerPool,
+    registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
+  });
   // Read-only capability metadata for the WebUI agent editor (capabilities 授权
   // checkbox list). Registry is the single source of truth — the UI never
   // hardcodes method names. Production endpoint (read-only, no secrets),

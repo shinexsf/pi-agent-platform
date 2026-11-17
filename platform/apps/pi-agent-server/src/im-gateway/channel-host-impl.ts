@@ -348,41 +348,48 @@ export function createChannelHostImpl(deps: Deps) {
   };
 
   // ── Reverse call handlers (worker → master RPC) ────────────────────────────
-  deps.workerPool.registerReverseCallHandler('sendFileToUser', async (sessionId, args) => {
-    const [sid, params] = args as [string, { filePath: string; fileName?: string; caption?: string }];
-    const meta = getSessionMeta(sid);
+  deps.workerPool.registerService(
+    'plugin:im',
+    { kind: 'plugin', descriptions: { 'plugin.im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
+    {
+      'plugin.im.sendFile': async (sessionId, args) => {
+        const [params] = args as [{ filePath: string; fileName?: string; caption?: string }];
+        // 调用方身份由注册表 ctx 传入（不再由 worker 在 args 里带 sessionId）。
+        const meta = getSessionMeta(sessionId);
 
-    // IDE/Web session — no channel, return success (no-op)
-    if (!meta) return { ok: true };
+        // IDE/Web session — no channel, return success (no-op)
+        if (!meta) return { ok: true };
 
-    // Look up channel config to get channelType
-    const channelConfig = host.getChannelConfig(meta.channelId);
-    const channelType = channelConfig?.type;
-    if (!channelType) return { ok: true };
+        // Look up channel config to get channelType
+        const channelConfig = host.getChannelConfig(meta.channelId);
+        const channelType = channelConfig?.type;
+        if (!channelType) return { ok: true };
 
-    const adapter = deps.getAdapter(channelType, meta.channelId);
-    if (!adapter) return { ok: true };
+        const adapter = deps.getAdapter(channelType, meta.channelId);
+        if (!adapter) return { ok: true };
 
-    const target = { channelId: meta.channelId, chatId: meta.chatId };
+        const target = { channelId: meta.channelId, chatId: meta.chatId };
 
-    // Determine file extension from actual file path
-    const ext = params.filePath.split('.').pop()?.toLowerCase() ?? '';
-    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext);
+        // Determine file extension from actual file path
+        const ext = params.filePath.split('.').pop()?.toLowerCase() ?? '';
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext);
 
-    // Construct final filename: fileName (without extension) + actual extension
-    const baseName = params.fileName
-      ? params.fileName.replace(/\.[^.]+$/, '')  // strip any extension from fileName
-      : params.filePath.split(/[\/]/).pop()?.replace(/\.[^.]+$/, '') ?? 'file';
-    const finalName = `${baseName}.${ext || 'bin'}`;
+        // Construct final filename: fileName (without extension) + actual extension
+        const baseName = params.fileName
+          ? params.fileName.replace(/\.[^.]+$/, '')  // strip any extension from fileName
+          : params.filePath.split(/[\/]/).pop()?.replace(/\.[^.]+$/, '') ?? 'file';
+        const finalName = `${baseName}.${ext || 'bin'}`;
 
-    if (isImage) {
-      await adapter.sendImage(target, params.filePath, params.caption);
-    } else {
-      await adapter.sendFile(target, params.filePath, params.caption);
-    }
+        if (isImage) {
+          await adapter.sendImage(target, params.filePath, params.caption);
+        } else {
+          await adapter.sendFile(target, params.filePath, params.caption);
+        }
 
-    return { ok: true, fileName: finalName };
-  });
+        return { ok: true, fileName: finalName };
+      },
+    },
+  );
 
   // ── server-only helpers (not part of ChannelHost interface) ───────────────────
   const helpers = {

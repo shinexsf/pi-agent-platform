@@ -1,5 +1,5 @@
 /**
- * Capability control plane — the SINGLE entry for `invokeCapability` reverse
+ * Capability control plane — the SINGLE entry for `plugin.admin.invoke` reverse
  * calls (worker → master), dispatched from the callServer tool.
  *
  * Flow: resolve ctx → builtin? → method exists → authorize → handler → audit.
@@ -9,6 +9,7 @@
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
 import type { AgentConfig, InvokeContext } from '@pi-agent-platform/shared-types';
+import type { IpcMethodKind, IpcMethodSource } from '@pi-agent-platform/ipc-protocol';
 import {
   availableMethods,
   CAPABILITY_MODULES,
@@ -201,23 +202,29 @@ export function registerAllCapabilities(deps: {
   }
 }
 
-/** Register the single reverse-call handler: `invokeCapability` → dispatch. */
+/** Register the single reverse-method group: `plugin.admin.invoke` → dispatch. */
 export function installControlPlane(
   deps: ControlPlaneDeps & {
-    registerReverseCallHandler: (method: string, handler: (sessionId: string, args: unknown[]) => Promise<unknown>) => void;
+    registerService: (
+      source: IpcMethodSource,
+      kind: IpcMethodKind,
+      handlers: Record<string, (sessionId: string, args: unknown[]) => Promise<unknown>>,
+    ) => void;
   },
 ): void {
-  const { registerReverseCallHandler, ...depsOnly } = deps;
-  registerReverseCallHandler('invokeCapability', async (sessionId, args) => {
-    const [method, params] = args as [string, unknown];
-    if (typeof method !== 'string' || method.length === 0) {
-      throw new Error('invokeCapability: missing method (contract: [method, params?])');
-    }
-    return invokeCapability(depsOnly, sessionId, method, params);
+  const { registerService, ...depsOnly } = deps;
+  registerService('plugin:admin', 'plugin', {
+    'plugin.admin.invoke': async (sessionId, args) => {
+      const [method, params] = args as [string, unknown];
+      if (typeof method !== 'string' || method.length === 0) {
+        throw new Error('plugin.admin.invoke: missing method (contract: [method, params?])');
+      }
+      return invokeCapability(depsOnly, sessionId, method, params);
+    },
   });
   logger.info(
     { methods: availableMethods() },
-    'capability control plane installed (invokeCapability)',
+    'capability control plane installed (plugin.admin.invoke)',
   );
 }
 

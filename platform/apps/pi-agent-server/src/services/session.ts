@@ -55,22 +55,35 @@ const logger = childLogger('session');
 /**
  * 解析该会话可用的插件集合（会话级闸门）。
  *
+ * 入参是**将要下发给 worker 的那份 config**（会话行快照，或新会话时的 agent 配置），
+ * 不是 agent 行本身 —— 这样 `config.extensions` 与插件集合必然同源，
+ * respawn 时不会出现"config 用会话行、插件用 agent"的双源漂移。
+ *
  * - 解析在 server 单点完成，结果随 `createSession` 一次性下发
  * - `requires.plugins` 只校验，不代用户启用
  * - 解析失败降为空集合，不阻断建会话
  */
-async function resolvePluginsForAgent(agent: AgentLike): Promise<WorkerPluginSpec[]> {
+async function resolvePluginsFromConfig(agentConfig: AgentConfig | undefined): Promise<WorkerPluginSpec[]> {
   try {
     const snapshot = getPluginSnapshot(config.pluginsDir);
     if (snapshot.disabledByFlag || snapshot.plugins.length === 0) return [];
     const settings = await readSettings(config.agentDir);
     const installed = extractExtensionNames(settings);
-    const agentExtensions = agent.config?.extensions ?? [];
+    const agentExtensions = agentConfig?.extensions ?? [];
     const resolved = resolveSessionPlugins({ snapshot, agentExtensions, installedPiExtensions: installed });
     for (const p of resolved.filter((r) => !r.enabled && r.reason)) {
       logger.debug({ pluginId: p.id, reason: p.reason }, 'plugin gated off for session');
     }
-    return resolved.filter((p) => p.enabled);
+    // 下发完整集合（含 disabled + reason）：worker 侧过滤并记日志，
+    // 使单会话日志能解释"为什么没装载"。
+    return resolved.map((p) => ({
+      id: p.id,
+      dir: p.dir,
+      enabled: p.enabled,
+      ...(p.reason ? { reason: p.reason } : {}),
+      ...(p.extensionPath ? { extensionPath: p.extensionPath } : {}),
+      ...(p.workerPath ? { workerPath: p.workerPath } : {}),
+    }));
   } catch (err) {
     logger.error({ err: String(err) }, 'plugin resolution failed — session continues without plugins');
     return [];
@@ -103,13 +116,8 @@ async function spawnPlaceholder(
   const sessionId = session.id;
   await workerPool.spawn(sessionId, agent.workspacePath);
   session.agentId = agent.id;
-  const runtimeConfig = buildRuntimeConfig(agent);
-  const plugins = await resolvePluginsForAgent(agent);
-  const result = await workerPool.call<CreateSessionResult>(
-    sessionId,
-    'createSession',
-    [runtimeConfig, sessionId, undefined, plugins],
-  );
+  const runtimeConfig = await buildRuntimeConfig(agent, sessionId);
+  const result = await workerPool.call<CreateSessionResult>(sessionId, 'createSession', [runtimeConfig]);
   session.piSessionPath = result.piSessionPath;
   session.model = result.model ?? null;
   session.thinkingLevel = result.thinkingLevel ?? null;
@@ -157,18 +165,19 @@ async function spawnAndCreate(
     // overrides respawn silently reverted to agent values AND wrote them back over the
     // row (pre-existing bug, found via callserver session.restart testing).
     const existingRow = sessionRepo.get(sessionId);
-    const runtimeConfig = buildRuntimeConfig(agent, existingRow
-      ? {
-          model: existingRow.model || undefined,
-          thinkingLevel: existingRow.thinkingLevel,
-          config: existingRow.config,
-        }
-      : undefined);
-    const result = await workerPool.call<CreateSessionResult>(
+    const runtimeConfig = await buildRuntimeConfig(
+      agent,
       sessionId,
-      'createSession',
-      [runtimeConfig, sessionId, existingSessionPath, await resolvePluginsForAgent(agent)],
+      existingRow
+        ? {
+            model: existingRow.model || undefined,
+            thinkingLevel: existingRow.thinkingLevel,
+            config: existingRow.config,
+          }
+        : undefined,
+      existingSessionPath,
     );
+    const result = await workerPool.call<CreateSessionResult>(sessionId, 'createSession', [runtimeConfig]);
     piSessionPath = result.piSessionPath;
     piSessionName = result.sessionName;
     actualModelOverride = result.model ? `${result.model.provider}/${result.model.modelId}` : undefined;
@@ -236,11 +245,21 @@ async function healPiSessionName(
   }
 }
 
-function buildRuntimeConfig(
+/**
+ * Build the ONE payload a session gets at spawn — the single assembly entry.
+ *
+ * Everything in segment ① comes from the session row (or, for a brand-new session,
+ * from the agent it was created from); `workspacePath` is the only field that always
+ * comes from the agent. `plugins` is derived from `runtimeConfig.config.extensions`
+ * here, so callers cannot supply a second, divergent plugin list.
+ */
+async function buildRuntimeConfig(
   agent: AgentLike,
+  sessionId: string,
   /** Session-row overrides (respawn path): row wins over agent (full-snapshot semantics). */
   sessionOverrides?: { model?: string; thinkingLevel?: string | null; config?: AgentConfig | null },
-): RuntimeConfig {
+  existingSessionPath?: string,
+): Promise<RuntimeConfig> {
   // Normalize to the explicit-clist contract (change: explicit-agent-config):
   // missing/null resource fields become empty, `mcp` becomes { enabled: false }.
   // There is deliberately NO global-default merge layer — the agent/session row is the
@@ -250,11 +269,17 @@ function buildRuntimeConfig(
       ? sessionOverrides.config
       : agent.config;
   const resolvedConfig = normalizeAgentConfig(sourceConfig);
+  // ③ Derived: plugins come from the same `extensions` list we just handed the worker.
+  const plugins = await resolvePluginsFromConfig(resolvedConfig);
   return {
-    workspacePath: agent.workspacePath,
+    // ① Row-aligned segment
+    sessionId,
     model: sessionOverrides?.model || agent.model,
     thinkingLevel: sessionOverrides?.thinkingLevel ?? agent.thinkingLevel,
     config: resolvedConfig,
+    ...(existingSessionPath ? { existingSessionPath } : {}),
+    // ② Platform-injected segment (never persisted)
+    workspacePath: agent.workspacePath,
     // Capability index (callserver-control-plane D2): compact method+summary list
     // pushed at spawn so the callServer tool description can embed it (registry
     // on master is the single source of truth; next spawn picks up changes).
@@ -264,6 +289,8 @@ function buildRuntimeConfig(
     capabilityIndex: buildCapabilityIndex(
       resolveEffectiveCapabilities(sessionOverrides?.config, agent.config),
     ),
+    // ③ Derived segment
+    plugins,
   };
 }
 

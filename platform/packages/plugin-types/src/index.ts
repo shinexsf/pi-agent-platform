@@ -15,7 +15,16 @@
  * 3. 边界两侧只交换普通 JSON、回调与 DOM 节点（不交换响应式对象 / 组件 / VNode）
  */
 
-/** 当前平台契约版本。插件在 `package.json` 的 `piServer.apiVersion` 声明。 */
+/**
+ * 当前平台契约版本。插件在 `package.json` 的 `piServer.apiVersion` 声明。
+ *
+ * 为何 `bridge.onEmit` 移除却**没有**升到 '2'（change: ipc-protocol-unify 的落地结论）：
+ * 1. 变动只涉及一个**可选**成员（`onEmit` 本来就是 `?`），`emit` / `log` 未变；
+ * 2. 全仓仅内置的 kitchen-sink 示例用到它，已同期改为 `registerMethod`；
+ * 3. 版本号是硬门禁（`apiVersion !== PLUGIN_API_VERSION` 直接拒装），升号会把
+ *    已有的 demo 插件（声明 "1"）全部判为不兼容，代价远大于收益。
+ * 下次要改 `emit` / `log` / facet 目录约定这类**必选面**时，再升。
+ */
 export const PLUGIN_API_VERSION = '1' as const;
 
 export type PluginApiVersion = typeof PLUGIN_API_VERSION;
@@ -308,22 +317,39 @@ export type PluginServerInit = (host: PluginRegistrationHost) => void | Promise<
 export type PluginWebRegister = (host: PluginRegistrationHost) => void | Promise<void>;
 
 /**
- * worker facet / extension facet 的上行桥（骨架）。
+ * worker facet / extension facet 的桥。
  *
- * 插件上行桥。
+ * 插件**不碰裸 IPC** —— 这个接口就是封装层，它做三件事：
+ * 1. **拼前缀**：`registerMethod('emit', h)` 自动注册为 `plugin.<我的 id>.emit`
+ * 2. **解前缀**：分发时刺掉前缀，handler 收到的就是自己注册的名字
+ * 3. **限制可调面**：`call` 只能命中反向表（master 侧宿主 API）；
+ *    调正向方法名（`prompt` / `createSession`）会被 master 以 `unknown method` 拒掉
  *
- * 方向约定（与 chord 无关，刻意保持窄接口）：
- * - `emit`   worker → 浏览器（经 server SSE 的 `plugin` 事件）
- * - `onEmit` 浏览器 → worker（经 `POST /api/sessions/:id/plugins/:pluginId/emit`）
- * - `log`    插件日志进平台日志（自动带 pluginId）
+ * 方向约定：
+ * - `emit`           worker → 浏览器（SSE 的 `plugin_event`，无回执，可丢）
+ * - `registerMethod` 浏览器/master → 本插件（`plugin.<id>.<name>`，有回执、有顺序）
+ * - `call`           worker → master（`plugin.im.sendFile` 这类反向方法）
+ * - `log`            插件日志进平台日志（自动带 pluginId）
+ *
+ * 要回执、要顺序 → 用 `registerMethod` / `call`；可丢、高频 → 用 `emit`。
  */
 export interface PluginWorkerBridge {
   readonly pluginId: string;
   /** 发一条插件事件。不做节流；平台侧只有 64 KiB / 100 帧每秒的硬上限。 */
   emit(name: string, data: unknown): void;
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
-  /** 接收浏览器侧 `emit`。同一插件只保留最后一个处理器。 */
-  onEmit?(handler: (name: string, data: unknown) => void | Promise<void>): void;
+  /**
+   * 注册一个本插件可被调用的方法。`name` 不带前缀（如 `'emit'`）——
+   * 完整名 `plugin.<pluginId>.<name>` 由封装层拼。
+   *
+   * 重名或名字不合法会被拒并记 error 日志，不会静默失败。
+   */
+  registerMethod?(name: string, handler: (params: unknown) => unknown | Promise<unknown>): void;
+  /**
+   * 调一个反向方法（master 侧宿主 API），如 `call('plugin.im.sendFile', [{ filePath }])`。
+   * 只能调反向表里的方法；正向方法名会得到 `unknown method`。
+   */
+  call?(method: string, args?: unknown[]): Promise<unknown>;
 }
 
 /**

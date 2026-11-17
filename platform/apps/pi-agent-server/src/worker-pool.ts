@@ -27,10 +27,16 @@ import { createRequire } from 'node:module';
 import type {
   CallRequest,
   CallResponse,
+  IpcHandler,
+  IpcMethodEntry,
+  IpcMethodKind,
+  IpcMethodSource,
+  IpcMethodSummary,
   ReverseCallRequest,
   WorkerEvent,
   WorkerEventKind,
 } from '@pi-agent-platform/ipc-protocol';
+import { IpcMethodRegistry } from '@pi-agent-platform/ipc-protocol';
 import { config } from './config.js';
 import { logger } from './logger.js';
 
@@ -86,6 +92,8 @@ export interface WorkerEntry {
   ready: boolean;
   spawnTime: number;
   readyTimer: NodeJS.Timeout | null;
+  /** Forward methods the worker reported in its `ready` handshake (plain data). */
+  methods: IpcMethodSummary[];
   pendingCalls: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
   // Phase B (core-session-refactor 2.3): domain state (hasRow / model /
   // thinkingLevel / sessionName / systemPrompt / piSessionPath / agentId)
@@ -94,12 +102,19 @@ export interface WorkerEntry {
 
 export type ReverseCallHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
 
+/** Registration group for a reverse method source (see `registerService`). */
+export interface ReverseServiceOptions {
+  /** `plugin` for business methods that belong to a plugin; `core` for platform ones. */
+  kind: IpcMethodKind;
+  descriptions?: Record<string, string>;
+}
+
 export class WorkerPool extends EventEmitter {
   private workers = new Map<string, WorkerEntry>();
   /** Max concurrent workers. Spawn will LRU-evict a placeholder worker when full. */
   private maxWorkers: number;
   /** Handlers for reverse-call messages from workers (worker → master RPC). */
-  private reverseHandlers = new Map<string, ReverseCallHandler>();
+  private reverseRegistry = new IpcMethodRegistry();
   /** Is this session a placeholder (no DB row)? Domain knowledge injected at
    *  composition time (initSessionRegistry) — pool must not import Session. */
   private hasRowQuery: (sessionId: string) => boolean = () => false;
@@ -166,6 +181,7 @@ export class WorkerPool extends EventEmitter {
       workerPid: child.pid ?? -1,
       stderrTail: [],
       ready: false,
+      methods: [],
       spawnTime: Date.now(),
       readyTimer: null,
       pendingCalls: new Map(),
@@ -256,6 +272,29 @@ export class WorkerPool extends EventEmitter {
             entry.readyTimer = null;
           }
           entry.ready = true;
+          // Registry handshake: the worker ships its forward method table as plain
+          // data, so a renamed/missing method shows up in diagnostics instead of
+          // only as a failed call later.
+          const methods = (event.data as { methods?: IpcMethodSummary[] } | undefined)?.methods;
+          entry.methods = Array.isArray(methods) ? methods : [];
+          const reverseCount = this.reverseRegistry.summary().length;
+          logger.debug(
+            {
+              sessionId,
+              forwardMethods: entry.methods.length,
+              reverseMethods: reverseCount,
+              pluginForwardMethods: entry.methods.filter((m) => m.source !== 'core').length,
+            },
+            'worker ready: method registry reconciled',
+          );
+          if (reverseCount === 0) {
+            // Every worker reverse call will fail — almost certainly a composition
+            // -root wiring bug, so say it loudly once per spawn.
+            logger.warn(
+              { sessionId },
+              'reverse method registry is EMPTY — worker host calls (plugin.im.sendFile etc.) will fail',
+            );
+          }
         }
         // Phase B: pool only FORWARDS — Session (services/session.ts) owns
         // per-session listener sets and subscribes to this emitter once.
@@ -441,29 +480,83 @@ export class WorkerPool extends EventEmitter {
 
   // ── Reverse IPC: Worker → Master ────────────────────────────────────────
 
-  /** Register a handler for a reverse-call method from workers. */
-  registerReverseCallHandler(method: string, handler: ReverseCallHandler): void {
-    this.reverseHandlers.set(method, handler);
+  /**
+   * Register a whole reverse-method group under one source (design D4: registration is
+   * service-level, not one call per method). Names go through the registry, so a plugin
+   * source without its own `plugin.<id>.` prefix is REJECTED here rather than caught later.
+   */
+  registerService(
+    source: IpcMethodSource,
+    opts: ReverseServiceOptions,
+    handlers: Record<string, ReverseCallHandler>,
+  ): void {
+    // Wrap the sessionId-aware handler into the registry's opaque-ctx shape.
+    const wrapped: Record<string, IpcHandler> = {};
+    for (const [name, handler] of Object.entries(handlers)) {
+      wrapped[name] = (args, ctx) => handler(ctx as string, args);
+    }
+    const entries = this.reverseRegistry.registerMany(
+      source,
+      { direction: 'reverse', kind: opts.kind, descriptions: opts.descriptions },
+      wrapped,
+    );
+    const rejected = this.reverseRegistry.rejected().filter((r) => r.source === source);
+    if (rejected.length > 0) {
+      process.stderr.write(`[server] reverse method registration rejected: ${JSON.stringify(rejected)}\n`);
+    }
+    process.stderr.write(
+      `[server] reverse service registered source=${source} methods=[${entries.map((e) => e.name).join(', ')}]\n`,
+    );
   }
 
-  /** Handle a reverse-call request from a worker. Dispatches to registered handler and replies. */
+  /** Registry snapshot for diagnostics / `ready` reconciliation. */
+  reverseMethods(): IpcMethodEntry[] {
+    return this.reverseRegistry.summary();
+  }
+
+  /** Full method picture: master-side reverse table + every live worker's forward table. */
+  methodInventory(): {
+    reverse: IpcMethodEntry[];
+    workers: Array<{ sessionId: string; ready: boolean; forward: IpcMethodSummary[] }>;
+  } {
+    return {
+      reverse: this.reverseRegistry.summary(),
+      workers: [...this.workers.values()].map((e) => ({
+        sessionId: e.sessionId,
+        ready: e.ready,
+        forward: e.methods,
+      })),
+    };
+  }
+
+  /** Disable / re-enable every reverse method a plugin contributed (no server restart). */
+  setPluginMethodsEnabled(pluginId: string, enabled: boolean): number {
+    return enabled
+      ? this.reverseRegistry.enableByPlugin(pluginId)
+      : this.reverseRegistry.disableByPlugin(pluginId);
+  }
+
+  /** Handle a reverse-call request from a worker. Dispatches through the registry. */
   private async handleReverseCall(
     sessionId: string,
     entry: WorkerEntry,
     req: ReverseCallRequest,
   ): Promise<void> {
-    const handler = this.reverseHandlers.get(req.method);
-    if (!handler) {
+    const resolved = this.reverseRegistry.resolve(req.method);
+    if (!resolved.ok) {
       entry.child.send({
         kind: 'reverse-response',
         id: req.id,
         ok: false,
-        error: { message: `Unknown reverse method: ${req.method}` },
+        error: { message: resolved.error },
       });
       return;
     }
+    if (resolved.entry.status === 'deprecated') {
+      process.stderr.write(`[server] deprecated reverse method called: ${req.method}\n`);
+    }
     try {
-      const result = await handler(sessionId, req.args);
+      const result = await resolved.handler(req.args, sessionId);
       entry.child.send({ kind: 'reverse-response', id: req.id, ok: true, result });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

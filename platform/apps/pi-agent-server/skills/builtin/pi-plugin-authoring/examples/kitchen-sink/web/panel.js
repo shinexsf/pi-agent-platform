@@ -27,7 +27,7 @@ export function mount(el, host) {
     push(`↓ ${name}: ${JSON.stringify(data)}`);
   });
 
-  // 浏览器 → worker（worker facet 的 bridge.onEmit 会收到）
+  // 浏览器 → worker（worker facet 用 bridge.registerMethod('emit', …) 注册的处理器会收到）
   const btn = el.querySelector('#ping');
   const onClick = () => host.data.emit('ping', { at: Date.now() });
   btn.addEventListener('click', onClick);

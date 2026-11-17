@@ -461,12 +461,41 @@ export interface MessageDeltaDTO {
 }
 
 // ---------- RuntimeConfig (used by worker to create pi AgentSession) ----------
+/** One entry of the per-session plugin set. Structurally identical to
+ *  `WorkerPluginSpec` in `@pi-agent-platform/ipc-protocol` — duplicated as a local shape
+ *  so `shared-types` stays a dependency-free leaf package. */
+export interface RuntimePluginSpec {
+  id: string;
+  dir: string;
+  enabled: boolean;
+  reason?: string;
+  extensionPath?: string;
+  workerPath?: string;
+}
+
+/**
+ * One session's spawn-time payload — a snapshot of the `sessions` row plus the
+ * few things master injects. Three deliberately separate segments (design D6):
+ *
+ *  ① row-aligned: `sessionId` / `model` / `thinkingLevel` / `config` / `existingSessionPath`
+ *  ② injected by master (never persisted): `workspacePath` / `capabilityIndex`
+ *  ③ derived: `plugins` (MUST come from segment ①'s `config.extensions`)
+ *
+ * `workspacePath` is the ONLY field that comes from the `agents` row — the workspace
+ * follows the agent, everything else is the session snapshot.
+ */
 export interface RuntimeConfig {
+  /** ① The session this payload belongs to (placeholder sessions have no DB row yet). */
+  sessionId: string;
   model: string;
   thinkingLevel?: string;
   workspacePath: string;
   config?: AgentConfig; // All agent config (systemPrompt, tools, extensions, etc.)
-  /** Control-plane capability index (compact), pushed by master at createSession so
+  /** ① pi session file to resume; absent on a brand-new session (nothing to load). */
+  existingSessionPath?: string;
+  /** ③ Resolved plugin set. Derived from `config.extensions` — never passed independently. */
+  plugins?: RuntimePluginSpec[];
+  /** ② Control-plane capability index (compact), pushed by master at createSession so
    *  the callServer tool description can embed it (zero-round-trip first use).
    *  Plain data — no handlers; the single source of truth stays on master. */
   capabilityIndex?: CapabilityIndexEntry[];

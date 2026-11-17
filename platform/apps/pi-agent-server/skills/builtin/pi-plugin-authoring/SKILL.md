@@ -115,8 +115,12 @@ export function mount(el, host) {
 
 ```js
 export async function activate({ bridge }) {
-  bridge.emit('hello', { at: Date.now() });     // → 浏览器（SSE plugin 事件）
-  bridge.onEmit?.((name, data) => { /* 浏览器上行 */ });
+  bridge.emit('hello', { at: Date.now() });            // → 浏览器（SSE plugin 事件，无回执）
+  bridge.registerMethod?.('emit', ({ name, data }) => {  // ← 注册为 plugin.<id>.emit，有回执
+    /* master / 浏览器下行调用 */
+    return { ok: true };
+  });
+  await bridge.call?.('plugin.im.sendFile', [{ filePath: '/tmp/a.png' }]); // → master 反向方法
   bridge.log('info', 'worker facet loaded');
 }
 ```
