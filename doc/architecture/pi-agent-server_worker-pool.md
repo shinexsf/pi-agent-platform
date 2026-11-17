@@ -155,20 +155,32 @@ class WorkerPool {
 
 ## 反向调用（Worker → Master RPC）
 
-Worker 可通过 `callMaster(method, args)` 回调 master。WorkerPool 在 `wireUpHandlers` 中监听 `reverse-call` 消息，分发到 `registerReverseCallHandler()` 注册的 handler。
+Worker 可通过 `callMaster(method, args)` 回调 master。WorkerPool 监听 `reverse-call` 消息，按 `method` 查 master 侧方法注册表分发。
+
+注册是**服务级**的（一个来源一次注册一组方法），不是逐方法散装注册：
 
 ```typescript
-// 注册 handler（sendFileToUser 在 IM gateway 初始化时注册；
-// invokeCapability（agent 管理 server 能力）由控制面在组合根 index.ts 启动时统一注册）
-workerPool.registerReverseCallHandler('sendFileToUser', async (sessionId, args) => {
-  const meta = getSessionMeta(sessionId);
-  if (!meta) return { ok: true }; // IDE/Web session — no-op
-  const adapter = getAdapter(meta.channelType, meta.channelId);
-  // ... adapter.sendFile() / adapter.sendImage()
-});
+// im 插件在 IM gateway 初始化时注册（名字必须带自己的 plugin.<id>. 前缀）
+workerPool.registerService(
+  'plugin:im',
+  { kind: 'plugin', descriptions: { 'plugin.im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
+  {
+    'plugin.im.sendFile': async (sessionId, args) => {
+      const [params] = args as [{ filePath: string; fileName?: string; caption?: string }];
+      const meta = getSessionMeta(sessionId);   // 调用方身份由 pool 注入，不在 args 里
+      if (!meta) return { ok: true };           // IDE/Web session — no-op
+      const adapter = getAdapter(meta.channelType, meta.channelId);
+      // ... adapter.sendFile() / adapter.sendImage()
+    },
+  },
+);
 ```
 
-Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（30s 超时）。
+`registerService` 内部把 handler 展开成注册表条目，并做命名校验：`plugin:<id>` 来源的方法名必须带 `plugin.<id>.`，否则拒绝并记录（结构性防冒充）。同名的第二次注册也拒绝。
+
+Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（**60s** 超时——反向方法里有渠道上传这类真 I/O）。
+
+未命中返回 `unknown method: <name>`；插件被禁用时其方法置 `disabled` 并返回 `method disabled: <name>`。注册表内容可通过 `GET /api/runtime/methods` 查看。
 
 ## 事件转发与订阅（2026-09-30 反转）
 
@@ -207,7 +219,7 @@ flowchart LR
 |---|---|
 | **master** | spawn / IPC / 路由 / 超时扫描 / 反向调用分发（进程域）|
 | **Session（services/session）** | 领域状态 / 事件订阅分发 / dispose 终态通知 / 领域命令执行 |
-| **worker** | pi SDK 调用 / 事件产生 / 历史管理 / 默认工具（sendFileToUser 等） |
+| **worker** | pi SDK 调用 / 事件产生 / 历史管理 / 默认工具（sendFileToUser 等）/ 正向方法注册表 |
 | **不存在的边界** | "worker 状态"持久化到 DB；pool 持领域字段或 listener |
 
 ## 崩溃处理

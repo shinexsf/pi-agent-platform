@@ -100,7 +100,7 @@ export default async ({ bridge }) => ({
 ## 5. 通路：双向窄桥（不 flush 会话）
 
 ```
- web facet ──POST /api/sessions/:id/plugins/emit──▶ server ──call('pluginEmit')──▶ worker facet
+ web facet ──POST /api/sessions/:id/plugins/emit──▶ server ──call('plugin.<id>.emit')──▶ worker facet
     ▲                                                    │                            │
     └──────── SSE 事件名 `plugin`（载荷带 pluginId/name/data）◀── 'plugin_event' ◀──┘
 ```
@@ -108,7 +108,7 @@ export default async ({ bridge }) => ({
 - 事件名固定为 **`plugin`**，`pluginId` 在载荷里而不是事件名里 —— 因为 `EventSource` 监听不到任意事件名，浏览器侧要能用**一个**处理器收全部插件
 - 硬上限：单条 > 64 KiB 截断 + 一次 warn；每会话每秒 > 100 条丢弃 + 一次 warn
 - 日志只记 `pluginId` / `name` / 字节数，**不落原始载荷**
-- `pluginEmit` 失败不影响会话；插件不存在时返回 404 并带 `reason`
+- 下行落到插件**自己注册**的 `plugin.<id>.emit`；插件没注册该方法时返回 `unknown method`（`handled: false`），不是静默成功，也不影响会话
 
 ## 6. 运行期注册（唯一入口）
 

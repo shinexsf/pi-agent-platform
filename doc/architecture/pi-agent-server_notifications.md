@@ -89,7 +89,7 @@ notify({ severity?, title, body, source, sourceId?, actionUrl? }) → Notificati
 
 ### 4.1 `postNotification` 工具（agent 侧唯一入口）
 
-- **serverBuiltinTool**：worker 注册工具 + master `registerReverseCallHandler('postNotification')`，与 `sendFileToUser` 同款；闸门只有一个 = agent/触发器的 `serverBuiltinTools` 是否含 `postNotification`（**没有** capability allowlist——那是 `callServer` 的授权面）
+- **serverBuiltinTool**：worker 注册 `postNotification` 工具 + master 反向方法 `plugin.notifications.post`，与 `sendFileToUser`（反向 `plugin.im.sendFile`）同款；闸门只有一个 = agent/触发器的 `serverBuiltinTools` 是否含 `postNotification`（**没有** capability allowlist——那是 `callServer` 的授权面）
 - 参数面只有 `{ title, body, severity? }`；`sessionId` / `actionUrl` 由 master 按调用方会话填，模型传了也忽略（`additionalProperties: false`）
 - 名字是 `postNotification` 而**不是** `sendNotifyToUser`：平台不承诺"送达"，只把一条消息写进通知中心。工具描述照此写，prompt 里也不许暗示外部推送
 - 出现在 web 勾选清单（`SERVER_BUILTIN_TOOLS`）里，三处表单（agent 编辑器 / 会话详情 / 模板）都能勾

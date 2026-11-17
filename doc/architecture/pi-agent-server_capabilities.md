@@ -11,7 +11,7 @@
 │        ↓ 拼进 description                                               │
 │  ToolDefinition: callServer  { method: string, params?: object }        │
 │    promptSnippet / promptGuidelines → system prompt                      │
-│    execute → callMaster('invokeCapability', [method, params])            │
+│    execute → callMaster('plugin.admin.invoke', [method, params])         │
 └────────────────────────────────────┬─────────────────────────────────────┘
                                      │ reverse-call IPC（30s 超时）
 ┌────────────────────────────────────▼─────────────────────────────────────┐
@@ -35,7 +35,7 @@
 
 ```mermaid
 flowchart TD
-    W["worker: callServer 方法 + params"] -->|"reverse-call invokeCapability（30s）"| D["dispatch 统一入口<br/>解析 ctx：sessions 行优先 → 无 row 用 Session.agentId"]
+    W["worker: callServer 方法 + params"] -->|"reverse-call plugin.admin.invoke（60s）"| D["dispatch 统一入口<br/>解析 ctx：sessions 行优先 → 无 row 用 Session.agentId"]
     D --> B{"内置 list / detail？"}
     B -->|"是"| F["内容按有效授权过滤<br/>与 dispatch 共享同一 resolve 函数（可见性=强制性）"]
     B -->|"否"| E{"方法在注册表？"}
@@ -162,7 +162,7 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 
 ## 相关文档
 
-- [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— `invokeCapability` 反向调用协议
+- [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— `plugin.admin.invoke` 反向调用协议
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 反向调用分发 + 注入式 hasRowQuery（`Session.agentId` 见 session-lifecycle）
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— respawn 配置读取（session 行优先）+ 完全快照语义
 - [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) —— `AgentConfig` 字段

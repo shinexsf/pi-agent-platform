@@ -38,7 +38,7 @@ flowchart TB
     IMGateway -->|prompt / kill| WPM
     WPM -->|session_event / crash| SES
     WPM -->|正向 call/response IPC| Proxy
-    Proxy -->|反向 RPC + 事件回流（invokeCapability / sendFile / 标题 / worker 事件）| WPM
+    Proxy -->|反向 RPC + 事件回流（plugin.admin.invoke / plugin.im.sendFile / 标题 / worker 事件）| WPM
     Proxy -->|method dispatch| SDK
     WPM <--> DB
     SDK -.->|历史文件| PiHist[(~/.pi/agent/<br/>sessions/<id>/)]
@@ -46,7 +46,7 @@ flowchart TB
 
 ## 核心思想
 
-Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、worker pool 管理。每个 session 对应一个 worker 子进程，worker 内通过 pi SDK（`createAgentSession()`）运行 agent。Master 通过 `AgentSessionProxy`（implements pi SDK 的 `AgentSession` 接口）跟 worker 通信，代码层面看起来像直接调 SDK，不引入自定义协议概念。
+Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、worker pool 管理。每个 session 对应一个 worker 子进程，worker 内通过 pi SDK（`createAgentSession()`）运行 agent。Master 通过 IPC 协议跟 worker 通信：正向方法名与 pi `AgentSession` 一一对应（代码层面看起来像直接调 SDK），由两端各一份**方法注册表**分发；worker 内的工具通过反向方法回调 master，插件通过 `bridge` 注册自己的方法而不接触裸 IPC。详见 [`ipc`](pi-agent-server_ipc.md)。
 
 **关键约束**：
 - 协议所有权在自己（master ↔ worker），不在 pi

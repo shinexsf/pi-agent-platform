@@ -193,9 +193,19 @@ flowchart TB
 
 ## IPC 协议
 
-- **method 字段直接是 pi SDK API 名**（`prompt` / `setModel` / `abort` / 等）
+- **正向 method 字段直接是 pi SDK API 名**（`prompt` / `setModel` / `abort` / 等）
   - 不引入自定义 method 名（如 `type: 'prompt'`）
-  - worker 端 method dispatch 直接调 SDK
+  - 唯一允许的平台自定义正向方法是生命周期方法 `createSession`
+- **方法分发的唯一依据是注册表**：两端各持一份（worker = 正向表，master = 反向表），不得有第二套 `switch` 或硬编码分支
+  - 未注册 → `unknown method: <name>`；插件禁用 → `method disabled: <name>`，两者必须可区分
+  - 条目是纯数据，可跨进程传递（`ready` 握手、`GET /api/runtime/methods`）
+- **插件方法强制 `plugin.<pluginId>.<method>` 前缀**，注册时校验；内置方法不得使用 `plugin.` 命名空间
+  - 前缀只做准入与分组，**归属判断一律读 `source` 字段**，不切分字符串
+- **插件不接触裸 IPC**：worker facet 只能通过 `bridge`（`emit` / `registerMethod` / `call`），server facet 只能通过 `host`；封装层负责拼前缀、解前缀、限制可调面（只能调反向表）
+- **正反向信封同形**，只差 `kind`；事件不带 id、不带回执
+  - 要回执、要顺序 → 用调用；可丢、高频 → 用事件
+- **反向超时 60s**，正向不设超时（`prompt` 可长跑）
+- **协议不带版本字段**：master 与 worker 同仓同版本、同一次启动，不存在跨版本互通
 
 ## 不进 invariants 的项
 

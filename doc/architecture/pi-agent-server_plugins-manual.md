@@ -127,8 +127,10 @@ export default async function ({ bridge } = {}) {
 // worker/index.js
 // 入口是 `export default` 或 `export function activate(ctx)`，ctx = { bridge }
 export default function activate({ bridge }) {
-  bridge.onEmit?.(async (name, data) => {
+  // 注册本插件可被下行调用的方法：完整名 plugin.<本插件 id>.emit 由封装层拼
+  bridge.registerMethod?.('emit', async ({ name, data }) => {
     if (name === 'ping') bridge.emit('pong', { got: data, at: Date.now() });
+    return { ok: true };
   });
   return () => {};   // 可选清理
 }
@@ -183,9 +185,12 @@ export function init(host) {                       // host.id / host.dir / host.
 | 成员 | 说明 |
 |---|---|
 | `pluginId` | 只读 |
-| `emit(name, data)` | **上**行：worker → 浏览器。经 SSE 固定事件名 `plugin`，载荷 `{ pluginId, name, data }` |
-| `onEmit(handler)` | **下**行：浏览器 → worker。**同一插件只保留最后一个处理器** |
+| `emit(name, data)` | **上**行：worker → 浏览器。经 SSE 固定事件名 `plugin`，载荷 `{ pluginId, name, data }`。无回执、可丢、高频 |
+| `registerMethod(name, handler)` | **下**行：注册 `plugin.<本插件 id>.<name>`，由 master / 浏览器调用。**有回执、有顺序**；handler 收到一个 `params` 对象 |
+| `call(method, args?)` | 调反向方法（宿主 API），如 `call('plugin.im.sendFile', [{ filePath }])`。正向方法名（`prompt` 等）会得到 `unknown method` |
 | `log(level, msg, extra?)` | 进平台日志 |
+
+> 选 `emit` 还是 `registerMethod`：**要回执、要顺序 → `registerMethod`；可丢、高频 → `emit`**。平台不在事件上叠回执。
 
 ### 硬上限（超了会被截断/丢弃，记一条 warn）
 
@@ -263,7 +268,7 @@ pi-server plugin add ./pkg --enable      # 复制目录 + 写 registry
 | 图标没出现 | `GET /api/sessions/<id>/plugins` 里有没有它 → 没有就是闸门拦了（看 `reason`）；有但不显示 → 前端槽位挂载失败，看浏览器 console |
 | `status: degraded` | `GET /api/plugins` 的 `reason`：`apiVersion` 不对 / 目录缺 `package.json#piServer.apiVersion` / facet 声明了但缺入口文件 |
 | 抽屉报「插件加载失败」 | web 入口 404 或 `mount` 抛异常；`/plugins/<id>/web/<entry>.js` 手动打开试试 |
-| 面板收不到数据 | `bridge.emit` 是否真的调用（worker 日志）；`onEmit` 是否在 `activate` 里注册；检查 64 KiB / 100fps 上限 |
+| 面板收不到数据 | `bridge.emit` 是否真的调用（worker 日志）；下行处理器是否用 `registerMethod('emit', …)` 注册；检查 64 KiB / 100fps 上限 |
 | 改了代码不生效 | v1 **没有热加载**：`pi-server restart`。web 侧刷新页面即可 |
 | 想看每个会话的闸门解释 | `GET /debug/sessions/<id>`（dev 模式）→ `plugins[]` 每条的 `issues[].reason` |
 
@@ -312,7 +317,7 @@ pi-server plugin add ./pkg --enable      # 复制目录 + 写 registry
 
 | 插件 | 位置 | 演示什么 |
 |---|---|---|
-| `@probe/hud-demo` | `~/.pi/server/plugins/`（本机） | 最小四件套：rail + drawer + worker `onEmit` 回显 + extension 加工具 |
+| `@probe/hud-demo` | `~/.pi/server/plugins/`（本机） | 最小四件套：rail + drawer + worker `registerMethod('emit')` 回显 + extension 加工具 |
 | `@probe/hud-pack` | 同上 | 打包态（容器里）下的同一形态 |
 | `@platform/session-projection` | 仓库 `plugins/session-projection/` | 真实场景：extension facet 用 `pi.on('context')` 抓发给模型的消息数组，web facet 按序渲染成「messages 视图」 |
 

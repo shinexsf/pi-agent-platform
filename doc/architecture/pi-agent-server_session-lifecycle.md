@@ -262,7 +262,9 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 
 **session 恢复**：完全读 sessions 表，**不读 agent 表**。
 
-**恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config **优先于 agent**，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。**唯一例外**：row config 缺 `capabilities` key（存量 row 未快照过）→ 授权回落 agent 行（`null` 显式 ≠ `undefined` 未快照，见 [`capabilities`](pi-agent-server_capabilities.md)）。spawn 时同时下发 `capabilityIndex`（按有效授权过滤）供 callServer 工具内嵌 description。
+**恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config / **插件集合** 全部优先于 agent，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。**唯一例外**：row config 缺 `capabilities` key（存量 row 未快照过）→ 授权回落 agent 行（`null` 显式 ≠ `undefined` 未快照，见 [`capabilities`](pi-agent-server_capabilities.md)）。spawn 时同时下发 `capabilityIndex`（按有效授权过滤）供 callServer 工具内嵌 description。
+
+**插件集合同样按快照推导**：`plugins` 由本次下发的 `config.extensions` 派生（同一个函数里算出来，调用方拿不到第二份列表），因此 respawn 时 agent 的 `extensions` 改了也不会漂移已存在会话的插件集合。下发给 worker 的是**完整**列表（含 `enabled: false` + `reason`），worker 侧过滤并记一行日志——单会话日志因此能回答"这个插件为什么没装载"。
 
 ## Session title 双向同步（pi 原生命名）
 
