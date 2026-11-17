@@ -10,12 +10,35 @@ import { ruleFor } from './tool-blocks/pluginToolCards'
 const props = defineProps<{ message: MessageDTO; agentId?: string; fileAttachments?: Array<{ attId: string; name: string; type: string }> }>()
 const emit = defineEmits<{
   retry: [userMessageText: string, agentId: string]
+  /** Retry the last user message — emitted by the inline provider-failure card,
+   *  which does not know the preceding user text itself (siblings are MessageList's). */
+  retryLast: []
   dismissError: [messageId: string]
 }>()
 
 const isUser = computed(() => props.message.role === 'user')
 const isError = computed(() => props.message.role === 'error')
 const showCopyBtn = ref(false)
+
+// ── Provider/API failure rendering ──
+// pi reports a failed provider call as a normal assistant message with
+// `stopReason: 'error'` + `errorMessage` and NO content blocks. Rendering it as a
+// plain assistant row leaves an invisible empty bubble, which is how API failures
+// used to disappear silently. Instead: a compact failure card with the provider
+// text and a retry affordance.
+//
+// pi keeps every failed attempt in the transcript (auto-retry re-issues the call),
+// so a turn can carry several of these. `__retrySuperseded` is set by useSSE
+// (live: on `auto_retry_start`, history: inferred) for attempts that a later
+// attempt replaced — those collapse to a one-line note instead of stacking cards.
+const hasAssistantError = computed(
+  () => props.message.role === 'assistant' && props.message.stopReason === 'error',
+)
+const supersededAttempt = computed<number | undefined>(() => (props.message as any).__retrySuperseded)
+const isSupersededError = computed(() => hasAssistantError.value && supersededAttempt.value !== undefined)
+const providerErrorText = computed(
+  () => props.message.errorMessage?.trim() || 'The model request failed (no error detail from provider).',
+)
 
 // ── User bubble long-message collapse ──
 // User-sent messages can be arbitrarily long (logs, code dumps, multi-line
@@ -239,6 +262,32 @@ async function downloadFile(attId: string, fileName: string) {
     />
   </div>
 
+  <!-- Assistant 消息：provider 调用失败（pi 用 stopReason:'error' + errorMessage 表达，
+       不会有 content block）。被重试替换掉的尝试压缩成一行淡色提示，只有最后一次
+       失败才展开成错误卡片。 -->
+  <div v-else-if="hasAssistantError" class="message-assistant">
+    <div v-if="isSupersededError" class="retry-note">
+      <span class="retry-note-icon">⚠</span>
+      <span>
+        {{ supersededAttempt ? `Attempt ${supersededAttempt}` : 'Earlier attempt' }} failed:
+        {{ providerErrorText }}
+      </span>
+    </div>
+    <div v-else class="api-error">
+      <div class="api-error-header">
+        <span class="api-error-icon">⚠</span>
+        <span class="api-error-title">Model request failed</span>
+      </div>
+      <div class="api-error-msg">{{ providerErrorText }}</div>
+      <div v-if="message.model || message.provider" class="api-error-meta">
+        {{ message.provider ? `${message.provider}/` : '' }}{{ message.model }}
+      </div>
+      <div class="api-error-actions">
+        <button class="api-error-retry" type="button" @click="emit('retryLast')">↻ Retry</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Assistant 消息 -->
   <div v-else class="message-assistant" @mouseenter="showCopyBtn = true" @mouseleave="showCopyBtn = false">
     <!-- Hover Copy button (top-right) -->
@@ -385,6 +434,89 @@ async function downloadFile(attId: string, fileName: string) {
   position: relative;
   clear: both;
   padding: 4px 0;
+}
+
+/* ── Provider/API failure (stopReason: 'error') ── */
+.retry-note {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-left: 3px solid var(--border);
+  background: var(--surface);
+  border-radius: 4px;
+  max-width: 80%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.retry-note-icon {
+  opacity: 0.7;
+}
+
+.api-error {
+  background: var(--danger-soft);
+  border-left: 3px solid var(--danger);
+  border-radius: 4px;
+  padding: 8px 12px;
+  max-width: 80%;
+}
+
+.api-error-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.api-error-icon {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.api-error-title {
+  color: var(--text);
+}
+
+.api-error-msg {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 4px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Provider errors can be long multi-line dumps (stack / request id / JSON). */
+  max-height: 220px;
+  overflow: auto;
+}
+
+.api-error-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.api-error-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.api-error-retry {
+  background: var(--danger);
+  color: var(--on-error);
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.api-error-retry:hover {
+  opacity: 0.85;
 }
 
 .message-copy-btn {

@@ -80,6 +80,7 @@ onUnmounted(() => {
       :file-attachments-by-msg="sse.fileAttachmentsByMsg.value"
       :has-more="sse.historyHasMore.value"
       :loading-older="sse.loadingOlder.value"
+      :retrying="sse.retryStatus.value"
       @retry="(text: string, aid: string) => sse.retry(text, aid)"
       @dismiss-error="(id: string) => sse.clearError(id)"
       @load-older="sse.loadOlder"

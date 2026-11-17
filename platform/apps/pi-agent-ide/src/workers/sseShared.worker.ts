@@ -27,7 +27,10 @@ const SESSION_EVENTS = [
   'message_end',
   'agent_end',
   'queue_update',
-  'message_error',
+  // pi 自动重试进度（provider 调用失败后被重试）：不带 messageId，载荷见
+  // shared-types 的 RunRetryStartDTO / RunRetryEndDTO。
+  'auto_retry_start',
+  'auto_retry_end',
   // 插件事件（change: plugin-mechanism）——固定事件名 `plugin`，载荷带 pluginId/name。
   // 注意：**新增具名 SSE 事件时必须同步加到这里**，否则共享连接模式下会被静默丢弃
   // （直连 EventSource 没有这个白名单，两边行为会不一致）。

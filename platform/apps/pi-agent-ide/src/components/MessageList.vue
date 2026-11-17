@@ -12,6 +12,8 @@ const props = defineProps<{
   /** Older pages still exist server-side (change: session-streaming-runtime, 10.5). */
   hasMore?: boolean
   loadingOlder?: boolean
+  /** Live auto-retry progress (pi `auto_retry_*`); null when no retry in flight. */
+  retrying?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage?: string } | null
 }>()
 
 const emit = defineEmits<{
@@ -19,6 +21,20 @@ const emit = defineEmits<{
   dismissError: [messageId: string]
   loadOlder: []
 }>()
+
+/**
+ * Retry from an inline provider-failure card: the card knows no user text (the
+ * preceding user message is a sibling), so resolve "the last user message" here.
+ */
+function retryLast() {
+  for (let i = props.messages.length - 1; i >= 0; i--) {
+    const m = props.messages[i]
+    if (m && m.role === 'user' && (m.content ?? '').trim()) {
+      emit('retry', m.content, props.agentId ?? '')
+      return
+    }
+  }
+}
 
 const messagesEl = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
@@ -238,8 +254,18 @@ watch(
         :agent-id="agentId"
         :file-attachments="fileAttachmentsByMsg?.get(msg.id)"
         @retry="(text: string, agentId: string) => emit('retry', text, agentId)"
+        @retry-last="retryLast"
         @dismiss-error="(id: string) => emit('dismissError', id)"
       />
+      <!-- Auto-retry banner: the run is still alive, so this is progress, not an error. -->
+      <div v-if="retrying" class="retry-banner">
+        <span class="retry-spinner" />
+        <span>
+          {{ retrying.errorMessage ? `${retrying.errorMessage} — ` : '' }}retrying
+          {{ retrying.attempt }}/{{ retrying.maxAttempts }}
+          <span v-if="retrying.delayMs">(next attempt in {{ Math.round(retrying.delayMs / 1000) }}s)</span>
+        </span>
+      </div>
       <!-- Typing indicator (per E2) -->
       <TypingIndicator v-if="showTyping" class="typing-indicator" />
     </div>
@@ -288,6 +314,36 @@ watch(
 
 .typing-indicator {
   margin-top: 8px;
+}
+
+/* Auto-retry progress: dim one-liner beside the typing indicator. */
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  align-self: flex-start;
+  max-width: 80%;
+}
+
+.retry-spinner {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--link);
+  animation: retry-spin 0.8s linear infinite;
+}
+
+@keyframes retry-spin {
+  to { transform: rotate(360deg); }
 }
 
 .jump-to-latest {

@@ -279,6 +279,8 @@ export function createSessionsRouter(
         model?: string;
         provider?: string;
         stopReason?: string;
+        /** Assistant-only provider failure text (pi `AssistantMessage.errorMessage`). */
+        errorMessage?: string;
         isError?: boolean;
         images?: Array<{ mimeType: string; data: string }>;
         timestamp: number;
@@ -311,6 +313,8 @@ export function createSessionsRouter(
               model?: string;
               provider?: string;
               stopReason?: string;
+              /** Assistant-only: reason text pi stores next to `stopReason: 'error'`. */
+              errorMessage?: string;
               toolCallId?: string;
               toolName?: string;
               isError?: boolean;
@@ -404,6 +408,9 @@ export function createSessionsRouter(
             model: msg.model ?? undefined,
             provider: msg.provider ?? undefined,
             stopReason: msg.stopReason ?? undefined,
+            // Provider failures carry no content blocks — without this the history
+            // replay of a failed turn renders as an empty assistant bubble.
+            errorMessage: typeof msg.errorMessage === 'string' ? msg.errorMessage : undefined,
             isError,
             // Image blocks (user-pasted or read-tool) ride along as base64.
             // Only emit the field when present (avoid pollution for messages

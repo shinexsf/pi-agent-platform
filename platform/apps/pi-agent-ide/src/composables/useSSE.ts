@@ -17,7 +17,11 @@
  */
 
 import { ref, computed, onScopeDispose } from 'vue'
-import type { MessageDTO, MessageDeltaDTO } from '@pi-agent-platform/shared-types'
+import type {
+  MessageDTO,
+  MessageDeltaDTO,
+  RunRetryStartDTO,
+} from '@pi-agent-platform/shared-types'
 import type { SessionContextDTO, SlashCommandDTO, ModelInfo } from '@pi-agent-platform/api-types'
 import { useIdeBridge, onIdeBridgeReady } from './useIdeBridge'
 import { createSseTransport, type SseTransport } from './sseTransport'
@@ -46,6 +50,16 @@ export interface ErrorContext {
   /** Original user message text (for retry) */
   relatedUserMessageText?: string
   message: string
+}
+
+/** Live auto-retry progress (pi `auto_retry_start` / `auto_retry_end`).
+ *  Non-null only while pi is re-issuing a failed provider call. */
+export interface RetryStatus {
+  attempt: number
+  maxAttempts: number
+  delayMs: number
+  /** Provider error of the attempt that just failed. */
+  errorMessage?: string
 }
 
 // ── Module-level singletons (shared across all useSSE() instances) ──
@@ -78,6 +92,8 @@ export function useSSE(options: UseSSEOptions) {
   const messages = ref<MessageDTO[]>([])
   const sending = ref(false)
   const error = ref<ErrorContext | null>(null)
+  /** Live retry banner state (`auto_retry_*`); null when no retry is in flight. */
+  const retryStatus = ref<RetryStatus | null>(null)
 
   // ── Steer mode (per D8 / C2: only 'steer'; no follow-up) ──
   const steeringQueue = ref<string[]>([])
@@ -129,6 +145,7 @@ export function useSSE(options: UseSSEOptions) {
       if (delta.model) existing.model = delta.model
       if (delta.provider) existing.provider = delta.provider
       if (delta.stopReason) existing.stopReason = delta.stopReason
+      if (delta.errorMessage) existing.errorMessage = delta.errorMessage
       if (delta.toolCallId) existing.toolCallId = delta.toolCallId
       if (delta.toolName) existing.toolName = delta.toolName
     } else {
@@ -144,6 +161,7 @@ export function useSSE(options: UseSSEOptions) {
         model: delta.model,
         provider: delta.provider,
         stopReason: delta.stopReason,
+        errorMessage: delta.errorMessage,
         timestamp: Date.now(),
       }
       messages.value.push(msg)
@@ -171,6 +189,57 @@ export function useSSE(options: UseSSEOptions) {
         }
       }
     }
+  }
+
+  // ── Provider-failure / auto-retry bookkeeping ──
+
+  /**
+   * Mark the newest un-superseded failed assistant message as "pi is retrying it".
+   * A failed attempt stays in the transcript (pi keeps the raw entry), so without
+   * this the chat would stack one full error card per attempt; the client renders
+   * superseded attempts as a one-line dim note and only the final failure expanded.
+   */
+  function markLastErrorSuperseded(attempt: number) {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i]
+      if (!m) continue
+      if (m.role === 'assistant' && m.stopReason === 'error' && !(m as any).__retrySuperseded) {
+        ;(m as any).__retrySuperseded = attempt
+        return
+      }
+    }
+  }
+
+  function clearRetryStatus() {
+    if (retryStatus.value) retryStatus.value = null
+  }
+
+  /**
+   * History replay equivalent of `markLastErrorSuperseded`.
+   *
+   * pi keeps every failed attempt in the transcript, so a turn that was retried
+   * 3 times leaves 3-4 consecutive error assistant messages. On the live stream
+   * we learn which ones were superseded from `auto_retry_start`; in history we
+   * infer it: inside one user turn, every error assistant message that has a
+   * LATER assistant message after it was retried away, leaving only the last one
+   * as the real failure. `__retrySuperseded = 0` means "attempt number unknown".
+   */
+  function markSupersededErrors(msgs: MessageDTO[]): MessageDTO[] {
+    let sawLaterAssistant = false
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (!m) continue
+      if (m.role === 'user') {
+        sawLaterAssistant = false
+        continue
+      }
+      if (m.role !== 'assistant') continue
+      if (m.stopReason === 'error' && sawLaterAssistant && (m as any).__retrySuperseded === undefined) {
+        ;(m as any).__retrySuperseded = 0
+      }
+      sawLaterAssistant = true
+    }
+    return msgs
   }
 
   // ── Streaming state markers ──
@@ -347,14 +416,30 @@ export function useSSE(options: UseSSEOptions) {
       insertError({ source: 'sse_connection', message: 'Connection lost, retrying…' })
     })
 
-    eventSource.addEventListener('message_error', (e) => {
+    // pi auto-retry: the provider call failed and will be re-issued with backoff.
+    // The failed attempt already produced an assistant message with stopReason
+    // 'error' — mark it superseded so it collapses, and show progress instead of
+    // a final error (the run is still alive).
+    eventSource.addEventListener('auto_retry_start', (e) => {
       try {
-        const data = JSON.parse((e as MessageEvent).data)
-        insertError({ source: 'sse_event', message: data.message ?? 'Unknown error' })
-      } catch {
-        insertError({ source: 'sse_event', message: 'Unknown error' })
+        const data = JSON.parse((e as MessageEvent).data) as RunRetryStartDTO
+        retryStatus.value = {
+          attempt: data.attempt ?? 0,
+          maxAttempts: data.maxAttempts ?? 0,
+          delayMs: data.delayMs ?? 0,
+          errorMessage: data.errorMessage,
+        }
+        markLastErrorSuperseded(data.attempt ?? 0)
+      } catch (err) {
+        console.error('[SSE] failed to parse auto_retry_start:', err)
       }
-      sending.value = false
+    })
+
+    // Retry budget finished (either a later attempt succeeded or it was exhausted).
+    // No payload needed: on `success: false` the final failed message renders as a
+    // full error card, on `success: true` the next attempt already delivered normally.
+    eventSource.addEventListener('auto_retry_end', () => {
+      clearRetryStatus()
     })
   }
 
@@ -451,7 +536,7 @@ export function useSSE(options: UseSSEOptions) {
       if (!data) return
       historyHasMore.value = data.hasMore === true
       historyCursor.value = typeof data.nextBefore === 'number' ? data.nextBefore : null
-      messages.value = [...mergeToolResultsIntoCalls(data.messages), ...messages.value]
+      messages.value = [...markSupersededErrors(mergeToolResultsIntoCalls(data.messages)), ...messages.value]
     } finally {
       loadingOlder.value = false
     }
@@ -479,7 +564,7 @@ export function useSSE(options: UseSSEOptions) {
       // standalone toolResult message renders as an empty assistant row.
       // Webui displays toolResult as its own card and consumes the raw
       // stream, so server keeps the original entries.
-      messages.value = mergeToolResultsIntoCalls(data.messages)
+      messages.value = markSupersededErrors(mergeToolResultsIntoCalls(data.messages))
       for (const msg of messages.value) {
         if (msg.role === 'user' && msg.content?.includes('<file ') && !msg.images?.length && !fileAttachmentsByMsg.value.has(msg.id)) {
           fetchUserMessageAttachments(msg)
@@ -605,7 +690,17 @@ export function useSSE(options: UseSSEOptions) {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
-        const errMsg = `Send failed (${res.status})`
+        // Surface the server's reason (e.g. "Agent workspacePath does not exist",
+        // "Session not active") — a bare status code tells the user nothing.
+        const detail = await res.text().catch(() => '')
+        let reason = detail.trim()
+        try {
+          const parsed = JSON.parse(detail) as { error?: string; message?: string }
+          reason = parsed.error ?? parsed.message ?? reason
+        } catch { /* plain text / html body — keep as-is */ }
+        const errMsg = reason
+          ? `Send failed (${res.status}): ${reason.slice(0, 500)}`
+          : `Send failed (${res.status})`
         insertError({
           source: 'send',
           relatedUserMessageText: message,
@@ -752,6 +847,8 @@ export function useSSE(options: UseSSEOptions) {
     fileAttachmentsByMsg,
     historyHasMore,
     loadingOlder,
+    /** Live auto-retry banner state (`auto_retry_*`), null when none in flight. */
+    retryStatus,
     // methods
     subscribe,
     unsubscribe,

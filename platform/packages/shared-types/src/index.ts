@@ -310,6 +310,32 @@ export interface SessionRunState {
   pendingFollowUp: number;
 }
 
+/**
+ * `auto_retry_start` SSE payload (pi `AgentSessionEvent.auto_retry_start`).
+ * Emitted when pi decided to re-issue a failed provider call with backoff; the
+ * run keeps going, so clients should show progress instead of a final error.
+ */
+export interface RunRetryStartDTO {
+  attempt: number;
+  maxAttempts: number;
+  /** Backoff before the next attempt (pi's exponential delay). */
+  delayMs: number;
+  /** Provider error text of the attempt that just failed. */
+  errorMessage?: string;
+}
+
+/**
+ * `auto_retry_end` SSE payload (pi `AgentSessionEvent.auto_retry_end`).
+ * `success: true` → a later attempt produced a normal response.
+ * `success: false` → the retry budget is exhausted; `finalError` is the last
+ * provider error and the run is about to settle.
+ */
+export interface RunRetryEndDTO {
+  success: boolean;
+  attempt: number;
+  finalError?: string;
+}
+
 // ---------- Message ----------
 /** Matches pi SDK AgentMessage roles (user / assistant / toolResult) + 'error' for inline error items. */
 export type MessageRole = 'user' | 'assistant' | 'toolResult' | 'error';
@@ -350,8 +376,14 @@ export interface MessageDTO {
   /** Assistant-only: which model generated this. */
   model?: string;
   provider?: string;
-  /** Assistant-only: why the turn ended. */
+  /** Assistant-only: why the turn ended. `'error'` = the provider call failed
+   *  (pi also stores the reason text in `errorMessage`). */
   stopReason?: string;
+  /** Assistant-only: provider/API failure text (pi `AssistantMessage.errorMessage`).
+   *  Only meaningful when `stopReason === 'error'` — it is the ONLY place pi puts
+   *  the failure reason (an error response carries no content blocks and pi emits
+   *  no dedicated `error` event). */
+  errorMessage?: string;
   /** ToolResult-only: the tool's display name. */
   toolName?: string;
   /** ToolResult-only: whether the tool execution failed.
@@ -413,6 +445,9 @@ export interface MessageDeltaDTO {
   model?: string;
   provider?: string;
   stopReason?: string;
+  /** Assistant-only: provider/API failure text, forwarded from
+   *  `AssistantMessage.errorMessage` when `stopReason === 'error'`. */
+  errorMessage?: string;
   /** ToolResult-only: mirrors pi SDK `ToolResultMessage.isError`.
    *  Set on the delta emitted alongside a toolResult message's
    *  `message_start`/`message_end` so streaming clients can mark the matching

@@ -167,12 +167,21 @@ function mapEventType(eventType: string | undefined): WorkerEventKind | null {
       return 'agent_end';
     case 'queue_update':
       return 'queue_update';
-    case 'error':
-      return 'error';
+    // pi's auto-retry: a provider call failed and was re-issued with backoff
+    // (settings.retry). These carry the error progress that the failed message
+    // itself cannot express at the right time, so they must reach the client.
+    case 'auto_retry_start':
+      return 'auto_retry_start';
+    case 'auto_retry_end':
+      return 'auto_retry_end';
     case 'session_info_changed':
       return 'session_info_changed';
     default:
-      return null; // skip (agent_start, turn_start, turn_end)
+      // No `error` case: pi's AgentSessionEvent union has no error event at all.
+      // Provider failures surface as an assistant message with
+      // `stopReason: 'error'` + `errorMessage` (forwarded by `fromMessage`), plus
+      // the `auto_retry_*` events above. See pi-knowledge/agent-session-events.md.
+      return null; // skip (agent_start, turn_start, turn_end, compaction_*, entry_appended)
   }
 }
 
@@ -382,6 +391,11 @@ function toDelta(event: Record<string, unknown>, stableMessageId: string | null,
       model: msg.model as string | undefined,
       provider: msg.provider as string | undefined,
       stopReason: msg.stopReason as string | undefined,
+      // Assistant-only provider failure text. pi puts the actual reason (e.g.
+      // "Connection error.", "401 Unauthorized") ONLY here — a failed assistant
+      // message has no content blocks, and pi emits no `error` event. Without
+      // this field the client shows an empty bubble and the failure is invisible.
+      errorMessage: typeof msg.errorMessage === 'string' ? msg.errorMessage : undefined,
       // toolResult-only: pi SDK puts isError as a top-level field on the
       // message object (alongside role/toolCallId/toolName), NOT inside
       // content blocks and NOT in stopReason (which is assistant-only).
@@ -1041,6 +1055,37 @@ export async function createSession(
     // Master consumes it to sync sessions.title (session-title-sync).
     if (mapped === 'session_info_changed') {
       emit({ event: 'session_info_changed', data: { name: (e as { name?: string }).name } });
+      return;
+    }
+
+    // auto-retry progress: no message DTO either — forward pi's payload as-is
+    // (typed client-side by RunRetryStartDTO / RunRetryEndDTO). Flush first so
+    // queued text of the failed attempt lands before the retry banner.
+    if (mapped === 'auto_retry_start' || mapped === 'auto_retry_end') {
+      throttle.flush();
+      const p = e as {
+        attempt?: number;
+        maxAttempts?: number;
+        delayMs?: number;
+        errorMessage?: string;
+        success?: boolean;
+        finalError?: string;
+      };
+      emit({
+        event: mapped,
+        data: mapped === 'auto_retry_start'
+          ? {
+              attempt: p.attempt ?? 0,
+              maxAttempts: p.maxAttempts ?? 0,
+              delayMs: p.delayMs ?? 0,
+              ...(p.errorMessage ? { errorMessage: p.errorMessage } : {}),
+            }
+          : {
+              success: Boolean(p.success),
+              attempt: p.attempt ?? 0,
+              ...(p.finalError ? { finalError: p.finalError } : {}),
+            },
+      });
       return;
     }
 

@@ -66,8 +66,14 @@ export type WorkerEventKind =
   | 'agent_start'
   /** A run settled (pi-native `agent_settled`). data: `{ aborted: boolean }`. */
   | 'agent_settled'
+  /** pi-native `auto_retry_start`: a provider call failed and pi scheduled a retry.
+   *  Master forwards it to SSE; clients render "retrying N/M" progress.
+   *  data: `RunRetryStartDTO`-shaped `{ attempt, maxAttempts, delayMs, errorMessage }`. */
+  | 'auto_retry_start'
+  /** pi-native `auto_retry_end`: retry budget finished (success or exhausted).
+   *  data: `RunRetryEndDTO`-shaped `{ success, attempt, finalError? }`. */
+  | 'auto_retry_end'
   | 'queue_update'
-  | 'error'
   /** pi-native session display name changed (data: { name }) — master-internal,
    *  consumed to sync sessions.title; NOT forwarded to SSE clients. */
   | 'session_info_changed'
