@@ -249,60 +249,9 @@ CREATE INDEX idx_agent_templates_name ON agent_templates(name);
 
 全局表（不挂 agent）：一行 = 一份配置快照（工具 / MCP / 插件 / Skill / Prompt / Server 工具 / 能力授权），**不含 `systemPrompt`、agent 名、模型、workspacePath**。填充是显式覆盖，语义与单层清单一致。`MIGRATIONS` 追加 `agent_templates_v1`；存量库靠 `CREATE TABLE IF NOT EXISTS` 自动建表。
 
-## triggers / trigger_runs / notifications 表（2026-11-06）
+## notifications 表
 
-```sql
-CREATE TABLE triggers (
-  id            TEXT PRIMARY KEY,
-  agent_id      TEXT NOT NULL REFERENCES agents(id),
-  name          TEXT NOT NULL,
-  source        TEXT NOT NULL,              -- 已注册 source 名（cron|once|webhook|插件）
-  config        TEXT NOT NULL,              -- JSON：source 专属参数（含 webhook secret）
-  prompt        TEXT NOT NULL,             -- 信封里的 <instruction>
-  session_mode  TEXT NOT NULL CHECK (session_mode IN ('new','reuse')),
-  enabled       INTEGER NOT NULL,
-  next_at       INTEGER,                   -- 独立列 + 索引：scheduler 只扫它
-  max_runs      INTEGER,                   -- NULL = 不限（once 创建时固定 1）
-  runs_count    INTEGER NOT NULL DEFAULT 0,
-  session_id    TEXT,                      -- reuse 模式回填
-  last_fired_at INTEGER,
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
-);
-CREATE INDEX idx_triggers_agent_id ON triggers(agent_id);
-CREATE INDEX idx_triggers_next_at  ON triggers(next_at);
-
-CREATE TABLE trigger_runs (
-  id              TEXT PRIMARY KEY,
-  trigger_id      TEXT NOT NULL,
-  status          TEXT NOT NULL CHECK (status IN ('fired','skipped','missed','failed')),
-  triggered_by    TEXT NOT NULL,
-  idempotency_key TEXT,
-  started_at      INTEGER NOT NULL,
-  finished_at     INTEGER,
-  session_id      TEXT,
-  error           TEXT,
-  payload_bytes   INTEGER
-);
-CREATE INDEX idx_trigger_runs_trigger ON trigger_runs(trigger_id, started_at);
-CREATE INDEX idx_trigger_runs_idem    ON trigger_runs(trigger_id, idempotency_key);
-
-CREATE TABLE notifications (
-  id         TEXT PRIMARY KEY,
-  severity   TEXT NOT NULL CHECK (severity IN ('info','warning','error')),
-  title      TEXT NOT NULL,
-  body       TEXT NOT NULL,
-  source     TEXT NOT NULL,               -- agent | trigger | server（自由文本，新增调用方无需改表）
-  source_id  TEXT,
-  action_url TEXT,                        -- 平台生成深链，不接受外部传入
-  read_at    INTEGER,
-  created_at INTEGER NOT NULL,
-);
-CREATE INDEX idx_notifications_created_at ON notifications(created_at);
-CREATE INDEX idx_notifications_unread     ON notifications(read_at);
-```
-
-**不按 source 分表**：source 专属参数进 `config`，新增 source 零 schema 变更。`trigger_runs.status` 四态与 `error` 的对应关系（`skipped` 时 `error` ∈ `overlap|duplicate|disabled`）、overlap 只看 30 分钟内未收尾的 run、启动时把僵尸 run 标 `failed: stale`——详见 [triggers 文档](pi-agent-server_triggers.md)。`MIGRATIONS` 追加 `triggers_v1`。
+> 该表由通知模块在装配时自带迁移创建，不在内核 schema 里（内核只建 agents / sessions / attachments）。
 
 ## 路径规范化
 

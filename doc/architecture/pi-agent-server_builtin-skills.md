@@ -77,7 +77,6 @@ pi 的 skill scope 由物理位置判定（`loadSkills()` 的 `getSource` + `get
 
 | skill | 回答的问题 | 明确不写 |
 |---|---|---|
-| `pi-trigger-usage` | 怎么让 agent 到点/被事件驱动地自己跑：source 选型、会话模式、触发后汇报、run 状态、自测闭环 | `callServer` 协议、双闸细节 |
 | `pi-capabilities-usage` | 怎么查/改平台状态、为什么被拒、什么时候生效、写操作最小权限 | 触发流程（一句指针转上一条） |
 | `pi-plugin-authoring` | 给平台加功能：插件形态、四类 facet、扩展点清单、硬约束、最小示例与自测 | capability 授权模型（只在涉及 `host` 权限时提一句） |
 
@@ -95,7 +94,7 @@ pi 的 skill scope 由物理位置判定（`loadSkills()` 的 `getSource` + `get
 |---|---|
 | 归一 | `normalizeAgentConfig`：`serverBuiltinSkills ?? []`（缺失/`null` = 全关，**没有默认开启**） |
 | 校验 | `findConfigIssues` 的 `serverBuiltinSkills` 字段：名字不在当前版本清单 → 黄标「平台 Skill 不存在或未随此版本发布」+ 清理按钮 |
-| 软提示（不拦保存） | ① 授权了任一业务能力但没勾 `pi-capabilities-usage`；② 授权了 `trigger.*` 但没勾 `pi-trigger-usage`；③ 勾了平台 skill 但 `builtinTools` 没有 `read` |
+| 软提示（不拦保存） | ① 授权了任一业务能力但没勾 `pi-capabilities-usage`；② 勾了平台 skill 但 `builtinTools` 没有 `read` |
 | 会话快照 | 与其它资源字段一致：`sessions.config` 快照优先，改动只影响**新建**的会话 / 下次 spawn |
 
 ---

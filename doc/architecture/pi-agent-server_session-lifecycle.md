@@ -1,5 +1,7 @@
 # pi-agent-server session-lifecycle
 
+> 代码位置：`packages/core/src/services/session.ts`（会话内核）。入口应用只通过 `SessionRegistry` 的公开导出使用它。
+
 > Session 生命周期。定义 session 何时创建、销毁、配置管理。
 > v2：placeholder 即 spawn + 统一 context 端点 + worker pool 上限 20 + LRU + 删 active 自动超时。
 > **服务层**：spawn/复活唯一入口 = `services/session.ts` 的 `SessionRegistry`（getOrCreate / createFromAgent）；领域状态归 `Session` 对象。
@@ -263,6 +265,8 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 **session 恢复**：完全读 sessions 表，**不读 agent 表**。
 
 **恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config / **插件集合** 全部优先于 agent，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。**唯一例外**：row config 缺 `capabilities` key（存量 row 未快照过）→ 授权回落 agent 行（`null` 显式 ≠ `undefined` 未快照，见 [`capabilities`](pi-agent-server_capabilities.md)）。spawn 时同时下发 `capabilityIndex`（按有效授权过滤）供 callServer 工具内嵌 description。
+
+**插件集合也挂在 Session 上**（`session.plugins` = 本次 spawn 实际下发的那份），任何「该会话有哪些插件」的查询都读它，不回读 agent 表。
 
 **插件集合同样按快照推导**：`plugins` 由本次下发的 `config.extensions` 派生（同一个函数里算出来，调用方拿不到第二份列表），因此 respawn 时 agent 的 `extensions` 改了也不会漂移已存在会话的插件集合。下发给 worker 的是**完整**列表（含 `enabled: false` + `reason`），worker 侧过滤并记一行日志——单会话日志因此能回答"这个插件为什么没装载"。
 

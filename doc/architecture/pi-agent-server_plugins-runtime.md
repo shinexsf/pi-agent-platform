@@ -39,11 +39,6 @@ interface PluginRegistrationHost {
     toolCards: { register(def: ToolCardRegistration): void }
   }
   // 触发器扩展点（2026-11-06）
-  triggers: {
-    fire(triggerId: string, payload?: unknown): Promise<{ status: string; runId?: string; sessionId?: string; error?: string }>
-    list(filter?: { agentId?: string; source?: string; includeDisabled?: boolean }): TriggerDTO[]
-  }
-  triggerSources: { register(def: TriggerSourceRegistration): void }
   log(msg: string, extra?: unknown): void
 }
 ```
@@ -51,10 +46,6 @@ interface PluginRegistrationHost {
 `global` 是与会话无关的东西（菜单、页面、HTTP 路由）；`session` 是只在会话上下文里有意义的东西（rail 槽位、工具卡片）。
 
 **为什么不给注册项加 `scope` 字段**：菜单永远不需要 `sessionId`、工具卡片永远需要——把这件事写进 API 形状，调用方写不错，读代码的人也一眼看出谁能用在哪。
-
-**触发器为什么是顶层而不是 `global.*`**：`fire` 是"进程内触发一次事件"这种动作，跟菜单/页面/路由那类声明式贡献不同类；`triggerSources.register` 描述的是"一种新的触发器来源"，也不属于 UI 贡献。放顶层能让"这不是又一个界面注册口"一眼可见。
-
-`host.triggerSources.register` 与内置 cron/once/webhook 走**同一张注册表**（重名抛错 → 进 `rejected`，`kind: 'triggerSource'`），`SourceSpec` 只描述配置与时间，**不含路由**（Hono 路由表首次请求后冻结；要 HTTP 入口就用 `host.global.routes` 自建再调 `host.triggers.fire`）。payload 与 webhook 同 64 KiB 上限。
 
 **为什么 `routes` 只出现在 `init(host)`**：路由是 "服务器提供什么"，`register()` 只声明 "界面要什么"。分开之后，"有 web facet 才有 HTTP 端点"这种耦合不会出现。
 

@@ -192,18 +192,11 @@ interface SessionContextDTO {
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/triggers` | GET | `?agentId&source&includeDisabled` → `{ items: TriggerDTO[], sources: TriggerSourceInfo[] }`；`config.secret` 恒脱敏成 `secretEnding` |
-| `/api/triggers` | POST | 创建：`{ agentId, name, source, config, prompt, sessionMode?, sessionId?, maxRuns? }`；source 校验走 `SourceSpec.validateConfig`，webhook secret 服务端生成并在响应里返回**一次**明文；`sessionId` 仅 `reuse` 可用且必须是本 agent 的会话（省略 = 首次触发时创建） |
-| `/api/triggers/:id` | GET/PATCH/DELETE | 详情（含最近 20 条 runs）/ 更新（重启用会重算 `next_at`；`runs_count>=max_runs` 时拒绝启用；`sessionId` 传值 = 换绑、`''`/`null` = 解绑、切到 `new` 自动清空）/ 删除 |
-| `/api/triggers/:id/run` | POST | 立即运行（`triggeredBy='manual'`），`{ payload? }` |
-| `/api/triggers/:id/runs` | GET | `?limit=`（默认 50，上限 200） |
-| `/api/triggers/:id/rotate-secret` | POST | 轮换 webhook 密钥，明文只返回一次 |
 
 外部入口（哑端点，唯一入口，**不是** `/api/*` 本地信任模型）：
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/hooks/:triggerId` | POST | `Authorization: Bearer <config.secret>`；可选 `Idempotency-Key`（24h 去重 → `duplicate`）；body ≤64 KiB（超出截断并记原始 `payload_bytes`）。202 dispatched / 200 duplicate / 401 / 404（未知 id 或非 webhook source）/ 409 disabled·skipped·failed |
 
 通知与渠道配置：
 

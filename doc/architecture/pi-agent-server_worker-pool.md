@@ -1,5 +1,7 @@
 # pi-agent-server worker-pool
 
+> 代码位置：`packages/core/src/worker-pool.ts`（会话内核的一部分，不在入口应用里）。
+
 > Worker Pool 架构。master 通过 `child_process.spawn` 管理 N 个 worker 子进程。
 > v2：LRU + MAX_WORKERS。**进程域 only**：领域状态（hasRow/model/…）归 Session；pool 只管 spawn/kill/IPC/事件转发，placeholder 判据经注入回调。
 
@@ -179,6 +181,8 @@ workerPool.registerService(
 `registerService` 内部把 handler 展开成注册表条目，并做命名校验：`plugin:<id>` 来源的方法名必须带 `plugin.<id>.`，否则拒绝并记录（结构性防冒充）。同名的第二次注册也拒绝。
 
 Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（**60s** 超时——反向方法里有渠道上传这类真 I/O）。
+
+事件侧：pool 自己只 `emit('session_event')`，订阅广播与背压策略在 `Session`（见 [`core-sdk`](pi-agent-server_core-sdk.md) 的"订阅契约"）。
 
 未命中返回 `unknown method: <name>`；插件被禁用时其方法置 `disabled` 并返回 `method disabled: <name>`。注册表内容可通过 `GET /api/runtime/methods` 查看。
 

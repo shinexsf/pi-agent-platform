@@ -115,8 +115,6 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 | session | `list`（agentId 精确 + title 模糊 + status）、`get` | read（get scoped） | 即时 |
 | session | `update` | write / scoped | model/thinking=即时 IPC+DB；title=改名同步；**config.*=下次 spawn** |
 | session | `restart` | write / scoped | kill + 复用 piSessionPath 重建；busy 拒、placeholder 404；**sessions 行与 session-channel-map 不动** |
-| trigger | `list`、`get`（含最近 runs） | read（`scoped:false`，跨 agent 可读） | 即时 |
-| trigger | `create`、`update`、`delete`、`run` | write / **scoped**（own-agent） | 即时；create 走 `SourceSpec.validateConfig` + 每 agent ≤10 启用；`create`/`update` 的 `sessionId`（reuse 目标）走 `services/trigger/session-binding.ts`，必须是本 agent 的会话；update 重启用会重算 `next_at` |
 | channel / config | （占位空组） | — | 注册即显示 |
 
 内置方法（不参与 allowlist 调用拦截，内容按授权收敛）：
@@ -126,7 +124,6 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 
 `session.update` 的 title 走共享 `services/session-ops.ts`（`renameSession`，HTTP 三入口与控制面同一实现）。
 
-`trigger.*` 的 own-scope 归属由 `authorize.ts` 解析：`trigger.update/delete/run` 用 `resolveTriggerAgent(triggerId)`，`trigger.create` 用入参 `agentId`（省略即调用者自己的 agent）——两者都拿不到归属时**fail closed**。
 
 **`postNotification` 不是能力**：它是 server 工具（reverse call），闸门只有 `serverBuiltinTools` 声明；参数面 `{title, body, severity?}`，`sessionId`/`actionUrl` 由 master 填。能力面不重复开一道授权口。（它只写系统通知表，见 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)）
 

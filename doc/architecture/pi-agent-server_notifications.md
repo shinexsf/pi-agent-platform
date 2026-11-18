@@ -1,7 +1,7 @@
 # 系统通知（notifications）
 
 > **独立子系统，不属于触发器。** 它只做一件事：把"平台内部发生的事情"记成一行事实，供用户（和任何客户端）事后看。
-> 触发器失败只是**三个调用方之一**；平台不向外投递、不重试、不做 DSL。
+> server 内部异常只是**三个调用方之一**；平台不向外投递、不重试、不做 DSL。
 
 对应代码：`apps/pi-agent-server/src/{services/notifier.ts, repos/notification.repo.ts, routes/notifications.ts}`、`workers/session-worker/src/tools.ts`（`postNotification`）、`apps/pi-agent-web/src/{views/notifications/*, composables/useNotifications.ts}`。
 
@@ -51,10 +51,9 @@ flowchart TB
 | 来源 | `source` | `sourceId` | `actionUrl`（平台生成） |
 |---|---|---|---|
 | agent 调 `postNotification` 工具 | `agent` | `sessionId` | `/chat/<sessionId>` |
-| 触发器 run `failed` | `trigger` | `triggerId` | `/triggers/<id>` |
 | server 自身异常（启动失败等） | 自由文本 | 视情况 | 视情况 |
 
-**新模块要发通知**：把 `Notifier` 实例注入进来直接 `notify()` 即可，不需要改表、不需要加枚举——`source` 是普通文本列。目前 `Notifier` 挂在 trigger runtime 上（`triggerRt.notifier`）供 `index.ts` 复用；将来若出现与触发器无关的调用方，应把它提到 server 级依赖（那时再动，不为假想需求提前重构）。
+**新模块要发通知**：把 `Notifier` 实例注入进来直接 `notify()` 即可，不需要改表、不需要加枚举——`source` 是普通文本列。`Notifier` 现在是**组合根直接创建**的 server 级依赖（`createNotifier({ notificationRepo })`），不再挂在任何子系统的 runtime 上。
 
 **绝不由 assistant message 派生**：`message_end` / `agent_end` 只说明"说完了"，不说明"该不该打扰人"。agent 要说，就得显式调工具。
 

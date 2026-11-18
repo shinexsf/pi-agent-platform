@@ -13,17 +13,26 @@ flowchart TB
         TUI["pi TUI<br/>⏸️ 待定"]
     end
 
-    subgraph Master["Server (master 进程)"]
+    subgraph Master["入口进程 (apps/pi-agent-server)"]
         HTTPAPI["HTTP API<br/>(hono)"]
-        SSE["SSE<br/>(Web / IDE 流式订阅)"]
-        IMGateway["im-gateway/<br/>(QQ WebSocket / 微信 long-poll)<br/>✅ 已实施"]
-        SES["services/session.ts<br/>SessionRegistry 单入口 + Session 领域对象"]
+        SSE["SSE<br/>(经投影包转 DTO)"]
+        IMGateway["im-gateway/<br/>(QQ WebSocket / 微信 long-poll)"]
+    end
+
+    subgraph Core["内核 (@pi-agent-platform/core)"]
+        SES["SessionRegistry 单入口 + Session 领域对象"]
+        CAP["capabilities<br/>(registry → dispatch → 鉴权 → 审计)"]
+        PH["插件宿主<br/>(facet 注册表 + 宿主 API)"]
         WPM["WorkerPool<br/>(child_process.spawn)"]
-        DB[("SQLite<br/>agents + sessions + attachments + 渠道表")]
+        DB[("SQLite<br/>agents + sessions + attachments")]
+    end
+
+    subgraph ProjPkg["投影包 (@pi-agent-platform/event-projection)"]
+        PROJ["pi 事件 → 客户端 DTO<br/>(累积文本 / toolCalls / usage / 时长)"]
     end
 
     subgraph Worker["Worker 进程 (每 session 一个)"]
-        Proxy["AgentSessionProxy<br/>(implements AgentSession)"]
+        Proxy["worker 方法注册表<br/>(正向表分发 14 个方法)"]
         SDK["pi SDK<br/>(createAgentSession)"]
     end
 
@@ -32,7 +41,9 @@ flowchart TB
     IM -->|WS / long-poll| IMGateway
     HTTPAPI -->|spawn / 管理| SES
     IMGateway -->|ensureSession| SES
-    SSE -->|subscribe| SES
+    SSE -->|subscribe 原生事件| SES
+    SES -->|原生事件| PROJ
+    IMGateway -->|subscribe 原生事件| SES
     SES -->|spawn / IPC| WPM
     HTTPAPI -->|prompt / abort IPC| WPM
     IMGateway -->|prompt / kill| WPM
@@ -47,6 +58,8 @@ flowchart TB
 ## 核心思想
 
 Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、worker pool 管理。每个 session 对应一个 worker 子进程，worker 内通过 pi SDK（`createAgentSession()`）运行 agent。Master 通过 IPC 协议跟 worker 通信：正向方法名与 pi `AgentSession` 一一对应（代码层面看起来像直接调 SDK），由两端各一份**方法注册表**分发；worker 内的工具通过反向方法回调 master，插件通过 `bridge` 注册自己的方法而不接触裸 IPC。详见 [`ipc`](pi-agent-server_ipc.md)。
+
+**分层**：会话内核（`@pi-agent-platform/core`）与 UI 投影（`@pi-agent-platform/event-projection`）是两个独立包，`apps/pi-agent-server` 退化成**入口之一**——它自己只负责 HTTP / SSE / IM / 静态托管。依赖方向严格单向，内核不知道 UI 长什么样，也不知道自己跑在 HTTP server 里。桌面端（Electron main）可以复用同一套内核与投影，见 [`core-sdk`](pi-agent-server_core-sdk.md)。
 
 **关键约束**：
 - 协议所有权在自己（master ↔ worker），不在 pi
@@ -80,7 +93,6 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证；debug 代码解耦三约束） |
 | **logging** | **[`pi-agent-server_logging.md`](pi-agent-server_logging.md)** | ✅ **已定**（pino JSON 单时间线 + worker stderr tee + RollingFileSink 固定名滚动 + console 桥） |
 | **builtin-skills** | **[`pi-agent-server_builtin-skills.md`](pi-agent-server_builtin-skills.md)** | ✅ **已上线**（平台随包 skill：`serverBuiltinSkills` 显式清单 + 包内只读发布 + worker `additionalSkillPaths` 注入 + 只读清单接口） |
-| **triggers** | **[`pi-agent-server_triggers.md`](pi-agent-server_triggers.md)** | ✅ **已上线**（触发器调度：适配层 resolve → `dispatch(event)`；cron/once/webhook + 插件 source；`<system-event>` 信封；失败写通知） |
 | **notifications** | **[`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)** | ✅ **已上线**（**独立子系统**：系统通知表 + `notify()` 内部写入口 + `postNotification` 工具 + 只读收件箱；**平台不对外投递**） |
 
 ## 待决项

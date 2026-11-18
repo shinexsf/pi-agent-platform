@@ -57,9 +57,6 @@ pi-agent-web 是一个 Vue 3 SPA（Vite 构建），**不引入重型组件库**
 src/views/
 ├── AgentsListView.vue           /agents（列表）
 ├── SessionsListView.vue         /sessions（列表）
-├── triggers/                    触发器（2026-11-06）
-│   ├── TriggersListView.vue     /triggers（一级菜单 order 15，icon automation）
-│   └── TriggerEditorView.vue    /triggers/new | /triggers/:id（按 source 渲染表单 + 右栏 runs）
 ├── notifications/
 │   └── NotificationsView.vue    /notifications（header 铃铛入口，mobileHidden）
 ├── ChatView.vue                 /chat/:id（聊天页，独立于 AppShell）
@@ -88,9 +85,6 @@ src/views/
 /agents                              AgentsListView
 /agents/new                          AgentEditorView
 /agents/:id/edit                     AgentEditorView
-/triggers                             TriggersListView（navOrder 15）
-/triggers/new                         TriggerEditorView
-/triggers/:id                         TriggerEditorView
 /notifications                        NotificationsView（header 铃铛 badge 入口）
 /sessions                            SessionsListView
 /chat/:id                            ChatView（独立，不套 AppShell）
@@ -354,7 +348,7 @@ agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Buil
 
 - 数据源是只读接口 `GET /api/config/server-builtin-skills`，勾选写进 `config.serverBuiltinSkills`
 - 每项带「平台」徽标 + `description` 作为 tooltip；名字失效时按既有 `issueIndex` 标黄并可「清理无效项」
-- 三条软提示（不拦保存）：能力已授权但没勾用法说明（`pi-capabilities-usage` / `pi-trigger-usage`）、勾了 skill 但没开 `read`
+- 两条软提示（不拦保存）：能力已授权但没勾用法说明（`pi-capabilities-usage`）、勾了 skill 但没开 `read`
 - 内置 skill **不出现在** `配置 → Skill`（那是用户的 `~/.pi/agent/skills`）
 
 ## 触发器与通知页（2026-11-06）
@@ -365,4 +359,4 @@ agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Buil
 - **详情页**：表单按 `source` 渲染（cron 表达式+时区 / once `datetime-local` / webhook 密钥区块），`source` 与 `agent` 创建后只读；`reuse` 模式多一个「目标会话」下拉（选项来自既有 `GET /api/sessions?agent_id=`，第一项 = 留空自动创建）；webhook 明文 secret 只在「创建成功」与「轮换」两处弹窗显示一次（含 curl 示例）
 - **收件箱**：severity 色条 + 筛选 chips + 全部已读；点击标已读并跳 `actionUrl`；**没有输入框**（要回复必须进会话）
 
-细节见 [triggers 文档](pi-agent-server_triggers.md) §9；收件箱本身属独立子系统，见 [notifications 文档](pi-agent-server_notifications.md) §6。
+收件箱本身属独立子系统，见 [notifications 文档](pi-agent-server_notifications.md) §6。

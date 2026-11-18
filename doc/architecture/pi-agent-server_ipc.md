@@ -160,7 +160,23 @@ worker → master 的宿主动作。全部登记在 master 侧注册表。
 | 重试与队列 | `auto_retry_start` / `auto_retry_end` / `queue_update` |
 | 平台内部与插件 | `session_info_changed`（master 内部消费，不进 SSE）/ `plugin_event`（转发为 SSE `plugin.<id>.<name>`） |
 
-事件在 worker 侧做**无损 coalescing**（快照 last-wins + 60ms 节流），有损投影（合并 / 改名 / DTO / 过滤）在 master 的 HTTP 层做。新增事件类型是四处联动：协议类型 → worker 映射（必须在投影之前特判，否则静默丢失）→ master SSE 转发 → 前端事件白名单。
+**事件名集合是开放的**：`event` 字段就是 pi 自己的事件类型（`message_start` / `message_update` / `tool_execution_*` / `agent_start` / `agent_settled` / `agent_end` / `turn_*` / `compaction_*` / `auto_retry_*` / `queue_update` / `session_info_changed` …），worker **原样透传，没有白名单**。平台只保留两个名字：`ready`（进程握手，带方法注册表摘要）与 `plugin_event`（插件上行，没有 pi 对应物）。
+
+所以新增 pi 事件类型**不需要动协议、不需要动 worker** —— 它天然会流过来。
+
+**分工**：
+
+| 层 | 做什么 | 不做什么 |
+|---|---|---|
+| **worker** | 无损 **coalescing**：`message_update` 按 message 只留窗口内最新快照（快照本身是累积全量，丢中间态不丢信息），60ms 窗口 + 边界事件 flush | 不打 id、不提文本、不改名、不算时长 —— 也就是**不做投影** |
+| **投影包**（`@pi-agent-platform/event-projection`） | 有损 **projection**：pi 事件 → 客户端 DTO（messageId、累积文本、toolCalls、usage、durationMs、事件改名、过滤 UI 无关事件） | 不做路由与限流 |
+| **入口**（`routes/events.ts`） | 序列化成 SSE；`plugin_event` 改名与 64 KiB / 100fps 硬上限；丢弃 master 内部事件 | 不做事件语义解释 |
+
+判据：**coalescing 不改事件说了什么，projection 决定给谁看什么，入口决定怎么送出去。**
+
+投影包独立存在的理由：它服务的是 **UI**（同一套 Vue 前端），不是某一层传输。放进内核 → 内核知道了 UI 长什么样；放进 `routes/events.ts` → 桌面端走 IPC 时只能复制一份，SSE 契约立刻有两份会漂移的真相。详见 [`core-sdk`](pi-agent-server_core-sdk.md)。
+
+**代价与收益**：worker 瘦了约 250 行（删掉白名单映射 + DTO 构造），代价是每次事件多一次 JSON 序列化（原生事件比 DTO 大），换来的是信息不再在出 worker 之前丢失 —— `agent_end.willRetry`、`tool_execution_update`（→ `tool_progress`）、`compaction_start/end` 现在都能到客户端。
 
 ## 插件桥：封装层
 
@@ -241,4 +257,5 @@ sequenceDiagram
 - [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— `plugin.admin.invoke` 的控制面消费方
 - [`pi-agent-server_plugins.md`](pi-agent-server_plugins.md) / [`plugins-manual`](pi-agent-server_plugins-manual.md) —— 插件桥（`emit` / `registerMethod` / `call`）
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— 会话创建、恢复与配置快照
+- [`pi-agent-server_core-sdk.md`](pi-agent-server_core-sdk.md) —— 内核边界、订阅契约、投影包归属
 - [`pi-agent-server_overview.md`](pi-agent-server_overview.md) —— 整体定位
