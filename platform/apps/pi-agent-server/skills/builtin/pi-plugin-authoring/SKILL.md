@@ -1,6 +1,5 @@
 ---
 name: pi-plugin-authoring
-description: 当用户要给这个平台"加功能"——加菜单/页面、加 HTTP 端点、在会话页加面板或接管工具卡片、加触发器来源、加工具——时读这份。含插件目录与 manifest 约定、四类 facet 各能做什么、扩展点清单、硬约束（路由表首次请求后冻结等）、最小可运行示例与自测方式。
 ---
 
 # 给平台写插件
@@ -14,7 +13,6 @@ description: 当用户要给这个平台"加功能"——加菜单/页面、加 
 | 示例 | 是什么 | 想回答的问题 → 读哪个文件 |
 |---|---|---|
 | `examples/hello-plugin/` | 最小可运行：配置二级页 + 一个 GET 端点 | `package.json`（manifest 最小集）· `server/index.js`（菜单/页面/路由注册）· `web/page.js`（`mount` 与 dispose） |
-| `examples/kitchen-sink/` | 扩展点全景 | `server/index.js`（会话槽位 / 工具卡片 / `host.triggers.fire` / `host.triggerSources.register`）· `web/panel.js`（`host.data` 双向）· `web/card.js`（工具卡片 + `host.toolCard`）· `worker/index.js`（`activate({ bridge })`）· `extension/index.js`（pi 扩展里注册工具） |
 
 试装（把示例目录复制出仓库再装，别直接装在 skill 目录里）：
 
@@ -36,8 +34,6 @@ pi-server restart
 | HTTP 端点 | `server/index.js` 的 `init(host)` → `host.global.routes` | server |
 | 会话页右侧轨道按钮 + 抽屉面板 | `server` 注册 surface，`web/<entry>.js` 的 `mount` | server + web |
 | 接管/替换某个工具的卡片渲染 | `host.session.toolCards` + `web/<entry>.js` | server + web |
-| 新的触发器来源（如"每 2 分钟"、外部队列） | `host.triggerSources.register` | server |
-| 进程内触发已有触发器 | `host.triggers.fire(triggerId, payload)` | server |
 | 给 agent 加工具 / 拦截工具调用 | pi 扩展写法（`extension/index.js`）或 worker `activate` | extension / worker |
 | 会话内的自定义上行事件（worker → 浏览器） | `worker/index.js` 的 `activate({ bridge })` → `bridge.emit` | worker |
 
@@ -95,8 +91,6 @@ export function init(host) {
   // 工具卡片：mode: 'replace' 整卡替换 / 'regions' 只换 header|body|footer
   host.session.toolCards.register({ tool: 'sendFileToUser', mode: 'replace', entry: 'card' });
   // 触发器：进程内触发 / 列出 / 注册新来源
-  host.triggers.fire(triggerId, payload);
-  host.triggerSources.register({ source: 'every-2m', validateConfig, computeNextAt });
   host.log('info', 'hud-demo ready');
 }
 ```
@@ -146,7 +140,6 @@ export default async function extension(pi, { bridge }) {
 
 ## 4. 硬约束（这些不是风格建议）
 
-1. **HTTP 路由只能在 `init` 里注册**。Hono 的路由表在首次请求后冻结，运行期再注册会抛错。这也是平台自己不给"触发器来源"开放路由注册的原因——要 HTTP 入口就自己注册一个路由，再调 `host.triggers.fire`。
 2. **路由路径精确匹配**，不支持通配符；请求体是**原始文本**，要 JSON 自己 `JSON.parse`。
 3. **facet 靠目录存在声明**；没实现能力的 facet 不要建空目录。
 4. **注册项 id 同（作用域, 类别）唯一**；重复注册后者被拒，进 `rejected`——**被拒绝不静默**，一定要在 `/api/plugins/:id/extensions` 里能看见。

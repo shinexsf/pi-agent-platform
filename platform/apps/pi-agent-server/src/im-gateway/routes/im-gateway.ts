@@ -16,7 +16,7 @@ import { streamSSE } from 'hono/streaming';
 import type { ChannelConfig, ChannelHost } from '@pi-agent-platform/channel-types';
 import { createChannelHostImpl } from '../channel-host-impl.js';
 import { listChannels } from '../channel-registry.js';
-import type { SessionRepo } from '../../repos/session.repo.js';
+import type { SessionRepo } from '@pi-agent-platform/core';
 
 interface Deps {
   host: ChannelHost;

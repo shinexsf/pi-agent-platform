@@ -22,10 +22,10 @@
  */
 
 import type { SessionId } from '@pi-agent-platform/channel-types';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
-import { sessionRegistry, type AgentLike } from '../services/session.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import { sessionRegistry, type AgentLike } from '@pi-agent-platform/core';
 import { getSessionIdByChat, setSessionMeta } from './session-channel-map.js';
 import { logger } from './logger.js';
 

@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
 import fs from 'node:fs/promises';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
-import type { AttachmentStore } from '../services/attachment-store.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import type { AttachmentStore } from '@pi-agent-platform/core';
 import type { CreateAgentRequest, UpdateAgentRequest } from '@pi-agent-platform/api-types';
 import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import { collectConfigIssues } from '../services/config-issues.js';
-import { normalizePath } from '../utils/normalize-path.js';
+import { normalizePath } from '@pi-agent-platform/core';
 
 /**
  * Sessions are children of their agent — when an agent is removed, every

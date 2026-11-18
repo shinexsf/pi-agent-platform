@@ -15,7 +15,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { readRegistry } from '@pi-agent-platform/plugin-types/registry';
-import { childLogger } from '../logger.js';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-assets');
 

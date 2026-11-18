@@ -14,10 +14,11 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
+import { acquireProjector, releaseProjector } from '../services/projector-host.js';
 import type { SessionRunState } from '@pi-agent-platform/shared-types';
-import { sessionRegistry } from '../services/session.js';
-import type { Session } from '../services/session.js';
-import { childLogger } from '../logger.js';
+import { sessionRegistry } from '@pi-agent-platform/core';
+import type { Session } from '@pi-agent-platform/core';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-events');
 
@@ -104,6 +105,9 @@ export function createEventsRouter() {
         finish = resolve;
       });
 
+      // 会话级投影器：第一个订阅者创建，最后一个退出时释放（spec: event-projection-package）。
+      const projector = acquireProjector(sessionId);
+
       const unsubscribe = session.subscribe(
         (event: WorkerEvent) => {
           // session_info_changed is master-internal (consumed to sync sessions.title
@@ -139,10 +143,14 @@ export function createEventsRouter() {
             });
             return;
           }
+          // 其余事件走投影：pi 原生事件 → 客户端 DTO（含改名、累积文本、用量、时长）。
+          // not-projected 的（turn_start / entry_appended / …）对 UI 无意义，直接丢。
+          const projected = projector.project(event);
+          if (!projected) return;
           void stream.writeSSE({
-            event: event.event,
-            id: (event.data as { messageId?: string } | undefined)?.messageId,
-            data: JSON.stringify(event.data ?? {}),
+            event: projected.name,
+            id: (projected.data as { messageId?: string } | undefined)?.messageId,
+            data: JSON.stringify(projected.data ?? {}),
           });
         },
         (reason) => {
@@ -173,6 +181,7 @@ export function createEventsRouter() {
         void disposed.then(() => resolve());
       });
       unsubscribe();
+      releaseProjector(sessionId);
     });
   });
 

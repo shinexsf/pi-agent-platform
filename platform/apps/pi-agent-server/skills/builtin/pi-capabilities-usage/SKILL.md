@@ -1,19 +1,17 @@
 ---
 name: pi-capabilities-usage
-description: 当需要查询或修改平台状态（server 版本与 worker 池、agents、sessions、渠道配置、能力面本身）时读这份。讲 callServer 的发现流程（list / detail）、两层授权与被拒的原因、立即生效还是下次 spawn、写操作的最小权限做法。触发器请读 pi-trigger-usage。
+description: 当需要查询或修改平台状态（server 版本与 worker 池、agents、sessions、渠道配置、能力面本身）时读这份。讲 callServer 的发现流程（list / detail）、两层授权与被拒的原因、立即生效还是下次 spawn、写操作的最小权限做法。
 ---
 
 # server 能力面（callServer）用法
 
 `callServer` 是一个**元工具**：它把你对平台的查询与修改转发到 server 的控制面。你不需要记参数，需要的是**发现流程**和**边界**。
 
-> 触发器（`trigger.*`）有专门的用法说明，见 `pi-trigger-usage`。本文只讲通用部分。
-
 ## 1. 两个内置方法先把地图打开
 
 | 方法 | 作用 |
 |---|---|
-| `callServer { method: "list" }` | 按模块分组列出**你被授权的**业务方法（server / agent / session / channel / config / trigger） |
+| `callServer { method: "list" }` | 按模块分组列出**你被授权的**业务方法（server / agent / session / channel / config） |
 | `callServer { method: "detail", params: { method } }` | 单个方法的完整参数表、返回结构、**生效时机** |
 
 规矩：**任何方法第一次用之前先 `detail`**。参数以服务端 schema 为准，凭印象编字段名是最常见的失败原因。调用不存在的方法时，错误信息会回带可用方法列表——照着改。
@@ -59,7 +57,6 @@ description: 当需要查询或修改平台状态（server 版本与 worker 池�
 | `agent` | 搜索/取详情/局部更新配置 | 更新只影响未来会话；`workspacePath` 必须是已存在路径 |
 | `session` | 搜索/取详情/改名/换模型/改配置/重启 | `config.*` 下次 spawn；`restart` 会打断当前轮次 |
 | `channel` / `config` | 占位（目前无业务方法） | 出现在 `list` 里不等于可用 |
-| `trigger` | 触发器增删改查与试跑 | 见 `pi-trigger-usage` |
 
 ## 6. 你手里没有的东西
 

@@ -15,10 +15,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
-import { uploadSingleExtension, extractExtensionNames, readSettings } from '../services/extension-utils.js';
+import { uploadSingleExtension, extractExtensionNames, readSettings } from '@pi-agent-platform/core';
 import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
-import { childLogger } from '../logger.js';
-import { listServerBuiltinSkills } from '../services/server-builtin-skills.js';
+import { childLogger } from '@pi-agent-platform/core';
+import { listServerBuiltinSkills } from '@pi-agent-platform/core';
 import {
   McpCatalogError,
   createMcpServer,

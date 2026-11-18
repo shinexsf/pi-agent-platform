@@ -38,7 +38,7 @@ import {
 } from './session-channel-map.js';
 import type { InboundMessage } from '@pi-agent-platform/channel-types';
 import type { RouteContext } from './routing.js';
-import { sessionRegistry } from '../services/session.js';
+import { sessionRegistry } from '@pi-agent-platform/core';
 import { ensureSessionShared } from './ensure-session.js';
 
 interface Deps {
@@ -49,7 +49,7 @@ interface Deps {
   /** Worker kill. */
   killWorker: (sessionId: SessionId, reason: string) => Promise<void>;
   /** Attachment store for uploadAttachment. */
-  attachmentStore: import('../services/attachment-store.js').AttachmentStore;
+  attachmentStore: import('@pi-agent-platform/core').AttachmentStore;
   /** Run a builtin slash command. */
   runBuiltin: (name: string, sessionId: SessionId, args: string) => Promise<string | null>;
   /** Inbound message routing: resolve session, spawn/reuse worker, stream reply. */
@@ -57,11 +57,11 @@ interface Deps {
   /** Adapter lookup by channel id (channel package → server routing reply path). */
   getAdapter: (channelType: ChannelType, channelId: ChannelId) => import('@pi-agent-platform/channel-types').ChannelAdapter | null;
   /** Agent repo (passed into RouteContext). */
-  agentRepo: import('../repos/agent.repo.js').AgentRepo;
+  agentRepo: import('@pi-agent-platform/core').AgentRepo;
   /** Session repo (passed into RouteContext). */
-  sessionRepo: import('../repos/session.repo.js').SessionRepo;
+  sessionRepo: import('@pi-agent-platform/core').SessionRepo;
   /** Worker pool (passed into RouteContext). */
-  workerPool: import('../worker-pool.js').WorkerPool;
+  workerPool: import('@pi-agent-platform/core').WorkerPool;
   /** QQ group notified set (shared with routeInbound for fast-fail dedup). */
   qqGroupNotified: Set<string>;
   /** DB handle for executeMigration + query (raw better-sqlite3). */

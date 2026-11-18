@@ -2,11 +2,9 @@
  * Notifier — the ONE write entry point for the **system notification table**
  * (`notifications`).
  *
- * Standalone subsystem, not a trigger feature: the trigger runner is merely one
- * caller. Sources are exactly three:
+ * Standalone subsystem — no other subsystem owns it. Sources are exactly two:
  *   1. the agent's `postNotification` tool (reverse-call from the worker)
- *   2. the trigger runner, when a firing fails
- *   3. server-internal failures (explicit `notify()` calls, e.g. startup problems)
+ *   2. server-internal failures (explicit `notify()` calls, e.g. startup problems)
  *
  * Never derived from assistant messages: an agent has to ask.
  *
@@ -24,7 +22,7 @@ export interface NotifyInput {
   severity?: NotificationSeverity;
   title: string;
   body: string;
-  /** `agent` | `trigger` | `server` — free-form so new internal callers need no schema change. */
+  /** `agent` | `server` — free-form so new internal callers need no schema change. */
   source: string;
   sourceId?: string | null;
   /** Server-built deep link — never taken from an agent / plugin. */

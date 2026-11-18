@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { childLogger } from './logger.js';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('config');
 
@@ -42,8 +42,6 @@ export interface ServerConfig {
    * `registry.json` 在其中；安装只能走 `pi-server plugin add`（无 HTTP 端点）。
    */
   pluginsDir: string;
-  /** Global kill switch for trigger scheduling (`PI_TRIGGERS_DISABLED=1`). */
-  triggersDisabled: boolean;
   /** Directory for user-uploaded image attachments, organized as <root>/<sessionId>/<sha>.<ext>.
    *  Read tool images (live session) are NOT stored here — they're owned by the source filesystem path. */
   attachmentsDir: string;
@@ -100,7 +98,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
     serverBuiltinSkillsDir: resolveServerBuiltinSkillsDir(env),
     pluginsDir: env.PI_SERVER_PLUGINS_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugins'),
-    triggersDisabled: env.PI_TRIGGERS_DISABLED === '1',
     attachmentsDir,
   };
 }

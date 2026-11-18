@@ -1,7 +1,7 @@
 /**
- * Notification inbox (change: trigger-scheduling). Read-only-ish: list, mark
+ * Notification inbox. Read-only-ish: list, mark
  * read. Creating a notification is NOT an HTTP operation — only `notifier.notify()`
- * (agent tool / trigger failure / server failure) writes rows.
+ * (agent tool / server failure) writes rows.
  */
 
 import { Hono } from 'hono';

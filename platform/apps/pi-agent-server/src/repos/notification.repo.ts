@@ -7,8 +7,8 @@
 
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import type { DB } from '../db/init.js';
-import { notifications } from '../db/schema.js';
+import type { DB } from '@pi-agent-platform/core/db';
+import { notifications } from '../db/modules.js';
 import type { NotificationDTO, NotificationSeverity } from '@pi-agent-platform/shared-types';
 
 type Row = typeof notifications.$inferSelect;

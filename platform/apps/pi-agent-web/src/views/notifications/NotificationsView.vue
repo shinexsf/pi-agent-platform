@@ -1,16 +1,16 @@
 <script setup lang="ts">
 /**
- * NotificationsView — `/notifications` inbox (change: trigger-scheduling).
+ * NotificationsView — `/notifications` inbox.
  *
  * Read-only by design: notifications are not a conversation. Acting on one
- * means jumping to the session / trigger it points at.
+ * means jumping to the session it points at.
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { NotificationDTO, NotificationSeverity } from '@pi-agent-platform/shared-types';
 import AppIcon from '../../components/ui/AppIcon.vue';
 import { toast } from '../../composables/useFeedback';
-import { absoluteTime, relativeTime } from '../../composables/useTriggers';
+import { absoluteTime, relativeTime } from '../../composables/useTimeFormat';
 import { useNotifications } from '../../composables/useNotifications';
 
 const router = useRouter();

@@ -153,6 +153,12 @@ async function main() {
   await run('pnpm', ['--filter', 'pi-server', 'build']);
 
   log('step 2/10: pnpm -r build (compile server + worker + channels + packages)');
+  // 编译前先清掉 server / worker 的 dist：tsc 不会删除"源文件已删"的旧产物，
+  // 不清就会把搬迁前留下的死文件一起打进 tarball（曾把 dist/server/worker-pool.js、
+  // dist/server/capabilities/* 这类移动走的模块残留装进包里）。
+  for (const stale of [SERVER_DIST, WORKER_DIST]) {
+    if (existsSync(stale)) rmSync(stale, { recursive: true, force: true });
+  }
   await run('pnpm', ['-r', 'build']);
 
   log('step 3/10: copy channels/shared (plain-JS helper module imported by channels)');

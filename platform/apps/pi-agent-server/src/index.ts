@@ -3,24 +3,24 @@
  */
 
 import { serve } from '@hono/node-server';
+import { createServerApp } from './app.js';
+import { createHostApi } from './host-api-impl.js';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import path from 'node:path';
 import process from 'node:process';
 import { config } from './config.js';
-import { logger } from './logger.js';
-import { initDb } from './db/init.js';
-import { createAgentRepo } from './repos/agent.repo.js';
-import { createSessionRepo } from './repos/session.repo.js';
+import { logger } from '@pi-agent-platform/core';
+import { initDb } from '@pi-agent-platform/core/db';
+import { runModuleMigrations } from './db/modules.js';
+import { createAgentRepo } from '@pi-agent-platform/core';
+import { createSessionRepo } from '@pi-agent-platform/core';
 import { createTemplateRepo } from './repos/template.repo.js';
-import { createTriggerRepo } from './repos/trigger.repo.js';
 import { createNotificationRepo } from './repos/notification.repo.js';
-import { initTriggerRuntime } from './services/trigger/runtime.js';
-import { createTriggersRouter } from './routes/triggers.js';
-import { createHooksRouter } from './routes/hooks.js';
+import { createNotifier } from './services/notifier.js';
 import { createNotificationsRouter } from './routes/notifications.js';
-import { initSessionRegistry } from './services/session.js';
-import { workerPool } from './worker-pool.js';
+import { initCoreConfig, initSessionRegistry } from '@pi-agent-platform/core';
+import { workerPool } from '@pi-agent-platform/core';
 import { createAgentsRouter } from './routes/agents.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
@@ -31,11 +31,11 @@ import { createPluginsRouter } from './routes/plugins.js';
 import { createExtensionsRouter, createPluginDispatcherRouter } from './routes/plugin-runtime.js';
 import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
-import { startPluginRuntime } from './services/plugins.js';
+import { startPluginRuntime } from '@pi-agent-platform/core';
 import { createServerLogsRouter } from './routes/server-logs.js';
 import { createRuntimeMethodsRouter } from './routes/runtime-methods.js';
-import { AttachmentStore } from './services/attachment-store.js';
-import { startTimeoutScanner } from './session-timeout-scanner.js';
+import { AttachmentStore } from '@pi-agent-platform/core';
+import { startTimeoutScanner } from '@pi-agent-platform/core';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { printStartupBanner } from './startup-banner.js';
 import { initModelRegistry, listAvailableModels } from './model-registry.js';
@@ -67,11 +67,26 @@ async function main() {
   await mkdir(uploadsExtensionsDir, { recursive: true });
   logger.info({ dir: uploadsExtensionsDir }, 'uploads extensions root ready');
 
+  // 内核只声明"我需要知道哪些值"，读 env / 推路径是入口的事。
+  initCoreConfig({
+    maxWorkers: config.maxWorkers,
+    agentDir: config.agentDir,
+    attachmentsDir: config.attachmentsDir,
+    pluginsDir: config.pluginsDir,
+    serverBuiltinSkillsDir: config.serverBuiltinSkillsDir,
+    mcpConfigPath: config.mcpConfigPath,
+    workerStartupTimeoutMs: config.workerStartupTimeoutMs,
+    workerStopTimeoutMs: config.workerStopTimeoutMs,
+    isDev: config.isDev,
+  });
+
   const { db, raw } = initDb(config.databasePath);
+  // 平台功能模块自带的表：内核只建 Agent / Session / 附件，其余由模块迁移创建。
+  const migratedModules = runModuleMigrations(raw);
+  logger.info({ modules: migratedModules }, 'module tables migrated');
   const agentRepo = createAgentRepo(db);
   const sessionRepo = createSessionRepo(db);
   const templateRepo = createTemplateRepo(db);
-  const triggerRepo = createTriggerRepo(db);
   const notificationRepo = createNotificationRepo(db);
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
@@ -79,150 +94,27 @@ async function main() {
   // Must init BEFORE any consumer (routes / im-gateway / capabilities) handles a request.
   initSessionRegistry({ sessionRepo, agentRepo, workerPool });
 
-  // Trigger runtime (change: trigger-scheduling) — register built-in sources,
-  // wire dispatcher/notifier/scheduler. MUST init BEFORE routes/capabilities.
-  const triggerRt = initTriggerRuntime({
+  // Platform notification writer (inbox only). Standalone: `postNotification`
+  // and server-side failures are its only callers.
+  const notifier = createNotifier({ notificationRepo });
+
+  // 插件与内核之间唯一稳定缝（六个面）；形状在内核，实现在入口。
+  const hostApi = createHostApi({ raw, sessionRepo, workerPool });
+  logger.info({ faces: Object.keys(hostApi) }, 'host api ready');
+
+  // 装配交给工厂（可被别的进程内嵌），启动器只负责 listen / 信号。
+  const { app, dispose } = await createServerApp({
+    config,
+    db,
+    raw,
     agentRepo,
     sessionRepo,
-    triggerRepo,
+    templateRepo,
     notificationRepo,
+    attachmentStore,
+    notifier,
     workerPool,
-    triggersDisabled: config.triggersDisabled,
   });
-
-  const app = new Hono();
-
-  // Static dirs (mounted before API routes so /api/* still takes precedence by exact match).
-  // /ide/  ——  JCEF 加载 Vue SPA（pi-agent-ide 构建产物）
-  // /web/  ——  浏览器 SPA（pi-agent-web 构建产物，跟 pi-agent-idea MVP 不相关但预留）
-  const publicBaseDir = resolvePublicDir();
-  mountStaticDir(app, '/ide/', path.join(publicBaseDir, 'ide'), '/ide/');
-  mountStaticDir(app, '/web/', path.join(publicBaseDir, 'web'), '/web/');
-
-  // API routes
-  app.get('/api/health', (c) => c.json({ status: 'ok', uptime: process.uptime() }));
-  // Global model registry — used by the IDE "Add Agent" dialog to populate a
-  // dropdown instead of letting users type `provider/modelId` by hand.
-  app.get('/api/models', async (c) => c.json(await listAvailableModels()));
-  app.route('/api/agents', createAgentsRouter(agentRepo, sessionRepo, workerPool, attachmentStore));
-  app.route('/api/sessions', createSessionsRouter(agentRepo, sessionRepo, workerPool, attachmentStore));
-  app.route('/api/sessions', createEventsRouter());
-  app.route('/api/sessions', createAttachmentsRouter({ sessionRepo, workerPool, attachmentStore }));
-  app.route('/api/config', createConfigRouter(config));
-  app.route('/api/templates', createTemplatesRouter(templateRepo));
-  // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
-  app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
-  app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
-  // Triggers + webhook entry + notification inbox (change: trigger-scheduling).
-  app.route('/api/triggers', createTriggersRouter(agentRepo, triggerRt));
-  app.route('/api/hooks', createHooksRouter(triggerRt));
-  app.route('/api/notifications', createNotificationsRouter(notificationRepo));
-
-  // `plugin.notifications.post` — reverse method behind the `postNotification` tool:
-  // writes one row into the system notification table. Inbox only: no delivery.
-  workerPool.registerService(
-    'plugin:notifications',
-    { kind: 'plugin', descriptions: { 'plugin.notifications.post': '写一条系统通知（inbox only，不投递）' } },
-    {
-      'plugin.notifications.post': async (sessionId, args) => {
-        const [params] = args as [{ title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
-        const title = (params?.title ?? '').trim();
-        const body = (params?.body ?? '').trim();
-        if (!title && !body) throw new Error('postNotification: title/body required');
-        const session = sessionRepo.get(sessionId);
-        return triggerRt.notifier.notify({
-          severity: params?.severity ?? 'info',
-          title: title.slice(0, 200),
-          body: body.slice(0, 4000),
-          source: 'agent',
-          sourceId: sessionId,
-          // Deep link is built by the platform, never by the caller.
-          actionUrl: `/chat/${sessionId}`,
-        });
-      },
-    },
-  );
-  // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
-  app.route('/api/extensions', createExtensionsRouter({ pluginsDir: config.pluginsDir }));
-  app.route('/api/p', createPluginDispatcherRouter({ pluginsDir: config.pluginsDir }));
-
-  // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
-  app.route('/plugins', createPluginAssetsRouter({ pluginsDir: config.pluginsDir }));
-  // 启动插件运行期：静态快照 + 执行 register()/init() + 监听 registry 变化
-  void startPluginRuntime(config.pluginsDir);
-  // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
-  app.route('/api/server-logs', createServerLogsRouter());
-  // IPC 方法清单（注册表的可观测面；只读诊断）
-  app.route('/api/runtime/methods', createRuntimeMethodsRouter(workerPool));
-
-  // Capability control plane — SINGLE entry for all server-management abilities
-  // exposed to agents via the callServer tool (register → dispatch → authorize → audit).
-  const { registerAllCapabilities, installControlPlane } = await import('./capabilities/index.js');
-  registerAllCapabilities({
-    agentRepo,
-    sessionRepo,
-    workerPool,
-    serverOpts: { nodeEnv: config.nodeEnv, port: config.port, maxWorkers: config.maxWorkers },
-  });
-  installControlPlane({
-    agentRepo,
-    sessionRepo,
-    workerPool,
-    registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
-  });
-  // Read-only capability metadata for the WebUI agent editor (capabilities 授权
-  // checkbox list). Registry is the single source of truth — the UI never
-  // hardcodes method names. Production endpoint (read-only, no secrets),
-  // distinct from /debug/capabilities (dev-only, adds policy + invoke).
-  const { listCapabilities: listCaps, CAPABILITY_MODULES: CAP_MODULES } = await import('./capabilities/registry.js');
-  app.get('/api/capabilities', (c) =>
-    c.json({
-      modules: CAP_MODULES.map((m) => ({
-        module: m,
-        capabilities: listCaps(m).map((d) => ({
-          method: d.method,
-          access: d.access,
-          scoped: d.scoped,
-          summary: d.summary,
-        })),
-      })),
-    }),
-  );
-
-  // Debug routes (dev/test only) — dynamic import so production never loads
-  // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
-  if (config.isDev) {
-    const { createDebugRouter } = await import('./routes/debug.js');
-    app.route('/debug', createDebugRouter(workerPool, sessionRepo, db, agentRepo, triggerRt));
-    const { createCapabilityDebugRouter } = await import('./routes/capabilities-debug.js');
-    app.route('/debug/capabilities', createCapabilityDebugRouter(agentRepo, sessionRepo, workerPool));
-    logger.info('debug routes mounted at /debug (incl. /debug/capabilities)');
-  } else {
-    logger.info('debug routes disabled (production mode)');
-  }
-
-  // Start placeholder timeout scanner (active sessions are never auto-killed)
-  const scanner = startTimeoutScanner(workerPool, config.placeholderTimeoutMs);
-
-  // Arm the trigger scheduler AFTER routes are mounted (one setTimeout, no polling).
-  triggerRt.scheduler.start();
-
-  // Start IM gateway BEFORE serve() so its router can be mounted while
-  // Hono's matcher is still mutable.
-  let imGatewayHandle: ImGatewayHandle | undefined;
-  try {
-    imGatewayHandle = await startImGateway({
-      agentRepo,
-      sessionRepo,
-      workerPool,
-      rawDb: raw,
-      attachmentStore,
-    });
-    app.route('/api/im', imGatewayHandle.imRouter);
-    logger.info({ channels: imGatewayHandle.loadedTypes }, 'im-gateway started');
-  } catch (err) {
-    logger.warn({ err }, 'im-gateway failed to start');
-  }
 
   // Start HTTP server (after all routes mounted)
   serve({ fetch: app.fetch, port: config.port }, (info) => {
@@ -232,9 +124,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
-    scanner.stop();
-    triggerRt.scheduler.stop();
-    if (imGatewayHandle) await imGatewayHandle.shutdown();
+    await dispose();
     await workerPool.shutdown();
     raw.close();
     process.exit(0);
@@ -270,40 +160,3 @@ main().catch((err) => {
   logger.error({ err }, 'server fatal');
   process.exit(1);
 });
-
-/**
- * Resolve the SPA public directory.
- * - Packaged mode (started by `pi-server` CLI): PUBLIC_DIR env injected by CLI (absolute path to dist/server/public).
- * - Dev mode: `./public` relative to cwd (original behavior).
- */
-function resolvePublicDir(): string {
-  if (process.env.PI_SERVER_CLI === '1' && process.env.PUBLIC_DIR) {
-    return process.env.PUBLIC_DIR;
-  }
-  return path.resolve('./public');
-}
-
-/**
- * Mount a static directory under a route prefix. If the directory doesn't exist,
- * logs a warning and skips mounting (so server still starts — e.g. before `build:ide`).
- */
-function mountStaticDir(app: Hono, prefix: string, absDir: string, logLabel: string): void {
-  if (!existsSync(absDir)) {
-    logger.warn({ dir: absDir, label: logLabel }, 'static dir not found (run pnpm build:web / build:ide first)');
-    return;
-  }
-  // Strip the prefix from the path so serveStatic can find the file under absDir.
-  // E.g. /ide/assets/index.js → /assets/index.js, joined with root → public/ide/assets/index.js
-  const baseWithoutSlash = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-  app.use(`${prefix}*`, serveStatic({
-    root: absDir,
-    rewriteRequestPath: (p) => p.startsWith(`${baseWithoutSlash}/`) ? p.slice(baseWithoutSlash.length) : p,
-  }));
-  // Both SPAs use history routes. Resolve their fallback entry from the same
-  // static root so direct navigation also works in CLI-packaged mode.
-  const indexHtmlPath = path.join(absDir, 'index.html');
-  if (existsSync(indexHtmlPath)) {
-    app.get(`${prefix}*`, createSpaFallback(indexHtmlPath));
-  }
-  logger.info({ prefix, dir: absDir }, 'static dir mounted');
-}

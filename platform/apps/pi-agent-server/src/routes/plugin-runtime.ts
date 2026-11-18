@@ -9,9 +9,9 @@
 
 import { Hono } from 'hono';
 import type { GlobalExtensionsResponse } from '@pi-agent-platform/api-types';
-import { childLogger } from '../logger.js';
-import { dispatchPluginRoute, hasRoutes, listGlobalExtensions, listPluginIds } from '../services/plugin-extensions.js';
-import { killSwitchActive, getPluginSnapshot } from '../services/plugins.js';
+import { childLogger } from '@pi-agent-platform/core';
+import { dispatchPluginRoute, hasRoutes, listGlobalExtensions, listPluginIds } from '@pi-agent-platform/core';
+import { killSwitchActive, getPluginSnapshot } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-runtime');
 

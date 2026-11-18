@@ -12,19 +12,19 @@
 import { Hono } from 'hono';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
-import type { AttachmentStore } from '../services/attachment-store.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import type { AttachmentStore } from '@pi-agent-platform/core';
 import type { PromptRequest, PlaceholderSessionResponse, SlashCommandDTO, ModelInfo, SessionInfoDTO } from '@pi-agent-platform/api-types';
 import { listAvailableModels } from '../model-registry.js';
-import { sessionRegistry, runStateOf } from '../services/session.js';
-import { renameSession as renameSessionOp } from '../services/session-ops.js';
-import { resolvePrompt } from '../prompt-resolver.js';
-import { normalizePath } from '../utils/normalize-path.js';
+import { sessionRegistry, runStateOf } from '@pi-agent-platform/core';
+import { renameSession as renameSessionOp } from '@pi-agent-platform/core';
+import { resolvePrompt } from '@pi-agent-platform/core';
+import { normalizePath } from '@pi-agent-platform/core';
 import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import { collectConfigIssues } from '../services/config-issues.js';
-import { childLogger } from '../logger.js';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('session-info');
 

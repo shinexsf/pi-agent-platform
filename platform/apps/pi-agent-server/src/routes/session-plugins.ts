@@ -12,14 +12,15 @@
  */
 
 import { Hono } from 'hono';
-import type { WorkerPool } from '../worker-pool.js';
-import { childLogger } from '../logger.js';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import { childLogger } from '@pi-agent-platform/core';
 import { config } from '../config.js';
-import { extractExtensionNames, readSettings } from '../services/extension-utils.js';
-import { getPluginSnapshot, resolveSessionPlugins, toPluginEntryDTO } from '../services/plugins.js';
-import { listSessionExtensions } from '../services/plugin-extensions.js';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
+import { sessionRegistry } from '@pi-agent-platform/core';
+import { extractExtensionNames, readSettings } from '@pi-agent-platform/core';
+import { getPluginSnapshot, resolveSessionPlugins, toPluginEntryDTO } from '@pi-agent-platform/core';
+import { listSessionExtensions } from '@pi-agent-platform/core';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-emit');
 
@@ -47,9 +48,9 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
       return c.json({ disabledByFlag: true, plugins: [] });
     }
 
-    const session = deps.sessionRepo.get(sessionId);
-    const agent = session?.agentId ? deps.agentRepo.get(session.agentId) : null;
-    if (!session) {
+    const row = deps.sessionRepo.get(sessionId);
+    const agent = row?.agentId ? deps.agentRepo.get(row.agentId) : null;
+    if (!row) {
       return c.json({
         disabledByFlag: false,
         placeholder: true,
@@ -58,12 +59,18 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
     }
 
     try {
-      const settings = await readSettings(config.agentDir);
-      const resolved = resolveSessionPlugins({
-        snapshot,
-        agentExtensions: agent?.config?.extensions ?? [],
-        installedPiExtensions: extractExtensionNames(settings),
-      });
+      // 与会话 worker 实际装载**同源**：优先用 spawn 时下发的那份快照；
+      // 只有在没有存活会话对象（worker 已回收）时才回落到会话行的 config 重新推导。
+      // 绝不使用 agent 的当前 extensions —— 那是"现在"的配置，会话是"当时"的快照。
+      const live = sessionRegistry().get(sessionId);
+      const installed = extractExtensionNames(await readSettings(config.agentDir));
+      const resolved = live
+        ? live.plugins
+        : resolveSessionPlugins({
+            snapshot,
+            agentExtensions: row.config?.extensions ?? agent?.config?.extensions ?? [],
+            installedPiExtensions: installed,
+          });
       const byId = new Map(snapshot.plugins.map((p) => [p.entry.id, p]));
       return c.json({
         disabledByFlag: false,

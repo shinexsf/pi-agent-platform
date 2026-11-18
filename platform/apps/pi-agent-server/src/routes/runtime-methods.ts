@@ -9,7 +9,7 @@
  */
 
 import { Hono } from 'hono';
-import type { WorkerPool } from '../worker-pool.js';
+import type { WorkerPool } from '@pi-agent-platform/core';
 
 export function createRuntimeMethodsRouter(workerPool: WorkerPool): Hono {
   const app = new Hono();

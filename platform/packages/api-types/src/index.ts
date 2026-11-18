@@ -5,14 +5,6 @@
 
 export type {
   AgentDTO,
-  TriggerDTO,
-  TriggerRunDTO,
-  TriggerEvent,
-  TriggerSourceName,
-  TriggeredBy,
-  TriggerSessionMode,
-  TriggerRunStatus,
-  TriggerSourceInfo,
   NotificationDTO,
   NotificationSeverity,
   AgentTemplateDTO,
@@ -35,10 +27,6 @@ import type {
   MessageDTO,
   SessionRunState,
   NotificationDTO,
-  TriggerDTO,
-  TriggerRunDTO,
-  TriggerSessionMode,
-  TriggerSourceName,
 } from '@pi-agent-platform/shared-types';
 
 import type {
@@ -436,47 +424,6 @@ export interface ApiError {
   path?: string;
 }
 
-// ---------- Triggers (change: trigger-scheduling) ----------
-
-export interface CreateTriggerRequest {
-  agentId: string;
-  name: string;
-  source: TriggerSourceName;
-  config?: Record<string, unknown>;
-  prompt: string;
-  sessionMode?: TriggerSessionMode;
-  /** reuse 模式下绑定已有会话；省略/空 = 首次触发时自动创建并固定下来。 */
-  sessionId?: string | null;
-  /** 0/undefined = unbounded. */
-  maxRuns?: number;
-  enabled?: boolean;
-}
-
-export interface UpdateTriggerRequest {
-  name?: string;
-  config?: Record<string, unknown>;
-  prompt?: string;
-  sessionMode?: TriggerSessionMode;
-  /** reuse 目标会话：值 = 换绑 / null 或 '' = 解绑回"首次触发时创建"；切到 new 时自动清空。 */
-  sessionId?: string | null;
-  enabled?: boolean;
-  maxRuns?: number | null;
-  /** Recompute `next_at` from `config` (used after config edits). */
-  reschedule?: boolean;
-}
-
-export interface RunTriggerRequest {
-  payload?: unknown;
-}
-
-export interface TriggerListResponse {
-  items: TriggerDTO[];
-}
-
-export interface TriggerRunsResponse {
-  items: TriggerRunDTO[];
-}
-
 /** 平台随包发布的 skill（change: server-builtin-skills）——只读，无写接口。 */
 export interface ServerBuiltinSkillInfo {
   name: string;
@@ -487,11 +434,6 @@ export interface ServerBuiltinSkillInfo {
   builtin: true;
 }
 
-/** Returned by create / rotate-secret — the only place a webhook secret is plaintext. */
-export interface TriggerSecretResponse {
-  id: string;
-  secret: string;
-}
 
 export interface NotificationListResponse {
   items: NotificationDTO[];

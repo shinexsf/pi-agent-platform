@@ -11,13 +11,13 @@
  */
 
 import { Hono } from 'hono';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
-import { CAPABILITY_MODULES, listCapabilities, availableMethods } from '../capabilities/registry.js';
-import { DEFAULT_POLICY } from '../capabilities/authorize.js';
-import { dispatchWithCtx } from '../capabilities/index.js';
-import { sessionRegistry } from '../services/session.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import { CAPABILITY_MODULES, listCapabilities, availableMethods } from '@pi-agent-platform/core';
+import { DEFAULT_POLICY } from '@pi-agent-platform/core';
+import { dispatchWithCtx } from '@pi-agent-platform/core';
+import { sessionRegistry } from '@pi-agent-platform/core';
 
 export function createCapabilityDebugRouter(agentRepo: AgentRepo, sessionRepo: SessionRepo, workerPool: WorkerPool) {
   const router = new Hono();

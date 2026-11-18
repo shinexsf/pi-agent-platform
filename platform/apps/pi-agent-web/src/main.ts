@@ -66,22 +66,6 @@ const baseRoutes = [
     component: AgentEditorView,
     meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Agent' },
   },
-  // 触发器 / 通知（change: trigger-scheduling）
-  {
-    path: '/triggers',
-    component: () => import('./views/triggers/TriggersListView.vue'),
-    meta: { navLabel: '触发器', navOrder: 15, navIcon: 'automation' },
-  },
-  {
-    path: '/triggers/new',
-    component: () => import('./views/triggers/TriggerEditorView.vue'),
-    meta: { crumbTitle: '新建触发器' },
-  },
-  {
-    path: '/triggers/:id',
-    component: () => import('./views/triggers/TriggerEditorView.vue'),
-    meta: { crumbTitleFromParam: 'id', crumbTitle: '触发器' },
-  },
   // 通知不进抽屉（铃铛入口），mobileHidden 避免和别人抢位置
   {
     path: '/notifications',

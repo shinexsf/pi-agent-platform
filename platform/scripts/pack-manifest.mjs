@@ -14,4 +14,6 @@ export const RUNTIME_PACKAGES = [
   'ipc-protocol',
   'sdk-integration',
   'plugin-types',
+  'event-projection',
+  'core',
 ];

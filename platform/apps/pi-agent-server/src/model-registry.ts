@@ -13,7 +13,7 @@
  */
 
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
-import { childLogger } from './logger.js';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('model-registry');
 

@@ -27,14 +27,7 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type {
-  MessageDeltaDTO,
-  MessageUsageDTO,
-  MessageRole,
-  RuntimeConfig,
-  ToolCallDTO,
-  AgentConfig,
-} from '@pi-agent-platform/shared-types';
+import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';
 import { SYSTEM_EVENT_PROMPT_NOTICE } from '@pi-agent-platform/shared-types';
 import { createExtensionsFilter, createSkillsFilter, createPromptsFilter, extractExtensionName } from './resource-filters.js';
 import { groupMcpTools, isMcpToolName, type McpServerGroup } from './mcp-tools.js';
@@ -145,160 +138,38 @@ export function resolveActualModel(
   }
 }
 
-/** Map a pi SDK AgentSessionEvent type to our WorkerEventKind. */
-function mapEventType(eventType: string | undefined): WorkerEventKind | null {
-  switch (eventType) {
-    case 'message_update':
-    case 'message':
-    case 'message_start':
-      return 'message_update';
-    case 'message_end':
-      return 'message_end';
-    case 'tool_execution_start':
-      return 'tool_call';
-    case 'tool_execution_end':
-      return 'tool_result';
-    case 'agent_end':
-      return 'agent_end';
-    case 'queue_update':
-      return 'queue_update';
-    // pi's auto-retry: a provider call failed and was re-issued with backoff
-    // (settings.retry). These carry the error progress that the failed message
-    // itself cannot express at the right time, so they must reach the client.
-    case 'auto_retry_start':
-      return 'auto_retry_start';
-    case 'auto_retry_end':
-      return 'auto_retry_end';
-    case 'session_info_changed':
-      return 'session_info_changed';
-    default:
-      // No `error` case: pi's AgentSessionEvent union has no error event at all.
-      // Provider failures surface as an assistant message with
-      // `stopReason: 'error'` + `errorMessage` (forwarded by `fromMessage`), plus
-      // the `auto_retry_*` events above. See pi-knowledge/agent-session-events.md.
-      return null; // skip (agent_start, turn_start, turn_end, compaction_*, entry_appended)
-  }
-}
-
-/** Read role from a pi SDK message block. */
-function roleOf(role: unknown): MessageRole {
-  if (role === 'user' || role === 'assistant' || role === 'toolResult') return role;
-  // toolResult messages in pi SDK have role='toolResult'
-  if (role === 'toolResult') return 'toolResult';
-  return 'assistant';
-}
-
 /**
- * Extract flattened TEXT from a pi SDK content block array — text blocks only.
- * Skips `thinking` blocks (use `extractThinking` for those) so callers can
- * separately route content vs thinking without double-emitting the thinking
- * text in the body.
+ * 合并 `message_update` 的原生快照（无损）。
+ *
+ * pi 每收到一个 provider chunk 就发一条 `message_update`，载荷里带的是**到目前为止
+ * 的完整消息**，所以 1:1 转发是 O(n²) 字节 + O(n²) 客户端解析。合并只保留每个
+ * message 在窗口内的最新快照——载荷本身已经是累积全量，丢中间态不丢信息。
+ *
+ * 判据：合并**不改事件说了什么**，只丢掉被后续快照覆盖的中间态。任何"决定给谁看
+ * 什么"的转换（打 id、提文本、改名、算时长）都不在这里，那属于投影侧。
  */
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'text')
-    .map((b) => {
-      const block = b as { type: string; text?: unknown };
-      return typeof block.text === 'string' ? block.text : '';
-    })
-    .filter((s) => s.length > 0)
-    .join('')
-}
-
-/** Extract THINKING text from a pi SDK content block array — thinking blocks only. */
-function extractThinking(content: unknown): string {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'thinking')
-    .map((b) => {
-      const block = b as { type: string; thinking?: unknown };
-      return typeof block.thinking === 'string' ? block.thinking : '';
-    })
-    .filter((s) => s.length > 0)
-    .join('')
-}
-
-/** Extract tool-call blocks from a pi SDK content array. */
-function extractToolCalls(content: unknown): ToolCallDTO[] | undefined {
-  if (!Array.isArray(content)) return undefined;
-  const calls: ToolCallDTO[] = [];
-  for (const b of content) {
-    if (b && typeof b === 'object' && 'type' in b && (b as { type: string }).type === 'toolCall') {
-      const t = b as {
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-      };
-      if (t.id && t.name) {
-        calls.push({
-          id: t.id,
-          name: t.name,
-          args: (t.arguments as Record<string, unknown> | undefined) ?? {},
-        });
-      }
-    }
-  }
-  return calls.length > 0 ? calls : undefined;
-}
-
-/**
- * State to track running message deltas — content/thinking accumulates per message id.
- */
-class DeltaAccumulator {
-  private deltas = new Map<string, MessageDeltaDTO>();
-
-  get(messageId: string): MessageDeltaDTO | undefined {
-    return this.deltas.get(messageId);
-  }
-
-  upsert(messageId: string, patch: Partial<MessageDeltaDTO>): MessageDeltaDTO {
-    const prev = this.deltas.get(messageId) ?? { messageId, role: 'assistant' };
-    const next: MessageDeltaDTO = { ...prev, ...patch, messageId };
-    this.deltas.set(messageId, next);
-    return next;
-  }
-
-  finish(messageId: string): MessageDeltaDTO | undefined {
-    const cur = this.deltas.get(messageId);
-    if (cur) this.deltas.delete(messageId);
-    return cur;
-  }
-}
-
-/** How often coalesced `message_update` snapshots are flushed (change: session-streaming-runtime).
- *  pi emits one `message_update` per provider chunk, each carrying the FULL accumulated
- *  text, so forwarding them 1:1 costs O(n²) bytes and O(n²) client parse work.
- *  Coalescing keeps only the newest snapshot per messageId inside this window. */
+/** 合并窗口：多久把排队中的最新快照发出去（毫秒）。 */
 const MESSAGE_UPDATE_FLUSH_MS = 60;
 
-/**
- * Coalesces `message_update` deltas per messageId.
- *
- * Contract (spec `session-stream-protocol`): payloads stay "cumulative full text", so
- * dropping intermediate snapshots loses nothing — the newest one already contains them.
- * The FIRST delta of a message is sent immediately (no visible first-token delay) and
- * every non-update event flushes the pending bucket first, so the last characters are
- * never stuck behind the timer.
- */
 class DeltaThrottle {
-  private pending = new Map<string, MessageDeltaDTO>();
+  private pending = new Map<string, WorkerEvent>();
   private timer: NodeJS.Timeout | null = null;
-  /** messageIds whose first delta has already been sent. */
+  /** messageIds whose first snapshot has already been sent. */
   private started = new Set<string>();
 
-  constructor(private readonly send: (delta: MessageDeltaDTO) => void) {}
+  constructor(private readonly send: (event: WorkerEvent) => void) {}
 
-  push(delta: MessageDeltaDTO): void {
-    if (!this.started.has(delta.messageId)) {
-      // First delta for this message: flush anything queued, then send right away.
-      this.started.add(delta.messageId);
+  /** Queue one raw `message_update` envelope keyed by the message it belongs to. */
+  push(messageId: string, event: WorkerEvent): void {
+    if (!this.started.has(messageId)) {
+      // First snapshot of this message: flush anything queued, then send right away
+      // (no visible first-token delay).
+      this.started.add(messageId);
       this.flush();
-      this.send(delta);
+      this.send(event);
       return;
     }
-    this.pending.set(delta.messageId, delta);
+    this.pending.set(messageId, event);
     if (!this.timer) {
       this.timer = setTimeout(() => {
         this.timer = null;
@@ -307,7 +178,7 @@ class DeltaThrottle {
     }
   }
 
-  /** Send every queued snapshot now (order preserved per messageId). */
+  /** Send every queued snapshot now (order preserved per message). */
   flush(): void {
     if (this.timer) {
       clearTimeout(this.timer);
@@ -316,7 +187,7 @@ class DeltaThrottle {
     if (this.pending.size === 0) return;
     const queued = [...this.pending.values()];
     this.pending.clear();
-    for (const delta of queued) this.send(delta);
+    for (const event of queued) this.send(event);
   }
 
   /** Forget a finished message so a re-used id starts fresh again. */
@@ -328,156 +199,6 @@ class DeltaThrottle {
   /** Flush and drop the timer (called when the session is disposed). */
   dispose(): void {
     this.flush();
-  }
-}
-
-/**
- * Extract pi-ai `Usage` into our DTO. Returns undefined when the message carries none
- * (user / toolResult messages) so clients can distinguish "no data" from "zero cost".
- */
-function extractUsage(raw: unknown): MessageUsageDTO | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const u = raw as Record<string, unknown>;
-  if (typeof u.input !== 'number' && typeof u.output !== 'number') return undefined;
-  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-  const cost = (u.cost && typeof u.cost === 'object' ? u.cost : {}) as Record<string, unknown>;
-  return {
-    input: num(u.input),
-    output: num(u.output),
-    cacheRead: num(u.cacheRead),
-    cacheWrite: num(u.cacheWrite),
-    ...(typeof u.reasoning === 'number' ? { reasoning: u.reasoning } : {}),
-    totalTokens: num(u.totalTokens),
-    cost: {
-      input: num(cost.input),
-      output: num(cost.output),
-      cacheRead: num(cost.cacheRead),
-      cacheWrite: num(cost.cacheWrite),
-      total: num(cost.total),
-    },
-  };
-}
-
-/**
- * Convert a pi SDK event into a simplified delta DTO.
- * `stableMessageId` is the worker-assigned id kept across start/update/end for one message.
- * Returns null if the event carries no useful payload.
- */
-function toDelta(event: Record<string, unknown>, stableMessageId: string | null, startedAt?: number | null): { kind: WorkerEventKind; delta: MessageDeltaDTO } | null {
-  const type = event.type as string | undefined;
-  if (!type) return null;
-
-  // Helper: build delta from a pi SDK message block.
-  // Stable id is taken from `stableMessageId` (worker-assigned on message_start).
-  const fromMessage = (msg: Record<string, unknown>): MessageDeltaDTO => {
-    const role = roleOf(msg.role);
-    const content = extractText(msg.content);          // text blocks only
-    const thinking = extractThinking(msg.content);    // thinking blocks only
-    const toolCalls = role === 'assistant' ? extractToolCalls(msg.content) : undefined;
-    return {
-      messageId: stableMessageId ?? '',
-      parentId: event.parentId as string | undefined,
-      role,
-      content: content || undefined,
-      thinking: thinking || undefined,
-      toolCalls,
-      toolCallId: msg.toolCallId as string | undefined,
-      toolName: msg.toolName as string | undefined,
-      model: msg.model as string | undefined,
-      provider: msg.provider as string | undefined,
-      stopReason: msg.stopReason as string | undefined,
-      // Assistant-only provider failure text. pi puts the actual reason (e.g.
-      // "Connection error.", "401 Unauthorized") ONLY here — a failed assistant
-      // message has no content blocks, and pi emits no `error` event. Without
-      // this field the client shows an empty bubble and the failure is invisible.
-      errorMessage: typeof msg.errorMessage === 'string' ? msg.errorMessage : undefined,
-      // toolResult-only: pi SDK puts isError as a top-level field on the
-      // message object (alongside role/toolCallId/toolName), NOT inside
-      // content blocks and NOT in stopReason (which is assistant-only).
-      // Forwarding it on the delta lets streaming clients mark the matching
-      // toolCall as failed on the toolResult message_end event without
-      // subscribing to the separate `tool_result` SSE event.
-      isError: typeof msg.isError === 'boolean' ? msg.isError : undefined,
-      // Usage is assistant-only in practice (pi-ai `Usage`); toolResult/user messages
-      // have none, so the field stays undefined rather than zero-filled.
-      usage: role === 'assistant' ? extractUsage(msg.usage) : undefined,
-    };
-  };
-
-  switch (type) {
-    case 'message_start':
-    case 'message_update':
-    case 'message_end': {
-      const msg = (event.message as Record<string, unknown> | undefined) ?? {};
-      const kind: WorkerEventKind = type === 'message_end' ? 'message_end' : 'message_update';
-      const delta = fromMessage(msg);
-      // Wall-clock per-message duration, only meaningful once the message ends.
-      if (kind === 'message_end' && typeof startedAt === 'number') {
-        delta.durationMs = Math.max(0, Date.now() - startedAt);
-      }
-      return { kind, delta };
-    }
-    case 'tool_execution_start':
-      return {
-        kind: 'tool_call',
-        delta: {
-          messageId: stableMessageId ?? (event.toolCallId as string | undefined) ?? '',
-          role: 'assistant',
-          toolCalls: [
-            {
-              id: (event.toolCallId as string | undefined) ?? '',
-              name: (event.toolName as string | undefined) ?? '',
-              args: (event.args as Record<string, unknown> | undefined) ?? {},
-            },
-          ],
-        },
-      };
-    case 'tool_execution_end':
-      // pi SDK emits `result` as a ToolResult object `{ content, details, usage, ... }`,
-      // NOT the content array directly. extractText() returns '' when given a non-array
-      // (early `!Array.isArray` guard), so the previous `extractText(event.result)` here
-      // always produced empty result strings. Drill into `.content` to get the actual
-      // text blocks (mirrors the message_end for toolResult path in fromMessage).
-      const toolResultContent = (event as { result?: { content?: unknown } }).result?.content;
-      return {
-        kind: 'tool_result',
-        delta: {
-          messageId: stableMessageId ?? (event.toolCallId as string | undefined) ?? '',
-          role: 'assistant',
-          content: extractText(toolResultContent) || undefined,
-          toolCalls: [
-            {
-              id: (event.toolCallId as string | undefined) ?? '',
-              name: (event.toolName as string | undefined) ?? '',
-              args: {},
-              result: extractText(toolResultContent),
-              isError: Boolean((event as { isError?: unknown }).isError),
-              // pi measures `execute()` with a monotonic clock; absent when the tool never ran.
-              ...(typeof event.durationMs === 'number' ? { durationMs: event.durationMs } : {}),
-            },
-          ],
-        },
-      };
-    case 'agent_end':
-      return {
-        kind: 'agent_end',
-        delta: { messageId: 'agent', role: 'assistant' },
-      };
-    case 'queue_update': {
-      // queue_update carries steering + followUp arrays in `event.steering` / `event.followUp`.
-      // We return a sentinel delta (so toDelta returns non-null) but the actual payload goes via emit data.
-      // The subscribe callback below checks event.type === 'queue_update' and bypasses toDelta.
-      return {
-        kind: 'queue_update',
-        delta: {
-          messageId: 'queue',
-          role: 'assistant',
-          content: '',
-        },
-      };
-    }
-    default:
-      return null;
   }
 }
 
@@ -566,7 +287,6 @@ export async function createSession(
   const existingSessionPath = payload.existingSessionPath;
   const plugins = payload.plugins;
   const agentDir = process.env.PI_AGENT_DIR ?? defaultAgentDir();
-  const acc = new DeltaAccumulator();
 
   const agentConfig = config.config;
   logger.info(
@@ -1018,122 +738,39 @@ export async function createSession(
     }
   }
 
-  // Worker-assigned message ids (stable across start/update/end for one message).
+  /** 合并用的 message 计数器：只用于给 `message_update` 分组，不参与任何载荷。 */
   let messageCounter = 0;
-  let currentMessageId: string | null = null;
-  /** Wall-clock start of the message being produced (for assistant `durationMs`). */
-  let messageStartedAt: number | null = null;
+  let currentMessageKey: string | null = null;
 
-  // Coalesce `message_update` at the source: one event stream feeds SSE *and* the IM
-  // gateway, so thinning here benefits every consumer (spec `session-stream-protocol`).
-  const throttle = new DeltaThrottle((delta) => {
-    emit({ event: 'message_update', data: delta });
-  });
+  // 合并 `message_update`：一条事件流同时喂 SSE 和 IM，在源头削薄对所有消费者都有利。
+  // 除它以外的每一条事件都原样转发——包括我们不认识的类型，所以新增 pi 事件不需要
+  // 改这里（投影侧决定哪些进客户端 UI）。
+  const throttle = new DeltaThrottle((envelope) => emit(envelope));
 
   const unsubscribe = realSession.subscribe((event: unknown) => {
-    const e = event as { type?: string; message?: { role?: string } };
+    const e = event as { type?: string };
+    const type = e.type;
+    if (!type) return;
+    if (process.env.PROBE_EVENT_TYPES === '1') {
+      logger.info({ type, keys: Object.keys(e) }, 'raw pi event');
+    }
 
-    // queue_update: forward steering + followUp arrays directly (no delta needed).
-    if (e.type === 'queue_update') {
-      emit({
-        event: 'queue_update',
-        data: {
-          steering: (e as { steering?: readonly string[] }).steering ?? [],
-          followUp: (e as { followUp?: readonly string[] }).followUp ?? [],
-        },
-      });
+    if (type === 'message_start') {
+      currentMessageKey = `msg-${++messageCounter}`;
+    }
+
+    if (type === 'message_update') {
+      throttle.push(currentMessageKey ?? 'msg-0', { kind: 'event', event: type, data: e });
       return;
     }
 
-    // Lifecycle events carry no message delta. Forwarded under pi's own names
-    // (agent_start / agent_settled) so clients get an authoritative
-    // running/idle signal instead of guessing from message events (design D2).
-    if (e.type === 'agent_start') {
-      messageStartedAt = Date.now();
-      throttle.flush();
-      emit({ event: 'agent_start', data: { startedAt: messageStartedAt } });
-      return;
-    }
-    if (e.type === 'agent_settled') {
-      messageStartedAt = null;
-      throttle.flush();
-      emit({
-        event: 'agent_settled',
-        data: { aborted: Boolean((e as { aborted?: boolean }).aborted) },
-      });
-      return;
-    }
-    // turn_start only refreshes the wall clock used for assistant `durationMs`.
-    if (e.type === 'turn_start') {
-      messageStartedAt = Date.now();
-      return;
-    }
-
-    const mapped = mapEventType(e.type);
-    if (!mapped) return;
-
-    // session_info_changed: not a message event — no DTO; forward the raw name.
-    // Master consumes it to sync sessions.title (session-title-sync).
-    if (mapped === 'session_info_changed') {
-      emit({ event: 'session_info_changed', data: { name: (e as { name?: string }).name } });
-      return;
-    }
-
-    // auto-retry progress: no message DTO either — forward pi's payload as-is
-    // (typed client-side by RunRetryStartDTO / RunRetryEndDTO). Flush first so
-    // queued text of the failed attempt lands before the retry banner.
-    if (mapped === 'auto_retry_start' || mapped === 'auto_retry_end') {
-      throttle.flush();
-      const p = e as {
-        attempt?: number;
-        maxAttempts?: number;
-        delayMs?: number;
-        errorMessage?: string;
-        success?: boolean;
-        finalError?: string;
-      };
-      emit({
-        event: mapped,
-        data: mapped === 'auto_retry_start'
-          ? {
-              attempt: p.attempt ?? 0,
-              maxAttempts: p.maxAttempts ?? 0,
-              delayMs: p.delayMs ?? 0,
-              ...(p.errorMessage ? { errorMessage: p.errorMessage } : {}),
-            }
-          : {
-              success: Boolean(p.success),
-              attempt: p.attempt ?? 0,
-              ...(p.finalError ? { finalError: p.finalError } : {}),
-            },
-      });
-      return;
-    }
-
-    // Assign a fresh id on message_start; reuse it for update/end of the same message.
-    if (e.type === 'message_start') {
-      currentMessageId = `msg-${++messageCounter}`;
-      messageStartedAt = Date.now();
-    }
-
-    const dto = toDelta(event as Record<string, unknown>, currentMessageId, messageStartedAt);
-    if (!dto) return;
-
-    if (mapped === 'message_update') {
-      acc.upsert(dto.delta.messageId, dto.delta);
-      throttle.push(dto.delta); // first delta immediate, rest coalesced
-      return;
-    }
-
-    // Every other event is a flush boundary: queued text must reach the client
-    // before the event that closes it (no lost tail characters).
+    // 其余事件都是 flush 屏障：排队中的文本必须先落地，否则被边界事件挤掉尾巴。
     throttle.flush();
-    if (mapped === 'message_end') {
-      acc.finish(dto.delta.messageId);
-      throttle.release(dto.delta.messageId);
-      currentMessageId = null;
+    if (type === 'message_end') {
+      if (currentMessageKey) throttle.release(currentMessageKey);
+      currentMessageKey = null;
     }
-    emit({ event: mapped, data: dto.delta });
+    emit({ event: type, data: e });
   });
 
   const adapter = new PiSessionAdapter(

@@ -26,13 +26,7 @@ export function init(host) {
     entry: 'card', // → web/card.js
   });
 
-  // ── HTTP 端点示例：GET 列触发器 / POST 回声（演示原始 body 自己 parse）──
-  host.global.routes.register({
-    method: 'GET',
-    path: '/triggers',
-    handler: () => ({ json: host.triggers.list({ includeDisabled: false }) }),
-  });
-
+  // ── HTTP 端点示例：POST 回声（演示原始 body 自己 parse）──
   host.global.routes.register({
     method: 'POST',
     path: '/echo',
@@ -47,39 +41,7 @@ export function init(host) {
     },
   });
 
-  // ── 进程内触发一次已有触发器（不需要 secret，不走 HTTP）─────────────────
-  host.global.routes.register({
-    method: 'POST',
-    path: '/fire',
-    handler: async (req) => {
-      let triggerId;
-      try {
-        triggerId = JSON.parse(req.body || '{}').triggerId;
-      } catch {
-        return { status: 400, json: { error: 'body 需为 {"triggerId":"..."}' } };
-      }
-      if (!triggerId) return { status: 400, json: { error: 'triggerId 必填' } };
-      const result = await host.triggers.fire(triggerId, { from: 'kitchen-sink' });
-      return { json: result };
-    },
-  });
-
-  // ── 注册一种新的触发器来源（与内置 cron/once/webhook 同一张注册表）──────
-  //    只描述「配置校验 + 下次时间 + 清理」，不含 HTTP 路由。
-  host.triggerSources.register({
-    source: 'demo-every-n-min',
-    label: '每 N 分钟（示例）',
-    description: '示例来源：按 config.everyMinutes 从现在起算下一次时间',
-    validateConfig(config) {
-      const every = Number(config && config.everyMinutes);
-      if (!Number.isFinite(every) || every < 1) throw new Error('everyMinutes 必须是 ≥1 的整数');
-      return { everyMinutes: Math.floor(every) };
-    },
-    computeNextAt(config, from) {
-      return from + Number(config.everyMinutes) * 60_000;
-    },
-    defaultMaxRuns: null,
-  });
+  // （触发器扩展点在触发器子系统下线时一并移除；插件化后重新引入）
 
   host.log('info', 'kitchen-sink registered');
 }

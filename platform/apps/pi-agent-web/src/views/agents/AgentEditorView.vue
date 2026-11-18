@@ -196,18 +196,12 @@ const allCapabilityMethods = computed(() => capabilityModules.value.flatMap((g) 
 
 /** 已授权的方法名集合（用于"能力开了但用法说明没勾"的软提示）。 */
 const authorizedCapabilities = computed(() => new Set(form.value.config.capabilities ?? []));
-const triggerCapabilityOn = computed(() =>
-  [...authorizedCapabilities.value].some((m) => m.startsWith('trigger.')),
-);
 /** 软提示：能力开了、平台用法说明没开（不阻止保存）。 */
 const capabilitySkillHints = computed(() => {
   const picked = form.value.config.serverBuiltinSkills;
   const hints: string[] = [];
   if (authorizedCapabilities.value.size > 0 && !picked.includes('pi-capabilities-usage')) {
     hints.push('已授权 server 能力，但没勾「pi-capabilities-usage」——agent 会用错参数、也不懂被拒的原因。');
-  }
-  if (triggerCapabilityOn.value && !picked.includes('pi-trigger-usage')) {
-    hints.push('已授权 trigger.* 能力，但没勾「pi-trigger-usage」——agent 会建出没人收尾的触发器。');
   }
   if (picked.length > 0 && !form.value.config.builtinTools.includes('read')) {
     hints.push('平台 Skill 需要 read 工具才能被模型读取（当前 builtinTools 未勾 read），勾了也不会生效。');

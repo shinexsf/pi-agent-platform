@@ -13,8 +13,8 @@ import {
   getPluginSnapshot,
   loadPlugins,
   toPluginEntryDTO,
-} from '../services/plugins.js';
-import { getPluginExtensions } from '../services/plugin-extensions.js';
+} from '@pi-agent-platform/core';
+import { getPluginExtensions } from '@pi-agent-platform/core';
 export interface PluginsRouterDeps {
   pluginsDir: string;
   /** pi 的 agent 目录（判定依赖安装时读它的 `settings.json` 与 `npm/node_modules`）。 */

@@ -19,21 +19,22 @@ import type {
   OutboundTarget,
   SessionId,
 } from '@pi-agent-platform/channel-types';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import { acquireProjector, releaseProjector } from '../services/projector-host.js';
 import { logger } from './logger.js';
 import {
   getSessionIdByChat,
   setSessionMeta,
   touchSession,
 } from './session-channel-map.js';
-import { sessionRegistry, type AgentLike } from '../services/session.js';
-import { runBuiltinCommand } from '../slash-commands.js';
+import { sessionRegistry, type AgentLike } from '@pi-agent-platform/core';
+import { runBuiltinCommand } from '@pi-agent-platform/core';
 import { ensureSessionShared } from './ensure-session.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
-import { resolvePrompt } from '../prompt-resolver.js';
-import type { AttachmentStore } from '../services/attachment-store.js';
+import { resolvePrompt } from '@pi-agent-platform/core';
+import type { AttachmentStore } from '@pi-agent-platform/core';
 
 export interface RouteContext {
   channelType: string;
@@ -237,10 +238,15 @@ function subscribeReplySender(sessionId: SessionId, ctx: RouteContext): void {
     prev();
     replySenders.delete(sessionId);
   }
+  // IM 与 SSE 消费同一份投影结果（同一个投影包、同一个会话级实例）。区别只在于
+  // "什么时候发"：SSE 逐条推，IM 在 message_end 且非中间消息时才发。
+  const projector = acquireProjector(sessionId);
   const unsubscribe = sessionRegistry().track(sessionId).subscribe((event) => {
     if (event.kind !== 'event') return;
-    const inner = (event as { event?: string }).event;
-    const dto = (event as { data?: { messageId?: string; parentId?: string; content?: string; role?: string; toolCalls?: unknown[] } }).data;
+    const projected = projector.project(event);
+    if (!projected) return;
+    const inner = projected.name;
+    const dto = projected.data as { messageId?: string; parentId?: string; content?: string; role?: string; toolCalls?: unknown[] } | undefined;
     if (inner === 'message_update' && dto?.messageId) {
       if (dto.role && dto.role !== 'assistant') {
             return;
@@ -261,7 +267,10 @@ function subscribeReplySender(sessionId: SessionId, ctx: RouteContext): void {
       // Last event of the prompt cycle. No-op here; reply already dispatched above.
     }
   });
-  replySenders.set(sessionId, unsubscribe);
+  replySenders.set(sessionId, () => {
+    unsubscribe();
+    releaseProjector(sessionId);
+  });
   logger.info({ sessionId }, 'reply-sender subscribed to worker');
 }
 

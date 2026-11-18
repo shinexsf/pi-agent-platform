@@ -1,6 +1,6 @@
 /**
  * useNotifications — notification inbox + the header bell badge
- * (change: trigger-scheduling).
+ *
  *
  * `unreadCount` is a MODULE-level singleton `ref`: the bell lives in AppShell
  * while the inbox is a route, and both must show the same number without

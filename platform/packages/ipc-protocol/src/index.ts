@@ -77,35 +77,36 @@ export type CallResponseOk = ResponseOkEnvelope<'response'>;
 export type CallResponseErr = ResponseErrEnvelope<'response'>;
 export type CallResponse = ResponseEnvelope<'response'>;
 
-export type WorkerEventKind =
-  | 'ready'
-  | 'message_update'
-  | 'message_end'
-  | 'tool_call'
-  | 'tool_result'
-  | 'agent_end'
-  /** A run started (pi-native `agent_start`). data: `{ startedAt: number }`. */
-  | 'agent_start'
-  /** A run settled (pi-native `agent_settled`). data: `{ aborted: boolean }`. */
-  | 'agent_settled'
-  /** pi-native `auto_retry_start`: a provider call failed and pi scheduled a retry.
-   *  Master forwards it to SSE; clients render "retrying N/M" progress.
-   *  data: `RunRetryStartDTO`-shaped `{ attempt, maxAttempts, delayMs, errorMessage }`. */
-  | 'auto_retry_start'
-  /** pi-native `auto_retry_end`: retry budget finished (success or exhausted).
-   *  data: `RunRetryEndDTO`-shaped `{ success, attempt, finalError? }`. */
-  | 'auto_retry_end'
-  | 'queue_update'
-  /** pi-native session display name changed (data: { name }) — master-internal,
-   *  consumed to sync sessions.title; NOT forwarded to SSE clients. */
-  | 'session_info_changed'
-  /** 插件事件（change: plugin-mechanism）。data 为 `PluginEventPayload`，
-   *  master 转发为 SSE 事件名 `plugin.<pluginId>.<name>`。 */
-  | 'plugin_event';
+/**
+ * Event names are **pi's own event types**, passed through unchanged
+ * (`message_start` / `message_update` / `message_end` / `tool_execution_start` /
+ * `agent_start` / `agent_settled` / `agent_end` / `queue_update` /
+ * `auto_retry_*` / `compaction_*` / `session_info_changed` / …).
+ *
+ * There is deliberately NO whitelist: the worker forwards every event pi emits, so
+ * a new pi event type reaches the host without touching this package. Anything that
+ * wants to know "what does this mean for the UI" asks the projection package.
+ *
+ * The platform reserves exactly two names:
+ *   - `ready`        — process handshake, carries the worker's method-registry summary
+ *   - `plugin_event` — a plugin facet's uplink (has no pi counterpart)
+ */
+export type WorkerEventKind = string;
+
+/** Reserved: the only platform-owned event names (everything else is pi's). */
+export const PLATFORM_EVENT_READY = 'ready';
+export const PLATFORM_EVENT_PLUGIN = 'plugin_event';
+
+/** Envelope every worker → host event uses. */
+export interface WorkerEvent {
+  kind: 'event';
+  event: WorkerEventKind;
+  data?: unknown;
+}
 
 /**
  * 插件事件的载荷。由 worker/extension facet 的 `bridge.emit(name, data)` 发出。
- * 与消息事件共用同一条流，顺序天然一致。
+ * 事件名固定为 `plugin_event`（平台保留名），与 pi 事件共用同一条流，顺序天然一致。
  */
 export interface PluginEventPayload {
   pluginId: string;
@@ -127,12 +128,6 @@ export interface WorkerPluginSpec {
   reason?: string;
   extensionPath?: string;
   workerPath?: string;
-}
-
-export interface WorkerEvent {
-  kind: 'event';
-  event: WorkerEventKind;
-  data?: unknown;
 }
 
 export type WorkerMessage = CallResponse | WorkerEvent | ReverseCallResponse;

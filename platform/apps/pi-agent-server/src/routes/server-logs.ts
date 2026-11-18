@@ -19,7 +19,7 @@
 
 import { Hono } from 'hono';
 import fs from 'node:fs/promises';
-import { serverLogFile } from '../logger.js';
+import { serverLogFile } from '@pi-agent-platform/core';
 
 /** 解析后的单条日志（非 JSON 行只带 raw）。 */
 export interface ServerLogLineDTO {

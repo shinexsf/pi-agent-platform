@@ -8,8 +8,8 @@
 
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import type { DB } from '../db/init.js';
-import { agentTemplates } from '../db/schema.js';
+import type { DB } from '@pi-agent-platform/core/db';
+import { agentTemplates } from '../db/modules.js';
 import type { AgentTemplateDTO, AgentConfig } from '@pi-agent-platform/shared-types';
 
 function rowToDTO(row: typeof agentTemplates.$inferSelect): AgentTemplateDTO {

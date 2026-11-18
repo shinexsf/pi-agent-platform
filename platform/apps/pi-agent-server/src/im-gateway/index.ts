@@ -12,9 +12,9 @@
  */
 
 import type Database from 'better-sqlite3';
-import type { AgentRepo } from '../repos/agent.repo.js';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
+import type { AgentRepo } from '@pi-agent-platform/core';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
 import { logger } from './logger.js';
 import { createChannelHostImpl } from './channel-host-impl.js';
 import { loadChannels } from './channel-loader.js';
@@ -29,8 +29,8 @@ import {
 } from './session-channel-map.js';
 import { routeAndSpawn, type RouteContext } from './routing.js';
 import { onMessageEnd, onMessageUpdate } from './reply-sender.js';
-import { runBuiltinCommand } from '../slash-commands.js';
-import { sessionRegistry } from '../services/session.js';
+import { runBuiltinCommand } from '@pi-agent-platform/core';
+import { sessionRegistry } from '@pi-agent-platform/core';
 import type { ChannelHost } from '@pi-agent-platform/channel-types';
 
 // onMessageEnd/onMessageUpdate are imported but used only transitively (via routing.ts).
@@ -44,7 +44,7 @@ export interface ImGatewayDeps {
   /** Raw better-sqlite3 handle for executeMigration(). */
   rawDb: Database.Database;
   /** Attachment store for IM adapter uploads. */
-  attachmentStore: import('../services/attachment-store.js').AttachmentStore;
+  attachmentStore: import('@pi-agent-platform/core').AttachmentStore;
 }
 
 export interface ImGatewayHandle {

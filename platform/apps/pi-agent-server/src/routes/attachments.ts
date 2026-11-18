@@ -9,9 +9,9 @@
  */
 
 import { Hono } from 'hono';
-import type { SessionRepo } from '../repos/session.repo.js';
-import type { WorkerPool } from '../worker-pool.js';
-import { childLogger } from '../logger.js';
+import type { SessionRepo } from '@pi-agent-platform/core';
+import type { WorkerPool } from '@pi-agent-platform/core';
+import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('attachments');
 import {
@@ -19,7 +19,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   sha256Hex,
   fileTag,
-} from '../services/attachment-store.js';
+} from '@pi-agent-platform/core';
 
 interface AttachmentsRouterDeps {
   sessionRepo: SessionRepo;
