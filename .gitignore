@@ -46,3 +46,12 @@ node_modules/
 
 # 本地插件（插件机制验证用，不入库；只忽略仓库根的 plugins/）
 /plugins/
+
+# dev 专用数据目录（插件 registry / 隔离配置），与已安装实例分开
+/platform/.dev-data/
+
+# bundled 插件的 web 产物（由 pnpm build:plugins 生成，源码在 web/src/*.ts）
+/platform/plugins/*/web/*.js
+
+# 插件的 vendored 类型（`plugin check` 生成，随插件目录分发但不进仓库）
+/platform/**/types/plugin-types/
