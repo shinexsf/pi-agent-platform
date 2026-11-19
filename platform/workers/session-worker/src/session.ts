@@ -395,8 +395,8 @@ export async function createSession(
     },
     registerMethod(name, handler) {
       // 封装层职责 1（拼前缀）：插件只说 name，`plugin.<id>.` 由这里补。
-      const ok = registerPluginMethod(pluginId, name, (args) =>
-        handler((args[0] ?? {}) as unknown),
+      const ok = registerPluginMethod(pluginId, name, (args, ctx) =>
+        handler((args[0] ?? {}) as unknown, { sessionId: String(ctx ?? '') }),
       );
       if (!ok) {
         logger.error(

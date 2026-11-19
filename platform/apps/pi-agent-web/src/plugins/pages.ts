@@ -70,4 +70,11 @@ export function syncPluginRoutes(router: Router): void {
       meta: { fullWidth: true, pluginId: page.pluginId, pageId: page.id },
     });
   }
+
+  // 冷启动直接访问插件页（如刷新 /notifications）时，路由是**后加**的：
+  // 首帧匹配不到任何路由 → `<main>` 空白。这里补一次重新解析。
+  const current = router.currentRoute.value;
+  if (current.matched.length === 0) {
+    void router.replace(current.fullPath);
+  }
 }

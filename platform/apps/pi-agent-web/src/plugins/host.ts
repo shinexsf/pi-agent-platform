@@ -54,7 +54,7 @@ export function setPluginDisabled(pluginId: string, disabled: boolean): void {
 
 // ---------- 注册表拉取 ----------
 
-const EMPTY_GLOBAL: GlobalExtensionsResponse = { menus: [], pages: [], disabledByFlag: false }
+const EMPTY_GLOBAL: GlobalExtensionsResponse = { menus: [], pages: [], headerActions: [], disabledByFlag: false }
 const EMPTY_SESSION: SessionExtensionsResponse = {
   surfaces: [],
   toolCards: [],
@@ -242,6 +242,10 @@ export function createPluginHost(options: MountHostOptions): PluginWebHost {
       del: (path) => pluginApi(pluginId, 'DELETE', path),
     },
     ui: {
+      // 站内跳转：插件只拿到动作，拿不到 router（否则能改路由表）
+      navigate: (path: string) => {
+        void import('../router-navigate').then(({ navigate }) => navigate(path));
+      },
       sheet: showSheet,
       toast: showToast,
     },
@@ -269,7 +273,7 @@ export function createPluginHost(options: MountHostOptions): PluginWebHost {
 
 // ---------- 挂载 ----------
 
-async function importPluginModule(pluginId: string, entry: string): Promise<PluginWebModule> {
+export async function importPluginModule(pluginId: string, entry: string): Promise<PluginWebModule> {
   const mod = (await import(/* @vite-ignore */ webEntryUrl(pluginId, entry))) as PluginWebModule
   if (typeof mod.mount !== 'function') throw new Error('web 入口未导出 mount()')
   return mod

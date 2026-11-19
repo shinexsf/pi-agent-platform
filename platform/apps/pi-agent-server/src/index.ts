@@ -16,9 +16,6 @@ import { runModuleMigrations } from './db/modules.js';
 import { createAgentRepo } from '@pi-agent-platform/core';
 import { createSessionRepo } from '@pi-agent-platform/core';
 import { createTemplateRepo } from './repos/template.repo.js';
-import { createNotificationRepo } from './repos/notification.repo.js';
-import { createNotifier } from './services/notifier.js';
-import { createNotificationsRouter } from './routes/notifications.js';
 import { initCoreConfig, initSessionRegistry } from '@pi-agent-platform/core';
 import { workerPool } from '@pi-agent-platform/core';
 import { createAgentsRouter } from './routes/agents.js';
@@ -88,16 +85,11 @@ async function main() {
   const agentRepo = createAgentRepo(db);
   const sessionRepo = createSessionRepo(db);
   const templateRepo = createTemplateRepo(db);
-  const notificationRepo = createNotificationRepo(db);
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
   // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
   // Must init BEFORE any consumer (routes / im-gateway / capabilities) handles a request.
   initSessionRegistry({ sessionRepo, agentRepo, workerPool });
-
-  // Platform notification writer (inbox only). Standalone: `postNotification`
-  // and server-side failures are its only callers.
-  const notifier = createNotifier({ notificationRepo });
 
   // 插件与内核之间唯一稳定缝（四个能力面）；形状在内核，实现在入口。
   const hostApi = createHostApi({ raw, sessionRepo, workerPool, agentRepo });
@@ -111,9 +103,7 @@ async function main() {
     agentRepo,
     sessionRepo,
     templateRepo,
-    notificationRepo,
     attachmentStore,
-    notifier,
     workerPool,
     hostApi,
   });

@@ -70,6 +70,13 @@ export interface PluginWebHost {
   };
   /** 宿主 UI 能力。 */
   ui: {
+    /**
+     * 站内跳转（SPA 路由，不整页刷新）。
+     *
+     * 给"面板里放一个「查看全部」"这类场景用：插件可以只注册顶栏动作（R11），
+     * 再提供一个 `nav: false` 的页面（R1），从面板里跳过去。
+     */
+    navigate(path: string): void;
     /** 底部抽屉（移动端友好）。 */
     sheet(options: { title?: string; render: (el: HTMLElement) => void | (() => void) }): () => void;
     /** 轻提示。 */

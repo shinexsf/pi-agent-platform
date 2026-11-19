@@ -254,7 +254,7 @@ export interface ToolCardRegistration {
 
 /** 被拒绝的注册项（绝不静默丢弃）。 */
 export interface RejectedRegistration {
-  kind: 'menu' | 'page' | 'route' | 'surface' | 'toolCard' | 'method';
+  kind: 'menu' | 'page' | 'route' | 'surface' | 'toolCard' | 'method' | 'headerAction';
   /** 被拒项的自报标识（可能重复，故意的）。 */
   id: string;
   reason: string;
@@ -264,6 +264,8 @@ export interface RejectedRegistration {
 export interface PluginExtensions {
   menus: MenuRegistration[];
   pages: PageRegistration[];
+  /** R11 顶栏动作（全局 chrome，与会话无关）。 */
+  headerActions: HeaderActionDefinition[];
   /** handler 不序列化，只暴露 method/path。 */
   routes: Array<{ method: RouteRegistration['method']; path: string }>;
   surfaces: SurfaceRegistration[];
@@ -330,7 +332,10 @@ export interface PluginWorkerBridge {
    *
    * 重名或名字不合法会被拒并记 error 日志，不会静默失败。
    */
-  registerMethod?(name: string, handler: (params: unknown) => unknown | Promise<unknown>): void;
+  registerMethod?(
+    name: string,
+    handler: (params: unknown, ctx: PluginMethodContext) => unknown | Promise<unknown>,
+  ): void;
   /**
    * 调一个反向方法（master 侧宿主 API），如 `call('plugin.im.sendFile', [{ filePath }])`。
    * 只能调反向表里的方法；正向方法名会得到 `unknown method`。
@@ -408,10 +413,41 @@ export interface PluginEventsApi {
   emit(name: string, data: unknown): void;
 }
 
+/**
+ * R11 顶栏动作（图标按钮区）。
+ *
+ * 形状与页面/槽位一致：**地址 + 组件** —— 点开后在顶栏下方展开一个面板，
+ * 面板内容就是 `web/<component>.js` 的 `mount(el, host)`。
+ *
+ * 为什么不是"又一个页面"：顶栏是**全局 chrome**，用户期望点图标就地展开，
+ * 而不是跳走再回来。需要整页时用 `ui.page`（同时给导航项）。
+ */
+export interface HeaderActionDefinition {
+  /** 同一插件内唯一。 */
+  id: string;
+  /** 图标标识（`AppIcon` 的名字，如 `bell`）。 */
+  icon: string;
+  /** 悬停提示 / 无障碍标签。 */
+  title: string;
+  /** 浏览器组件名，对应 `web/<component>.js`。 */
+  component: string;
+  /** 排序，小者靠前；缺省按注册顺序。 */
+  order?: number;
+  /**
+   * 角标来源（可选）：浏览器定期 `GET /api/p/<pluginId><endpoint>` 取 `{ count }`。
+   *
+   * 为什么用端点而不是回调：角标要在**面板打开之前**就显示，而注册发生在 server 侧
+   * （拿不到浏览器里的实时状态）。给一个只读端点是最小契约。
+   */
+  badge?: { endpoint: string };
+}
+
 /** UI 注册面（server 侧执行，浏览器侧消费）。 */
 export interface PluginUiApi {
   /** R1 整页：一次注册同时产生菜单与路由。 */
   page(def: PageDefinition): Disposer;
+  /** R11 顶栏动作：图标按钮 + 点开后的面板（平铺 / 移动端收起由宿主决定）。 */
+  headerAction(def: HeaderActionDefinition): Disposer;
   /** R9 局部挂载点：把组件塞进平台已定义的槽位。 */
   slot(def: SlotDefinition): Disposer;
   /** R10 工具卡接管。 */
@@ -423,10 +459,23 @@ export interface PluginHttpApi {
   route(def: RouteRegistration): Disposer;
 }
 
+/** 方法调用上下文：会话 id 由分发侧给（R3 从 IPC 信封、R5 从正向表）。 */
+export interface PluginMethodContext {
+  sessionId: string;
+}
+
 /** 方法注册面：R3（server 侧反向方法）/ R5（worker 侧正向方法）同形。 */
 export interface PluginMethodsApi {
-  /** `name` 不带前缀；完整名 `plugin.<pluginId>.<name>` 由宿主拼。重名直接拒。 */
-  handle(name: string, handler: (params: unknown) => unknown | Promise<unknown>): Disposer;
+  /**
+   * `name` 不带前缀；完整名 `plugin.<pluginId>.<name>` 由宿主拼。重名直接拒。
+   *
+   * `params` 是调用方的**第一个参数**（约定：一个 params 对象，不玩多参），
+   * `ctx.sessionId` 由分发侧填 —— 插件不需要自己维护"这次是哪个会话"。
+   */
+  handle(
+    name: string,
+    handler: (params: unknown, ctx: PluginMethodContext) => unknown | Promise<unknown>,
+  ): Disposer;
 }
 
 /**
@@ -470,6 +519,14 @@ export interface PageDefinition {
   order?: number;
   /** 浏览器组件名，对应 `web/<component>.js` 的 `mount`。 */
   component: string;
+  /**
+   * 是否进导航（默认 `true`）。
+   *
+   * `false` = 只登记路由、不占导航项。用于"入口在别处、但需要一个正式页面"的场景：
+   * 例如顶栏铃铛（R11）点开的快速面板里给一个「查看全部」→ `/notifications`。
+   * 这样既有正式页面，又不会和铃铛凑成两个同名入口。
+   */
+  nav?: boolean;
 }
 
 /** R9 挂载点声明：槽位名只能取平台已定义的。 */

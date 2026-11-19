@@ -24,45 +24,11 @@ export interface DbModule {
   ddl: string;
 }
 
-// ── 通知（系统通知收件箱）──────────────────────────────────────────────────
+// ── 通知（系统通知收件箱）已下沉为 bundled 插件 `notifications` ─────────────
+//
+// 表结构、DDL、端点、反向方法全在 `platform/plugins/notifications/`，由插件的
+// `host.db.migrate()` 建表。入口侧不再认识"通知"这个概念（见 plugin-mechanism-v2）。
 
-export const notifications = sqliteTable(
-  'notifications',
-  {
-    id: text('id').primaryKey(),
-    severity: text('severity', { enum: ['info', 'warning', 'error'] }).notNull(),
-    title: text('title').notNull(),
-    body: text('body').notNull(),
-    source: text('source').notNull(),
-    sourceId: text('source_id'),
-    actionUrl: text('action_url'),
-    readAt: integer('read_at'),
-    createdAt: integer('created_at').notNull(),
-  },
-  (t) => ({
-    createdAtIdx: index('idx_notifications_created_at').on(t.createdAt),
-    unreadIdx: index('idx_notifications_unread').on(t.readAt),
-  }),
-);
-
-export const notificationsModule: DbModule = {
-  name: 'notifications',
-  ddl: `
-    CREATE TABLE IF NOT EXISTS notifications (
-      id TEXT PRIMARY KEY,
-      severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
-      title TEXT NOT NULL,
-      body TEXT NOT NULL,
-      source TEXT NOT NULL,
-      source_id TEXT,
-      action_url TEXT,
-      read_at INTEGER,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
-    CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at);
-  `,
-};
 
 // ── 配置模板（全局 agent 配置快照）────────────────────────────────────────
 
@@ -98,7 +64,7 @@ export const templatesModule: DbModule = {
 };
 
 /** 装配时要跑迁移的模块清单。 */
-export const DB_MODULES: readonly DbModule[] = [notificationsModule, templatesModule];
+export const DB_MODULES: readonly DbModule[] = [templatesModule];
 
 /** 执行模块迁移（幂等）。由组合根在 `initDb` 之后调用。 */
 export function runModuleMigrations(

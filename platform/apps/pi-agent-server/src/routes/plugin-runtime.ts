@@ -39,13 +39,15 @@ export function createExtensionsRouter(deps: PluginRuntimeRouterDeps): Hono {
 
   app.get('/', (c) => {
     if (killSwitchActive()) {
-      const body: GlobalExtensionsResponse = { menus: [], pages: [], disabledByFlag: true };
+      const body: GlobalExtensionsResponse = { menus: [], pages: [], headerActions: [], disabledByFlag: true };
       return c.json(body);
     }
-    const { menus } = listGlobalExtensions();
+    const { menus, headerActions } = listGlobalExtensions();
     const body: GlobalExtensionsResponse = {
       // 合一列表：页面自带导航字段，前端一次读够（不再 join menus/pages）。
       pages: listGlobalPageItems(),
+      // R11 顶栏动作（平铺 / 移动端收起由前端决定）
+      headerActions: headerActions.map(({ pluginId, def }) => ({ pluginId, ...def })),
       menus: menus.map(({ pluginId, def }) => ({ pluginId, ...def })),
       disabledByFlag: false,
     };

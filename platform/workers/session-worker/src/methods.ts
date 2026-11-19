@@ -33,7 +33,7 @@ export function pluginMethodName(pluginId: string, name: string): string {
 export function registerPluginMethod(
   pluginId: string,
   name: string,
-  handler: IpcHandler,
+  handler: (args: unknown[], ctx: string | undefined) => unknown,
 ): boolean {
   const entry = forwardRegistry.register(
     pluginMethodName(pluginId, name),
@@ -43,7 +43,7 @@ export function registerPluginMethod(
       kind: 'plugin',
       description: `plugin ${pluginId}: ${name}`,
     },
-    handler,
+    (args, ctx) => handler(args, ctx as string | undefined),
   );
   return entry !== undefined;
 }

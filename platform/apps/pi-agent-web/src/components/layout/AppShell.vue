@@ -9,7 +9,7 @@
  * 抽屉行为由 AppDrawer 内部按断点决定——≥1024px 为常驻侧栏（挤压内容），
  * <1024px 为带遮罩的覆盖层。本组件只负责持有 open 状态。
  */
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useTheme } from '../../composables/useTheme';
 import { useIsCompact, useIsDesktop, BP } from '../../composables/useMediaQuery';
@@ -17,16 +17,37 @@ import AppIcon from '../ui/AppIcon.vue';
 import AppBreadcrumb from './AppBreadcrumb.vue';
 import AppDrawer from './AppDrawer.vue';
 import ToastHost from '../../modules/im-gateway/components/ToastHost.vue';
-import { useNotifications } from '../../composables/useNotifications';
 import ConfirmDialogHost from '../../modules/im-gateway/components/ConfirmDialogHost.vue';
+import { useHeaderActions } from '../../plugins/headerActions';
 
 const DRAWER_STORAGE_KEY = 'pi-web-drawer-open';
 
 const { theme, toggle } = useTheme();
-const { unreadCount, refreshCount, startPolling } = useNotifications();
 const route = useRoute();
 const isDesktop = useIsDesktop();
 const isCompact = useIsCompact();
+
+/**
+ * 顶栏图标区 = 平台动作（架构图 / 主题）+ 插件动作（R11）。
+ *
+ * 折叠规则（GitHub 右上角那种）：桌面全平铺；紧凑端只留 `INLINE_ON_COMPACT` 个插件动作，
+ * 其余进「更多」菜单；平台的架构图在紧凑端没有独立按钮，一并收进「更多」（折叠不能丢入口）。
+ * 主题切换始终常驻 —— 它是全站开关，藏进二级菜单没人找得到。
+ */
+const INLINE_ON_COMPACT = 1;
+const { actions: headerActionItems, toggle: toggleHeaderAction, activeKey, badgeOf } = useHeaderActions();
+const moreOpen = ref(false);
+const headerRef = ref<HTMLElement | null>(null);
+
+const compactInline = computed(() => headerActionItems.value.slice(0, INLINE_ON_COMPACT));
+const compactOverflow = computed(() => headerActionItems.value.slice(INLINE_ON_COMPACT));
+
+async function onHeaderAction(action: (typeof headerActionItems.value)[number]): Promise<void> {
+  moreOpen.value = false;
+  const anchor = headerRef.value;
+  if (!anchor) return;
+  await toggleHeaderAction(action, anchor);
+}
 
 function readInitialDrawerState(): boolean {
   try {
@@ -55,13 +76,12 @@ watch(
   () => route.fullPath,
   () => {
     if (!isDesktop.value) drawerOpen.value = false;
-    // 通知 badge 随导航刷新（30s 轮询兜底）
-    void refreshCount();
+    moreOpen.value = false;
   },
 );
 
 onMounted(() => {
-  startPolling();
+  // 顶栏角标由 useHeaderActions 自己拉（60s 轮询 + 面板关闭后刷新）
 });
 </script>
 
@@ -82,16 +102,37 @@ onMounted(() => {
 
         <AppBreadcrumb />
 
-        <div class="header-actions">
-          <router-link
-            class="header-icon-btn notification-bell"
-            to="/notifications"
-            title="通知"
-            aria-label="通知"
+        <div ref="headerRef" class="header-actions">
+          <!-- 插件顶栏动作（R11）：桌面平铺，紧凑端收起一部分 -->
+          <template v-for="action in isCompact ? compactInline : headerActionItems" :key="`${action.pluginId}:${action.id}`">
+            <button
+              class="header-icon-btn"
+              type="button"
+              data-header-action
+              :title="action.title"
+              :aria-label="action.title"
+              :aria-expanded="activeKey?.key === `${action.pluginId}:${action.id}`"
+              @click="onHeaderAction(action)"
+            >
+              <AppIcon :name="action.icon" :size="18" />
+              <span v-if="badgeOf(action) > 0" class="notification-badge">
+                {{ badgeOf(action) > 99 ? '99+' : badgeOf(action) }}
+              </span>
+            </button>
+          </template>
+
+          <button
+            v-if="isCompact"
+            class="header-icon-btn"
+            type="button"
+            title="更多"
+            aria-label="更多"
+            :aria-expanded="moreOpen"
+            @click="moreOpen = !moreOpen"
           >
-            <AppIcon name="bell" :size="18" />
-            <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
-          </router-link>
+            <AppIcon name="more" :size="18" />
+          </button>
+
           <router-link
             v-if="!isCompact"
             class="header-icon-btn"
@@ -101,6 +142,7 @@ onMounted(() => {
           >
             <AppIcon name="architecture" :size="18" />
           </router-link>
+
           <button
             class="theme-toggle"
             type="button"
@@ -109,6 +151,25 @@ onMounted(() => {
           >
             <AppIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="18" />
           </button>
+
+          <!-- 紧凑端的「更多」菜单：收纳溢出的插件动作 + 平台动作（架构图）-->
+          <div v-if="isCompact && moreOpen" class="header-more">
+            <router-link class="header-more-item" to="/architecture" @click="moreOpen = false">
+              <AppIcon name="architecture" :size="16" />
+              <span>架构图</span>
+            </router-link>
+            <button
+              v-for="action in compactOverflow"
+              :key="`more:${action.pluginId}:${action.id}`"
+              class="header-more-item"
+              type="button"
+              @click="onHeaderAction(action)"
+            >
+              <AppIcon :name="action.icon" :size="16" />
+              <span>{{ action.title }}</span>
+              <span v-if="badgeOf(action) > 0" class="header-more-badge">{{ badgeOf(action) }}</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>
@@ -199,15 +260,22 @@ onMounted(() => {
   margin-left: auto;
 }
 
-/* 通知铃铛 + 未读 badge（change: trigger-scheduling，spec trigger-console） */
-.notification-bell {
+/*
+ * 顶栏角标（R11 插件动作与平台动作共用）。
+ *
+ * 挂在 `.header-icon-btn` 上就对了 —— 曾经靠 `.notification-bell` 单独给
+ * `position: relative`，插件动作没有那个 class，绝对定位就落到 `.header-actions`
+ * 上，角标跑到最右边那个按钮（主题切换）头上。
+ */
+.header-icon-btn {
   position: relative;
 }
 
 .notification-badge {
   position: absolute;
-  top: 2px;
-  right: 0;
+  top: -4px;
+  right: -4px;
+  z-index: 1;
   min-width: 16px;
   padding: 0 4px;
   border-radius: 999px;
@@ -229,5 +297,74 @@ onMounted(() => {
     height: 32px;
     border-radius: 8px;
   }
+}
+
+/* 顶栏插件面板：挂在 header 里，绝对定位展开（不推内容） */
+.header-actions {
+  position: relative;
+}
+
+.header-more {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--surface, #fff);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 60;
+}
+
+.header-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.header-more-item:hover {
+  background: var(--surface-alt, #f3f4f6);
+}
+
+.header-more-badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger-bg, #fee2e2);
+  color: var(--danger, #b91c1c);
+}
+
+/* 插件面板（内容由插件 mount，宿主只给外壳与定位） */
+:deep(.plugin-header-panel) {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--surface, #fff);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.14);
+  z-index: 70;
+}
+
+:deep(.plugin-header-panel--error) {
+  color: var(--danger, #b91c1c);
+  font-size: 13px;
 }
 </style>

@@ -30,6 +30,7 @@ import type {
 } from '@pi-agent-platform/shared-types';
 
 import type {
+  HeaderActionDefinition,
   MenuRegistration,
   PageRegistration,
   PluginExtensions,
@@ -38,6 +39,7 @@ import type {
   SurfaceRegistration,
   ToolCardRegistration,
 } from '@pi-agent-platform/plugin-types';
+export type { HeaderActionDefinition } from '@pi-agent-platform/plugin-types';
 
 export type { SurfaceRegistration } from '@pi-agent-platform/plugin-types';
 
@@ -405,9 +407,16 @@ export interface RegistryPageDTO extends PageRegistration {
   parent?: 'config';
 }
 
+/** 顶栏动作（R11，带来源插件）。 */
+export interface RegistryHeaderActionDTO extends HeaderActionDefinition {
+  pluginId: string;
+}
+
 export interface GlobalExtensionsResponse {
   /** 合一列表：`pages` 已带导航字段（有 `label` 才进导航）。 */
   pages: RegistryPageDTO[];
+  /** 顶栏图标按钮区（平铺 / 移动端收起由前端决定）。 */
+  headerActions: RegistryHeaderActionDTO[];
   /**
    * 旧字段，保留一个版本。前端不再读它；第三方若读过，等移除时一起清。
    */

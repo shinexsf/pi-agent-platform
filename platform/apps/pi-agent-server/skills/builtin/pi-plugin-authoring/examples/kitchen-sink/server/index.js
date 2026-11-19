@@ -9,6 +9,15 @@
 
 export default {
   init(host) {
+  // ── R11 顶栏动作：图标按钮 + 点开的面板（PC 平铺 / 移动端收进「更多」）───────
+  host.ui.headerAction({
+    id: 'demo-hdr',
+    icon: 'automation',
+    title: '顶栏动作示例',
+    component: 'hdr',
+    order: 50,
+  });
+
   // ── 会话页右侧轨道槽位：声明一次 = 轨道按钮 + 抽屉面板 ───────────────────
   host.session.surfaces.register({
     id: 'kitchen-sink',

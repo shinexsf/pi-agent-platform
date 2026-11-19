@@ -101,6 +101,11 @@ withDefaults(
     <template v-else-if="name === 'menu'">
       <path d="M4 6.5h16M4 12h16M4 17.5h16" />
     </template>
+    <template v-else-if="name === 'more'">
+      <circle cx="6" cy="12" r="1.4" />
+      <circle cx="12" cy="12" r="1.4" />
+      <circle cx="18" cy="12" r="1.4" />
+    </template>
     <template v-else-if="name === 'chevron-down'">
       <path d="m6 9 6 6 6-6" />
     </template>

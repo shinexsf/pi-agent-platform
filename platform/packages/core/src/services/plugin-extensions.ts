@@ -21,6 +21,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   type Disposer,
+  type HeaderActionDefinition,
   type MenuRegistration,
   type PageDefinition,
   type PageRegistration,
@@ -55,6 +56,12 @@ const TOOL_REGIONS: readonly ToolCardRegion[] = ['header', 'body', 'footer'];
 
 /** R3 反向方法：`name` 是插件自报的短名，宿主拼前缀。 */
 type ReverseMethodHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
+
+/** 插件侧 handler 的形状（与 `PluginMethodsApi.handle` 一致）。 */
+type PluginMethodHandler = (
+  params: unknown,
+  ctx: { sessionId: string },
+) => unknown | Promise<unknown>;
 
 /** 装载器需要的入口侧能力（内核不暴露 `WorkerPool`）。 */
 export interface PluginRuntimeDeps {
@@ -96,7 +103,7 @@ const surfaceIds = new Set<string>();
 const noopDisposer: Disposer = () => {};
 
 function emptyExtensions(): PluginExtensions {
-  return { menus: [], pages: [], routes: [], surfaces: [], toolCards: [], rejected: [] };
+  return { menus: [], pages: [], headerActions: [], routes: [], surfaces: [], toolCards: [], rejected: [] };
 }
 
 function entryFor(id: string): PluginRuntimeEntry {
@@ -126,6 +133,7 @@ export interface ExtensionSummary {
   plugins: number;
   menus: number;
   pages: number;
+  headerActions: number;
   surfaces: number;
   toolCards: number;
   routes: number;
@@ -136,10 +144,11 @@ export interface ExtensionSummary {
 }
 
 export function extensionSummary(): ExtensionSummary {
-  const total = { menus: 0, pages: 0, surfaces: 0, toolCards: 0, routes: 0, rejected: 0, disposers: 0 };
+  const total = { menus: 0, pages: 0, headerActions: 0, surfaces: 0, toolCards: 0, routes: 0, rejected: 0, disposers: 0 };
   for (const entry of store.values()) {
     total.menus += entry.extensions.menus.length;
     total.pages += entry.extensions.pages.length;
+    total.headerActions += entry.extensions.headerActions.length;
     total.surfaces += entry.extensions.surfaces.length;
     total.toolCards += entry.extensions.toolCards.length;
     total.routes += entry.extensions.routes.length;
@@ -159,6 +168,7 @@ export function registrationCount(): number {
     total +=
       entry.extensions.menus.length +
       entry.extensions.pages.length +
+      entry.extensions.headerActions.length +
       entry.extensions.surfaces.length +
       entry.extensions.toolCards.length +
       entry.routes.length;
@@ -209,6 +219,35 @@ function registerPage(pluginId: string, def: PageRegistration): Disposer {
   return track(pluginId, () => {
     pageIds.delete(def.id);
     entry.pages = entry.pages.filter((p) => p.id !== def.id);
+  });
+}
+
+/**
+ * R11 顶栏动作。校验与其它注册器同风格：id 唯一、图标/标题非空、组件文件真的在。
+ *
+ * 与页面的区别只在**位置**：页面进导航 + 独立路由，顶栏动作就地展开面板。
+ */
+function registerHeaderAction(pluginId: string, dir: string, def: HeaderActionDefinition): Disposer {
+  const entry = entryFor(pluginId).extensions;
+  if (!def || typeof def.id !== 'string' || !def.id) return reject(pluginId, 'headerAction', '?', 'id 必须是非空字符串');
+  if (typeof def.icon !== 'string' || !def.icon) return reject(pluginId, 'headerAction', def.id, 'icon 必须是非空字符串');
+  if (typeof def.title !== 'string' || !def.title) return reject(pluginId, 'headerAction', def.id, 'title 必须是非空字符串');
+  if (typeof def.component !== 'string' || !def.component) {
+    return reject(pluginId, 'headerAction', def.id, 'component 必须是 web/<name>.js 的名字');
+  }
+  if (entry.headerActions.some((h) => h.id === def.id)) {
+    return reject(pluginId, 'headerAction', def.id, '同一插件内 headerAction id 重复');
+  }
+  const file = path.join(dir, 'web', `${def.component}.js`);
+  if (!existsSync(file)) {
+    return reject(pluginId, 'headerAction', def.id, `入口文件不存在：${path.relative(dir, file)}`);
+  }
+  if (def.badge && typeof def.badge.endpoint === 'string' && !def.badge.endpoint.startsWith('/')) {
+    return reject(pluginId, 'headerAction', def.id, 'badge.endpoint 必须以 / 开头');
+  }
+  entry.headerActions.push({ ...def });
+  return track(pluginId, () => {
+    entry.headerActions = entry.headerActions.filter((h) => h.id !== def.id);
   });
 }
 
@@ -397,6 +436,7 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
   ui: {
     page(def: PageDefinition): Disposer;
     slot(def: SlotDefinition): Disposer;
+    headerAction(def: HeaderActionDefinition): Disposer;
     toolCard(def: ToolCardRegistration): Disposer;
   };
   http: { route(def: RouteRegistration): Disposer };
@@ -416,6 +456,8 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       const pageId = `${id}${def.path}`;
       const pageDisposer = registerPage(id, { id: pageId, entry: def.component, path: def.path });
       if (pageDisposer === noopDisposer) return pageDisposer;
+      // `nav: false` = 只登记路由，不占导航项（入口在别处，例如顶栏动作面板里的「查看全部」）
+      if (def.nav === false) return pageDisposer;
       const menuDisposer = registerMenu(id, {
         id: pageId,
         label: def.label,
@@ -439,6 +481,7 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
         order: def.order,
       });
     },
+    headerAction: (def: HeaderActionDefinition) => registerHeaderAction(id, dir, def),
     toolCard: (def: ToolCardRegistration) => registerToolCard(id, dir, def),
   };
 
@@ -492,11 +535,13 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
     },
     methods: {
       handle(name, handler) {
-        if (typeof name !== 'string' || !name) return reject(id, 'route', String(name), '方法名必须是非空字符串');
+        if (typeof name !== 'string' || !name) return reject(id, 'method', String(name), '方法名必须是非空字符串');
         const entry = entryFor(id);
-        if (entry.methods[name]) return reject(id, 'route', name, '同名方法重复注册');
-        entry.methods[name] = (_sessionId, args) => Promise.resolve(handler(args));
-        // 注销走 group 4 的 unregisterBySource（整块撤），这里只记一笔。
+        if (entry.methods[name]) return reject(id, 'method', name, '同名方法重复注册');
+        // 约定：一个 params 对象（args[0]），会话 id 走 ctx —— 与 worker 侧 bridge 同形。
+        const pluginHandler = handler as PluginMethodHandler;
+        entry.methods[name] = (sessionId, args) =>
+          Promise.resolve(pluginHandler(args[0], { sessionId }));
         return track(id, () => {
           delete entry.methods[name];
         });
@@ -777,6 +822,7 @@ export function getPluginExtensions(id: string): PluginExtensions {
     ...entry.extensions,
     menus: [...entry.extensions.menus],
     pages: [...entry.extensions.pages],
+    headerActions: [...entry.extensions.headerActions],
     surfaces: [...entry.extensions.surfaces],
     toolCards: [...entry.extensions.toolCards],
     rejected: [...entry.extensions.rejected],
@@ -792,16 +838,24 @@ export interface GlobalExtensionItem<T> {
 export function listGlobalExtensions(): {
   menus: GlobalExtensionItem<MenuRegistration>[];
   pages: GlobalExtensionItem<PageRegistration>[];
+  headerActions: GlobalExtensionItem<HeaderActionDefinition>[];
 } {
   const menus: GlobalExtensionItem<MenuRegistration>[] = [];
   const pages: GlobalExtensionItem<PageRegistration>[] = [];
+  const headerActions: GlobalExtensionItem<HeaderActionDefinition>[] = [];
   for (const [pluginId, entry] of store) {
     for (const def of entry.extensions.menus) menus.push({ pluginId, def });
     for (const def of entry.extensions.pages) pages.push({ pluginId, def });
+    for (const def of entry.extensions.headerActions) headerActions.push({ pluginId, def });
   }
+  headerActions.sort(
+    (a, b) =>
+      (a.def.order ?? Number.MAX_SAFE_INTEGER) - (b.def.order ?? Number.MAX_SAFE_INTEGER) ||
+      a.pluginId.localeCompare(b.pluginId),
+  );
   // 排序：显式 order 优先，其次 pluginId+id（稳定输出）
   menus.sort((a, b) => (a.def.order ?? Number.MAX_SAFE_INTEGER) - (b.def.order ?? Number.MAX_SAFE_INTEGER) || a.def.id.localeCompare(b.def.id));
-  return { menus, pages };
+  return { menus, pages, headerActions };
 }
 
 /**

@@ -39,6 +39,7 @@ import ResourceEditorView from './views/config/ResourceEditorView.vue';
 import AgentEditorView from './views/agents/AgentEditorView.vue';
 import TemplatesView from './views/templates/TemplatesView.vue';
 import { refreshPluginPages, syncPluginRoutes } from './plugins/pages';
+import { installNavigator } from './router-navigate';
 
 // Step 1: base routes（一级导航由 `components/layout/nav-tree.ts` 从 meta 读取）
 const baseRoutes = [
@@ -67,11 +68,6 @@ const baseRoutes = [
     meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Agent' },
   },
   // 通知不进抽屉（铃铛入口），mobileHidden 避免和别人抢位置
-  {
-    path: '/notifications',
-    component: () => import('./views/notifications/NotificationsView.vue'),
-    meta: { crumbTitle: '通知', mobileHidden: true },
-  },
   {
     path: '/sessions',
     component: SessionsListView,
@@ -193,6 +189,8 @@ const router = createRouter({
   routes: [...baseRoutes],
 });
 routerRef.router = router;
+// 插件侧 `host.ui.navigate(path)` 的落地实现（不暴露 router 实例）
+installNavigator((path) => void router.push(path));
 installRouteTransitions(router);
 // 插件页面（导航 + 路由）来自 server 注册表，启动时拉一次（失败就空导航，不阻塞启动）。
 void refreshPluginPages().then(() => syncPluginRoutes(router));

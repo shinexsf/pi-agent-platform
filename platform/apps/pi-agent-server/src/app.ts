@@ -12,7 +12,6 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import path from 'node:path';
 import { logger } from '@pi-agent-platform/core';
-import { createNotificationsRouter } from './routes/notifications.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createEventsRouter } from './routes/events.js';
@@ -38,8 +37,6 @@ import type Database from 'better-sqlite3';
 import type { AgentRepo, HostApi, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
 import type { AttachmentStore } from '@pi-agent-platform/core';
 import type { TemplateRepo } from './repos/template.repo.js';
-import type { NotificationRepo } from './repos/notification.repo.js';
-import type { Notifier } from './services/notifier.js';
 
 /** 工厂的运行期依赖（全部由组合根构造并传入）。 */
 export interface ServerAppDeps {
@@ -51,9 +48,7 @@ export interface ServerAppDeps {
   agentRepo: AgentRepo;
   sessionRepo: SessionRepo;
   templateRepo: TemplateRepo;
-  notificationRepo: NotificationRepo;
   attachmentStore: AttachmentStore;
-  notifier: Notifier;
   workerPool: WorkerPool;
   /** 宿主能力面（入口实现）；插件经它访问内核 —— 四个面，不是死接口。 */
   hostApi: HostApi;
@@ -67,7 +62,7 @@ export interface ServerApp {
 }
 
 export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
-  const { config, db, raw, agentRepo, sessionRepo, templateRepo, notificationRepo, attachmentStore, notifier, workerPool, hostApi } = deps;
+  const { config, db, raw, agentRepo, sessionRepo, templateRepo, attachmentStore, workerPool, hostApi } = deps;
 
   const app = new Hono();
 
@@ -92,32 +87,9 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   // 插件只读视图（安装只能走 pi-server plugin；本路由无写端点）
   app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
   app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
-  // Notification inbox (client-agnostic, read-mostly).
-  app.route('/api/notifications', createNotificationsRouter(notificationRepo));
-
-  // `plugin.notifications.post` — reverse method behind the `postNotification` tool:
-  // writes one row into the system notification table. Inbox only: no delivery.
-  workerPool.registerService(
-    'plugin:notifications',
-    { kind: 'plugin', descriptions: { 'plugin.notifications.post': '写一条系统通知（inbox only，不投递）' } },
-    {
-      'plugin.notifications.post': async (sessionId, args) => {
-        const [params] = args as [{ title?: string; body?: string; severity?: 'info' | 'warning' | 'error' }];
-        const title = (params?.title ?? '').trim();
-        const body = (params?.body ?? '').trim();
-        if (!title && !body) throw new Error('postNotification: title/body required');
-        return notifier.notify({
-          severity: params?.severity ?? 'info',
-          title: title.slice(0, 200),
-          body: body.slice(0, 4000),
-          source: 'agent',
-          sourceId: sessionId,
-          // Deep link is built by the platform, never by the caller.
-          actionUrl: `/chat/${sessionId}`,
-        });
-      },
-    },
-  );
+  // 通知收件箱已下沉为 bundled 插件 `notifications`（change: plugin-mechanism-v2 之后第一块）：
+  // 表、端点（`/api/p/notifications/*`）、反向方法 `plugin.notifications.post` 都归它。
+  // 入口侧不再认识"通知"这个概念 —— 插件被禁用时入口零影响。
   // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
   app.route(
     '/api/extensions',

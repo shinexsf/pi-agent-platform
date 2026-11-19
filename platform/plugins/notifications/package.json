@@ -1,0 +1,8 @@
+{
+  "name": "notifications",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "系统通知收件箱：自己的表 + 收件箱端点 + `plugin.notifications.post` 反向方法 + 通知页",
+  "piServer": { "apiVersion": "1" }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@pi-agent-platform/bundled-plugins",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "随包分发（bundled）的插件源码。每个子目录是一个插件：目录存在即装载，不进 registry。",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@pi-agent-platform/plugin-types": "workspace:*",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

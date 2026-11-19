@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": [
+    "*/server/src/**/*.ts",
+    "*/worker/src/**/*.ts",
+    "*/extension/src/**/*.ts",
+    "*/web/src/**/*.ts"
+  ]
+}

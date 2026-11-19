@@ -3,6 +3,7 @@ packages:
   - 'workers/*'
   - 'packages/*'
   - 'channels/*'
+  - 'plugins'
 allowBuilds:
   '@google/genai': true
   better-sqlite3: true

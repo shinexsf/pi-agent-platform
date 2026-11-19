@@ -6,8 +6,10 @@
  * 第三方插件由作者自己编译，平台**不替别人编译**（否则 esbuild 会从 devDependency
  * 变成运行时依赖，还要处理别人的 tsconfig / alias / target）。
  *
- * 规则：
- * - `plugins/<id>/web/src/*.ts` → `plugins/<id>/web/<name>.js`（原生 ESM，无打包）
+ * 规则（四个 facet 一视同仁）：
+ * - `plugins/<id>/<facet>/src/*.ts` → `plugins/<id>/<facet>/<name>.js`
+ * - server / worker / extension：`platform: node`；web：`platform: browser`
+ * - 一律 `bundle: false`：产物必须能直接 `import()`，且 web 产物不得含裸说明符
  * - 产物 gitignored；dev 用 `--watch`
  * - `--check`：只校验产物是否齐全（打包自检用，不写文件）
  *
@@ -27,28 +29,43 @@ const args = new Set(process.argv.slice(2));
 const watch = args.has('--watch');
 const checkOnly = args.has('--check');
 
-/** 列出 `<pluginsDir>/<id>/web/src/*.ts`。 */
-function webSources() {
+/** 会编 TS 源码的 facet —— 与装载点一一对应。 */
+const TS_FACETS = ['server', 'worker', 'extension', 'web'];
+
+/** 列出 `<pluginsDir>/<id>/<facet>/src/*.ts`（四个 facet）。 */
+function pluginSources() {
   if (!existsSync(PLUGINS_DIR)) return [];
   const out = [];
   for (const id of readdirSync(PLUGINS_DIR)) {
-    const srcDir = path.join(PLUGINS_DIR, id, 'web', 'src');
-    if (!existsSync(srcDir)) continue;
-    for (const name of readdirSync(srcDir)) {
-      if (!name.endsWith('.ts') || name.endsWith('.d.ts')) continue;
-      out.push({ id, src: path.join(srcDir, name), out: path.join(PLUGINS_DIR, id, 'web', `${name.replace(/\.ts$/, '.js')}`) });
+    for (const facet of TS_FACETS) {
+      const srcDir = path.join(PLUGINS_DIR, id, facet, 'src');
+      if (!existsSync(srcDir)) continue;
+      for (const name of readdirSync(srcDir)) {
+        if (!name.endsWith('.ts') || name.endsWith('.d.ts')) continue;
+        out.push({
+          id,
+          facet,
+          src: path.join(srcDir, name),
+          out: path.join(PLUGINS_DIR, id, facet, `${name.replace(/\.ts$/, '.js')}`),
+        });
+      }
     }
   }
   return out;
+}
+
+/** 每个 facet 的编译目标：web 进浏览器，其余进 node。 */
+function platformOf(facet) {
+  return facet === 'web' ? 'browser' : 'node';
 }
 
 function log(msg) {
   process.stdout.write(`[build-plugins] ${msg}\n`);
 }
 
-const targets = webSources();
+const targets = pluginSources();
 if (targets.length === 0) {
-  log('no bundled plugin web sources (plugins/*/web/src/*.ts) — nothing to do');
+  log('no bundled plugin sources (plugins/*/{server,worker,extension,web}/src/*.ts) — nothing to do');
   process.exit(0);
 }
 
@@ -65,10 +82,10 @@ if (checkOnly) {
 const esbuild = await import('esbuild');
 
 // 每个源文件单独出包（`outfile`），所以公共选项里不能带 entryPoints/outdir。
-const options = {
+// `platform` 由 facet 决定，见 `platformOf()`。
+const baseOptions = {
   bundle: false,
   format: 'esm',
-  platform: 'browser',
   target: 'es2022',
   sourcemap: false,
   logLevel: 'silent',
@@ -77,7 +94,7 @@ const options = {
 if (watch) {
   // watch 模式下逐文件建 context，输出路径与源文件同目录、同名 .js
   for (const t of targets) {
-    const ctx = await esbuild.context({ ...options, entryPoints: [t.src], outfile: t.out });
+    const ctx = await esbuild.context({ ...baseOptions, platform: platformOf(t.facet), entryPoints: [t.src], outfile: t.out });
     await ctx.watch();
     log(`watching ${path.relative(PLATFORM_DIR, t.src)} → ${path.relative(PLATFORM_DIR, t.out)}`);
   }
@@ -86,7 +103,7 @@ if (watch) {
   let failed = 0;
   for (const t of targets) {
     try {
-      await esbuild.build({ ...options, entryPoints: [t.src], outfile: t.out });
+      await esbuild.build({ ...baseOptions, platform: platformOf(t.facet), entryPoints: [t.src], outfile: t.out });
       log(`built ${path.relative(PLATFORM_DIR, t.out)}`);
     } catch (err) {
       failed += 1;
