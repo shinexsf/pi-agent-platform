@@ -23,6 +23,17 @@ pi-server plugin add <示例目录>       # 登记 + 装载
 pi-server plugin reload               # 已装过、改了代码时用这个（不重启 server）
 ```
 
+> ⚠️ **两套注册表，`plugin add` 默认写"打包实例"那份**：
+> `~/.pi/server/plugins/registry.json`（`pi-server start` 起的实例）vs
+> `platform/.dev-data/plugins/registry.json`（`pnpm dev:server` 的 dev 实例）。
+> 给 **dev** 装插件必须先 `export PI_SERVER_PLUGINS_DIR=$PWD/platform/.dev-data/plugins`，
+> 否则症状是"dev 没装上、本机打包实例却多出一个插件"。
+>
+> 目录归属：**要发布的** → `platform/plugins/`（bundled，进 tgz）；
+> **只在本机打包实例生效** → 仓库根 `plugins/`；**只在 dev 生效** → `platform/.dev-data/plugins/`；
+> **验证"坏插件会被拒"** → `test-workspace/demo-plugins/`。
+> 注册表存的是**绝对路径**，`mv` 插件目录之后必须重新 `plugin add`。
+
 ## 1. 先选形态：你要加的是哪种东西
 
 | 想做的事 | 写在 | 用哪个扩展点 |
