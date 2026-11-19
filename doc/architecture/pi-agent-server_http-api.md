@@ -174,7 +174,7 @@ interface SessionContextDTO {
 | `/api/config/skills/:name` | GET/PUT/DELETE | 读取/更新/删除 skill |
 | `/api/config/prompts` | GET | 列出 prompts |
 | `/api/config/prompts/:name` | GET/PUT/DELETE | 读取/更新/删除 prompt |
-| `/api/config/extensions` | GET | 列出已安装插件 |
+| `/api/config/extensions` | GET | pi 原生扩展名 + **平台插件候选**：`{ names, count, plugins: [{ id, dir, piExtension, workerFacet, skills }] }`（后者是 `agent.config.plugins` 的候选集，只含有会话内能力的插件） |
 | `/api/config/extensions/install-by-url` | POST | 通过 URL 安装 |
 | `/api/config/extensions/upload-single` | POST | 上传单文件 |
 | `/api/config/extensions/upload-zip` | POST | 上传 zip 包 |
@@ -203,8 +203,9 @@ interface SessionContextDTO {
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/notifications` | GET | `?unread&severity&limit` → `{ items, unreadCount }`（系统通知读接口，见 [notifications 文档](pi-agent-server_notifications.md)） |
-| `/api/notifications/:id/read` · `/read-all` | POST | 标已读。**没有创建端点**（写入口只有内部 `notify()`），也没有 `since` 游标 |
+| `/api/p/notifications/` | GET | `?unread&severity&limit` → `{ items, unreadCount }`（通知插件端点，原 `/api/notifications` 已删） |
+| `/api/p/notifications/:id/read` · `/read-all` · `/unread-count` | POST/GET | 标已读 / 未读数（顶栏角标）。**没有创建端点**，也没有 `since` 游标 |
+| `/api/p/scheduler/tasks` · `/tasks/:id` · `/tasks/:id/run` · `/tasks/:id/runs` · `/preview` · `/meta` · `/sessions` | GET/POST/PUT/PATCH/DELETE | 定时任务插件端点（见 [scheduled-tasks](pi-agent-server_scheduled-tasks.md)）。`PUT` 与 `PATCH` 同处理器：插件 web 面的 `api` 只有 get/post/put/del |
 
 ## Worker（调试）
 

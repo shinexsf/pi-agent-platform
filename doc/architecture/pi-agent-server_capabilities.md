@@ -56,7 +56,7 @@ flowchart TD
 |---|---|---|
 | `builtinTools` | 工具启用清单，**清单里只放工具名**：① pi 内置工具（`read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` / `powershell`）；② pi 内置**扩展**工具（`codemode` / `tool_search`）——名字在清单里时 worker 装载 `builtin:<ext>` 并激活对应工具。**缺失 / null = 空=全不启用**。**`mcp` 不是工具，不在本清单**（历史遗留值会被忽略） | worker：`additionalExtensionPaths` + `extensionFactories` 注入 + `setActiveToolsByName`（非内置的 sdk/扩展工具始终激活） |
 | `mcp` | MCP 能力开关 `{ enabled?: boolean }`：`true` = worker 装载 `builtin:mcp` + 补齐 `codemode` / `tool_search` 依赖。**缺失 = `{enabled:false}`** | worker：同上的两步注入；激活不过白名单（MCP 工具按 per-server `exposure` 由 pi 决定） |
-| `serverBuiltinTools` | server 侧工具注入白名单（`sendFileToUser` / `callServer` / `postNotification`），**缺失 = `[]` = 全不给**（平台基础配置模板勾 `sendFileToUser`，callServer 与 postNotification 永不预置） | worker customTools 注入 = prompt 可见性 |
+| ~~`serverBuiltinTools`~~ | **已退役**（`scheduler-plugin`）：工具归属改由"提供它的插件对该会话是否生效"决定，不再有逐 agent 的工具白名单 | — |
 | `capabilities` | `callServer` 方法级授权：**缺失（null/undefined）= opt-in 无任何方法权限**，[]=全禁，数组=精确白名单（session 行缺 key 时回落 agent 行的既有快照语义不变） | master 控制面 dispatch 强制校验 |
 
 四字段都在 `AgentConfig` JSON 列（agents / sessions 共用），加字段零迁移。
@@ -98,7 +98,7 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 
 ## 授权模型（双道闸 + 快照语义）
 
-- **道闸 1（prompt 层）**：`serverBuiltinTools` 决定 `callServer` 注不注入——模型看不见工具。
+- **道闸 1（prompt 层）**：**agent 有没有任何授权方法** 决定 `callServer` 注不注入 —— 一行都没有时 inline 插件返回空工具集，模型看不见工具（以前是 `serverBuiltinTools` 里勾 `callServer`，那个白名单已退役）。
 - **道闸 2（强制层，信任边界在 master）**：dispatch 时校验
   1. **显式 allowlist**（唯一授权来源）：`capabilities` 未配置 → 拒（错误提示 opt-in）；`[]` → 全禁；数组 → 白名单外拒。
   2. **固定 own 安全网（硬编码，不可配置）**：read=`all`（跨 agent 读可见）、write=`own`——`scoped` 写能力目标不属于调用方 agent/session 行即拒；归属解析不到 fail closed。
@@ -125,7 +125,7 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 `session.update` 的 title 走共享 `services/session-ops.ts`（`renameSession`，HTTP 三入口与控制面同一实现）。
 
 
-**`postNotification` 不是能力**：它是 server 工具（reverse call），闸门只有 `serverBuiltinTools` 声明；参数面 `{title, body, severity?}`，`sessionId`/`actionUrl` 由 master 填。能力面不重复开一道授权口。（它只写系统通知表，见 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)）
+**`postNotification` 不是能力**：它是 notifications 插件的 `extension` facet 注册的工具（已从 worker 硬编码壳迁走），参数面 `{title, body, severity?}`，`sessionId`/`actionUrl` 由 master 填；闸门是**该插件对会话是否生效**（`agent.config.plugins`）。能力面不重复开一道授权口。（它只写通知表，见 [`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)）
 
 ## 端点
 
@@ -139,7 +139,7 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 
 ## WebUI（三处）
 
-1. **Agent 编辑**：Resources 区内 6 个分组（Builtin tools / MCP / Server Builtin Tools / Extensions / Skills / Prompts），每项带「全选 / 清空」，无效项「清理无效项」；Resources **外**独立 `Capabilities` 区（随 callServer 启用联动显隐，module 分组勾选 + 全选/清空，未配置显示“未授权”）。
+1. **Agent 编辑**：Resources 区分组（Builtin tools / MCP / **Platform Plugins** / Extensions / Skills / Prompts），每项带「全选 / 清空」，无效项「清理无效项」；Resources **外**独立 `Capabilities` 区（常驻显隐，module 分组勾选 + 全选/清空，未配置显示“未授权”）。`Platform Plugins` 是"这个 agent 的会话启用哪些平台插件"——它决定工具/skill 注入，与 `Capabilities`（方法级授权）是两层不同的事。
 2. **Session 编辑**：同款分组，打开即显示**生效值**（agent 归一值 + session 覆盖）；capabilities 为 session 快照级——缺 key 的存量会话展示 agent 当前值，**保存即固化**（不回写 agent），提示下次 spawn 生效。
 3. **配置 → 默认设置**：只剩三项——默认模型（`provider/model`，保存拆分写 pi settings 的 `defaultProvider` + `defaultModel`）、默认思考等级、启用的模型。**不再有任何资源默认值**。
 4. 三处共用 `composables/useConfigIssues.ts` 的黄标/清理逻辑。
@@ -154,8 +154,8 @@ MCP 单独成能力（`AgentConfig.mcp = { enabled, servers }`，三处 UI 渲�
 | 谁负责 | |
 |---|---|
 | **master 控制面** | 注册、分发、授权（唯一强制点）、审计、能力索引下发 |
-| **worker** | 只按 `serverBuiltinTools` 注入工具、把索引拼进 description、转发调用——**不做任何授权判断** |
-| **AgentConfig（session 快照）** | 工具开关与方法授权的唯一配置来源（单层，无全局资源默认）；全局 config.json 只存通用设置 |
+| **worker** | 只按 inline 插件返回的工具集注入、把索引拼进 description、转发调用——**不做任何授权判断**（`callServer` 只在索引非空时存在） |
+| **AgentConfig（session 快照）** | 方法授权的唯一配置来源（`capabilities`，单层无全局默认）；工具是否出现由插件生效面决定，不是配置项 |
 
 ## 相关文档
 

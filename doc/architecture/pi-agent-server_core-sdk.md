@@ -44,7 +44,7 @@ flowchart TB
     K2 --> K1
     K6 --- K3
     K6 --- K4
-    PLG -->|"只能经这四个面访问内核"| K6
+    PLG -->|"只能经这五个面访问内核"| K6
 ```
 
 依赖方向**严格单向**：入口 → 内核。内核不依赖任何入口，也**不依赖投影包**——它不知道 UI 长什么样。这条不变量有可执行断言（见下文「验收」）。
@@ -56,7 +56,7 @@ flowchart TB
 | `db/` | schema（**只有 agents / sessions / attachments 三张表**）+ `initDb` |
 | `repos/` | `agent.repo` / `session.repo`（附件由 `attachment-store` 直接操作） |
 | `services/session.ts` | `Session` / `SessionRegistry`——会话能力的唯一入口 |
-| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `server-builtin-skills` / `plugin-extensions`（插件 facet 注册表） |
+| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `server-builtin-skills` / `plugin-extensions`（插件 facet 注册表）/ **`system-envelope`（信封唯一构造点）** / **`event-bus`（进程内总线）** |
 | `worker-pool.ts` | worker 子进程池（进程域 only） |
 | `session-timeout-scanner.ts` | placeholder 超时回收 |
 | `slash-commands.ts` | 会话级命令 |
@@ -103,24 +103,50 @@ initCoreConfig({
 
 插件最终要访问内核（建会话、读写自己的表、注册反向方法、发事件），但它们**不能 import 内核内部模块**——那样每次内核重构都会打断插件，且插件之间可以互相穿透。
 
-所以契约收敛成**四个**面（形状在内核，实现在组合根）：
+所以契约收敛成**五个**面（形状在内核，实现在组合根）：
 
 | 面 | 内容 |
 |---|---|
 | `db` | `migrate(name, ddl)`（幂等 + 记台账）· `query(sql, params?)`（读写都开放，走审计日志） |
-| `sessions` | `call(sessionId, method, args?)`（**唯一调用口**）· `get` · `list` · `status` · `hasRow` · `subscribe` |
+| `sessions` | `call(sessionId, method, args?)`（**唯一调用口**）· `get` · `list` · `status` · `hasRow` · `subscribe` · **`ensure`** · **`systemEvent`** |
 | `agents` | `list` · `get` · `update(id, patch)` |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` |
+| `bus` | `publish(topic, payload?)` · `subscribe(topic, fn)` —— **进程内**事件总线，插件之间的唯一协作通道 |
 
-**为什么从六个收到四个**（change: `plugin-mechanism-v2`）：
+**为什么从六个收到四个、之后又加回一个**（change: `plugin-mechanism-v2` / `scheduler-plugin`）：
 
 - `web`（`assetBasePath`）本质是"入口怎么托管资源"，属 HTTP 接入层，内核不该知道
 - `events` 只有一个 `maxPayloadBytes` 常量，是出口限流参数，不构成能力；插件侧的 `emit` 在 worker bridge 上
 - `outbound`（反向方法注册）是**注册面**而不是能力面 → 变成 `host.methods.handle`，由装载器 flush 到 `WorkerPool.registerService`
+- **`bus` 是后来加回的**（`scheduler-plugin`）：通知与定时任务都是插件，定时任务的 run 失败要进收件箱，但插件之间不能互相 import。`bus` 是那个匿名的交汇点 —— 发布方与订阅方**互不相识**。它不叫 `events`：`host.events` 已被"worker → server → SSE"的事件出口占用
 
 `WorkerPool` 明确**不作为面暴露**：暴露 = 插件能决定杀进程 / 超卖并发。需要"活跃会话"信息的地方用 `sessions.list/status`。
 
-插件侧看到的 `host` 比内核的面多出注册面（`ui` / `http` / `methods`）与事件出口，见 [插件运行期 v2](pi-agent-server_plugins-runtime.md)。
+插件侧看到的 `host` 比内核的面多出注册面（`ui` / `http` / `methods`）与事件出口 `events`（仅 worker 侧可发），见 [插件运行期 v2](pi-agent-server_plugins-runtime.md)。
+
+### `sessions.ensure` —— 无人值守跑一轮的入口
+
+```ts
+ensure({ agentId, sessionId?, title? }): Promise<{ sessionId, created }>
+```
+
+| 入参 | 行为 |
+|---|---|
+| 无 `sessionId` | `createFromAgent()` 生成 id + 占位 worker，再 `getOrCreate()` 落行 → `created: true` |
+| 有 `sessionId` | 行必须存在且 `agent_id` 相同 → 懒恢复 → `created: false`；否则**抛错**（fail closed） |
+| `title` | 只在新建时写（归因用，不动 sessions schema） |
+
+`fail closed` 是关键：`getOrCreate` 对陌生 id 会照建一个会话，所以"绑定目标被删/换主"必须在这里被拦住，否则会静默写到别人的会话里。
+
+### `sessions.systemEvent` —— 信封的唯一投递口
+
+```ts
+systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data? }): Promise<void>
+```
+
+内核把结构化字段拼成 `<system-event>` 信封（`services/system-envelope.ts` 的 `buildSystemEnvelope()` 是**唯一**构造点），再 `prompt` 进去。**返回即"送到"**：不等 agent 跑完，也不判断它干得怎么样。
+
+为什么信封归内核：它是**平台契约**（模型看到的文本必须统一，`SYSTEM_EVENT_PROMPT_NOTICE` 也在 shared-types 里统一注入）。让每个插件各拼一份，等于让"外部文本能否注入标签名/属性"取决于各插件的自觉。
 
 ## 订阅契约
 
@@ -132,6 +158,18 @@ initCoreConfig({
 - **慢订阅者：丢弃，不回压**
 
 最后一条的实现：每个订阅者一条**有界队列**（256 条），由 `setImmediate` 异步排空；队列满了丢最旧的一条并计数，首次丢弃记一条 warn（含 sessionId / 事件名 / 丢弃数）。
+
+### 进程内事件总线（`host.bus`）
+
+同一套语义的简化版，面向上层**插件之间的协作**：
+
+- **无回执**：`publish` 不等任何人，返回 void
+- **同步派发**：订阅者在 `publish` 的调用栈里跑（订阅者自己必须轻）
+- **慢订阅者丢弃不回压**：不排队、不缓冲；无订阅者时静默丢弃
+- **抛错隔离**：单个订阅者抛错只记 warn，不影响其它订阅者与发布方
+- **退订进插件账本**：`subscribe` 返回的 disposer 由装载器按插件 id 记账，卸载归零
+
+明确不做：跨进程（worker ↔ master）、持久化、重放、通配符。
 
 为什么丢弃而不是排队：事件是 UI 增量、本身可丢（与"事件无回执"同语义）；为一个卡住的消费者排队，等于让整条流陪它一起卡。需要确认的操作走的是请求-响应通道（`prompt` / `abort`），不受影响。
 

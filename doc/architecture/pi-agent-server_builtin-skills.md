@@ -18,7 +18,9 @@
 | 页面 | `配置 → Skill` | 只在 agent / 会话 / 模板的配置表单里 |
 | 名字冲突 | 可能用户同名覆盖 | 独立命名空间，不会互相挤掉 |
 
-命名与 `serverBuiltinTools` 对齐：**平台提供、按名字显式启用、缺失即空（全关）**。
+命名沿用旧 `serverBuiltinTools` 的惯例（那个字段已在 `scheduler-plugin` 退役）：**平台提供、按名字显式启用、缺失即空（全关）**。
+
+> 与**插件自带 skill** 的区别（`scheduler-plugin`）：平台 skill 走 `AgentConfig.serverBuiltinSkills`（逐 agent 勾选），插件 skill 走 `<plugin-dir>/skills/` 且**插件生效即注入**、不占 agent 配置项。两者最终都并进 worker 的 `additionalSkillPaths`（同一条 temporary 豁免）。
 
 ---
 

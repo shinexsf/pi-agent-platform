@@ -12,7 +12,7 @@
 |---|---|---|
 | **装载点**（在哪跑） | 目录存在性：`server/` `worker/` `extension/` `web/` | 装载器 |
 | **扩展点**（做什么） | 代码默认导出里调的注册函数 | 内核注册表 |
-| **能力面**（能做什么） | 内核注入的 `host` 对象（五个能力面） | 插件 |
+| **能力面**（能做什么） | 内核注入的 `host` 对象（五个能力面 + 一个事件出口） | 插件 |
 
 facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们是"第二套真相"，会与代码漂移。
 
@@ -68,21 +68,69 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 
 `:name` 匹配单段（值进 `request.params`）；`*` 只能作**最后一段**（匹配剩余全部，进 `params['*']`）。分发时**字面量永远优先于模式**（否则"注册顺序决定语义"，作者不可能猜对）。webhook 不需要专用机制：插件拿原始路径自己分发。
 
-## 五个能力面（`host`）
+## 五个能力面 + 一个事件出口（`host`）
 
 插件访问平台的**唯一**通道 —— 不 import 内核模块，也不拿 `WorkerPool`（暴露 = 插件能杀进程）。
 
 | 面 | 形状 | 说明 |
 |---|---|---|
-| `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` | **`call` 是唯一调用口**：平台方法 `prompt` / `abort` 与插件正向方法同一形状。`sessionId` 永远由调用方给（宿主不提供"选会话"） |
+| `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` / **`ensure`** / **`systemEvent`** | **`call` 是唯一调用口**：平台方法 `prompt` / `abort` 与插件正向方法同一形状。`sessionId` 永远由调用方给（宿主不提供"选会话"）。`ensure` 是"取/建一个可用会话"，`systemEvent` 是"把非用户消息（信封）交给它" |
 | `agents` | `list` / `get` / `update` | 插件维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放；每次 query 进审计日志 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 会话生命周期钩子 |
-| `events` | `emit` | worker 侧可用；**server 侧本期未接通**（调用会 warn，明确告警而不是静默吞掉） |
+| `bus` | `publish` / `subscribe` | **插件之间的唯一协作通道**（进程内、无回执、同步派发、慢订阅者丢弃）。例如 scheduler 发 `scheduler.run.failed`，通知插件订阅后落一行 |
+| `events`（出口，非能力面） | `emit` | 发给**浏览器**（worker → server → SSE）；server 侧调用会 warn，明确告警而不是静默吞掉 |
 
-内核侧（`packages/core/src/host-api.ts`）只声明**四个**面：`db` / `sessions` / `agents` / `lifecycle`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
+内核侧（`packages/core/src/host-api.ts`）声明五个面：`db` / `sessions` / `agents` / `lifecycle` / `bus`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
+
+**`bus` 与 `events` 不要混**：`bus` 是"发给别的插件"，`events` 是"发给浏览器"。命名冲突过一次（原先想直接复用 `events`），最后按方向拆开。
 
 会话面与 agent 面一律返回 `Promise`（宿主机将来可能跨进程），`db` 面保持同步（DB 本来就是本进程的资源）。**除 `db.migrate`（内核 `initDb` 只建内核对象的表）之外，插件自己的表都要自己建。**
+
+## 工具与 skill：谁提供，谁决定
+
+**没有逐 agent 的工具白名单了**（`serverBuiltinTools` 已退役）。规则只有一条：
+
+> **插件对该会话生效 → 它带来的工具、命令、钩子、skill 全部注入；不生效 → 全部消失。**
+
+| 提供方 | 例子 | 注入条件 |
+|---|---|---|
+| 插件的 `extension/` facet（R6） | `postNotification`（notifications）、`schedule_task`（scheduler） | 插件在 `agent.config.plugins` 里 |
+| 插件的 `worker/` facet | 正向方法（agent 工具 → `bridge.call`） | 同上 |
+| 插件的 `skills/<name>/SKILL.md` | `scheduler` 的用法说明 | 同上 |
+| **inline 插件**（编译进平台） | `callServer`、`sendFileToUser` | 恒注入；插件自己可以收窄（`callServer` 在没有授权能力时返回空） |
+
+`inline` 与目录插件的判定分界是**实现方在不在平台代码里**：在（`callServer` 的能力控制面、`sendFileToUser` 的网关侧）→ inline；不在（通知收件箱、定时任务）→ 随那个插件走。
+
+### 插件自带的 skill：数据目录，不是 facet
+
+约定 `<plugin-dir>/skills/<name>/SKILL.md`：
+
+- 装载器扫出目录 → `RuntimePluginSpec.skillPaths` → worker 并入 `additionalSkillPaths`
+- 走 pi 的 `temporary` 豁免：用户 `skills` 白名单**既不能杀它，也不能当开关**
+- 不参与 `build:plugins` 编译、不进 `PLUGIN_FACET_NAMES`（它是数据，不是装载点）
+- `plugin check` 校验：有 `skills/` 就必须每个子目录有合法 frontmatter 的 `SKILL.md`
+
+### 逐 agent 的开关只有一个
+
+`AgentConfig.plugins`（启用列表）是**会话内能力**的唯一开关：
+
+```
+（插件 active）∧（在 agent.config.plugins 里）∧（requiresPlugins 的 pi 扩展名都装了且在该 agent 的 extensions 里）
+  → ResolvedPlugin.enabled = true
+     → extensionPath / workerPath / skillPaths 下发 worker
+```
+
+关掉之后：`extension` facet 不装载（工具消失）、`worker` facet 不装载、`skills/` 不注入。
+**关不掉的部分**：`server` facet（HTTP 路由、调度器 timer）与 `web` facet（页面、菜单）是进程级全局资源 —— 它们本来就不属于"某个 agent 的会话"。
+
+## 平台承诺的主题变量
+
+插件 web 面拿到的 `el` 的祖先链上一定有平台 CSS 变量（暗色自动切换）。清单是**可枚举、可校验**的：`packages/core/src/plugins/constants.ts` 的 `PLATFORM_THEME_VARS`。
+
+为什么专门立一条：变量名猜错时 `var(--x, #fff)` **不报错**，静默走 fallback —— 表现为"暗色下这一块永远白底"。真实案例：scheduler 的第一版用了 `--bg-elevated` / `--text-muted` / `--bg-hover`，三个都不存在。
+
+`plugin check` 会扫插件 web 产物里的 `var(--name)`，不在清单里给 warning（`theme-var-unknown`）。
 
 ## 生命周期
 
@@ -171,6 +219,7 @@ pnpm pack:cli           # 含 check-packaged：随包插件与 web 产物断言
 ## 待决项
 
 - **server 侧 `events`**：插件主动推 UI 本期未做。将来若需要，可能走"插件自己的 HTTP 路由 + SSE"，而不是新增能力面
+- **`bus` 只有进程内**：worker ↔ master 的事件不走它（那是 `events` + SSE）；没有持久化/重放
 - **插件目录监听**：本期靠 `plugin reload` 手动触发
 - **`db.query` 全开放**：插件完全可信，已知可 `DROP TABLE`。缓解是审计日志；DDL 拦截留后续开关
 - **bundled 改名/替换**：旧 id 的墓碑不做特殊处理（新 id 正常出现）

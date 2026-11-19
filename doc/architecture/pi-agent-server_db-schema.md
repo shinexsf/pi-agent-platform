@@ -118,7 +118,9 @@ interface AgentConfig {
 
   // Server 侧工具白名单（sendFileToUser / callServer / postNotification；缺失 = [] = 全不给）
   // serverBuiltinSkills：平台随包 skill 名单（与用户 skills 两套名字空间；缺失 = [] = 全关）
-  serverBuiltinTools?: string[];
+  // 平台插件启用列表（会话内能力来源：extension/worker facet + skills/ 目录）。
+  // 缺失/空 = 不启用任何插件。server/web facet 是进程级全局资源，不受它影响。
+  plugins?: string[];
 
   // callServer 方法级授权（opt-in：未配置 = 无任何方法权限，[] = 全禁，数组 = 白名单；
   // session 行有 key 优先、缺 key 回落 agent，见 capabilities 文档）
@@ -299,5 +301,5 @@ export function normalizePath(p: string): string {
 ## 相关文档
 
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— 配置管理策略
-- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— AgentConfig 两个 server 字段（serverBuiltinTools / capabilities）
+- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— AgentConfig 的 `capabilities`（方法级授权）与 callServer 注入条件
 - [`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md) —— IM 网关 + 渠道包自管表说明

@@ -45,6 +45,8 @@ my-plugin/
 ├── web/                  ← ④ 浏览器产物（原生 ESM）
 │   ├── page.js           export function mount(el, host)
 │   └── panel.js
+├── skills/               ← 数据目录（不是 facet）：插件生效即注入，不占 agent 配置项
+│   └── my-skill/SKILL.md  ← front matter 必须有 name / description
 └── types/plugin-types/   ← `plugin check` 写入的 vendored 类型（不要手改、不要提交进 git）
 ```
 
@@ -188,11 +190,12 @@ export function mount(el, host) {
 
 | 面 | 能用在哪 | 方法 |
 |---|---|---|
-| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` |
+| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` · **`ensure({ agentId, sessionId?, title? })`** · **`systemEvent({ sessionId, kind, instruction, data? })`** |
 | `agents` | 全部 | `list` · `get` · `update(id, patch)` |
 | `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
 | `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` |
-| `events` | **仅 worker** | `emit(name, data)`（server 侧本期未接通，调用会 warn） |
+| `bus` | 全部 | `publish(topic, payload?)` · `subscribe(topic, fn)` —— **插件之间**的进程内总线（无回执、同步、慢订阅者丢弃）。例：scheduler 发 `scheduler.run.failed`，通知插件订阅 |
+| `events` | **仅 worker** | `emit(name, data)` —— 发给**浏览器**（SSE）；server 侧调用会 warn |
 | `ui`（注册面） | 仅 server | `page`（`nav: false` 可只登记路由）· `slot` · `headerAction` · `toolCard` |
 | `ui`（浏览器侧） | 浏览器 | `navigate(path)` · `toast` · `sheet` |
 | `http` | 仅 server | `route({ method, path, handler })` |
@@ -200,7 +203,24 @@ export function mount(el, host) {
 
 - 每个注册 / 订阅都返回**退订函数**（平台卸载时也会统一撤，但你自己的资源要自己清）
 - `sessions.call` 是唯一调用口：`prompt` / `abort` 这类平台方法与插件正向方法形状相同；**`sessionId` 永远由你给**（平台不提供"选会话"）
+- `sessions.ensure` 是"取一个可用会话"（新建 / 懒恢复 / 目标无效抛错），`sessions.systemEvent` 是"把一条非用户消息交给会话"（信封由**内核**拼，你不要自己拼 `<system-event>`）
 - 除 `db.migrate` 建表之外，别碰平台表
+- **工具与 skill 不需要"注册到某个 agent"**：插件对该会话生效，它们就自动注入；插件的 `server` / `web` facet 是全局的，不受 agent 开关影响
+
+## 3.1 主题：只用平台承诺的 CSS 变量
+
+插件 web 面的 `el` 祖先链上一定有平台 CSS 变量，暗色自动切换。**不要写死颜色，也不要猜变量名** —— 猜错时 `var(--x, #fff)` 不报错、静默走 fallback，表现就是"暗色下这一块永远白底"（`plugin check` 会报 `theme-var-unknown`）。
+
+| 类别 | 变量 |
+|---|---|
+| 背景 / 表面 | `--bg` `--surface` `--surface-raised` `--surface-subtle` `--surface-hover` |
+| 文字 | `--text` `--text-secondary` `--text-tertiary` |
+| 描边 | `--border` `--border-subtle` `--border-strong` |
+| 主色 | `--accent` `--accent-hover` `--accent-ink` `--accent-soft` |
+| 语义 | `--success(-soft)` `--warning(-soft)` `--danger(-hover/-soft)` `--on-error` |
+| 其它 | `--focus` `--shadow-soft` `--shadow-raised` `--radius-sm/md/lg` `--font-sans` `--font-mono` |
+
+清单的权威来源：`packages/core/src/plugins/constants.ts` 的 `PLATFORM_THEME_VARS`（与 `apps/pi-agent-web/src/style.css` 同步）。`host.theme.get()/subscribe()` 只在"给画布/图表定色"这类拿不到 CSS 的场景用。
 
 ## 4. 类型：vendored 文件，不走 npm
 
@@ -263,6 +283,9 @@ REST：
 | 改了代码没生效 | 插件**代码**变化不会被文件监听捕获，跑 `pi-server plugin reload`；worker/pi 扩展还要等下次 spawn |
 | 页面白屏、导航有项 | web 产物 404：检查 `web/<component>.js` 是否真的存在（`plugin check` 会红） |
 | 顶层注册导致整个插件被拒 | `import()` 后平台断言"注册增量为 0"，注册只能发生在 `init()` 里 |
+| 暗色下输入框/按钮还是白底 | 用了不存在的 CSS 变量名（fallback 生效）。改用「3.1 主题」表里的变量，`plugin check` 会告警 |
+| 工具/skill 在该 agent 上不出现 | `agent.config.plugins` 里没有这个插件（逐 agent 开关）；`server`/`web` facet 不受它影响，所以页面还在、工具没了 |
+| 声明了 `skills/` 但不生效 | 目录结构必须是 `skills/<name>/SKILL.md`，且 frontmatter 有 `name`/`description`；`plugin check` 会红 |
 
 ## 8. 完整参考
 
