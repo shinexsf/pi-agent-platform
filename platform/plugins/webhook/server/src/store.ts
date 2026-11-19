@@ -211,12 +211,24 @@ export function createStore(db: PluginDbApi) {
       ]);
     },
 
-    /** 同 hook + 同 key 在窗口内是否已有投递（**只看成功送出的**，被跳过的不占坑）。 */
+    /**
+     * 同 hook + 同 key 在窗口内是否已有投递。
+     *
+     * 三类命中：
+     * 1. **已送达**（`status = 'delivered'`）—— 正常去重
+     * 2. **正在进行中**（`finished_at IS NULL` 且未超过 `STALE_DELIVERY_MS`）—— 这一条是
+     *    容器回归测出来的：`new` 模式首次投递要等 worker 冷启动（实测 ~15s），
+     *    期间行还没 `delivered`，外部系统超时重试会**双双执行**。进行中的也算占坑。
+     * 3. 被跳过（`skipped`）/ 失败的不占坑 —— 它们本来就该允许重投。
+     *
+     * 超过 `STALE_DELIVERY_MS` 仍未收尾的行不再占坑（进程崩溃残留不能把 key 锁 24h）。
+     */
     hasRecentIdempotencyKey(hookId: string, key: string, since: number): boolean {
       const row = db.query<{ n: number }>(
         `SELECT COUNT(*) AS n FROM webhook_deliveries
-         WHERE hook_id = ? AND idempotency_key = ? AND received_at >= ? AND status = 'delivered'`,
-        [hookId, key, since],
+         WHERE hook_id = ? AND idempotency_key = ? AND received_at >= ?
+           AND (status = 'delivered' OR (finished_at IS NULL AND received_at >= ?))`,
+        [hookId, key, since, Date.now() - STALE_DELIVERY_MS],
       )[0];
       return (row?.n ?? 0) > 0;
     },
