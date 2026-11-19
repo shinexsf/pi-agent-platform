@@ -116,6 +116,7 @@ interface SessionContextDTO {
 | `/api/plugins/reload` | GET | 手工失效内存快照（registry 变更也会被 `fs.watch` 自动失效） |
 | `/api/plugins/:id` | GET | **单插件详情**：`plugin`（含 `declaredFacets` / `switches` / `loadedFacets` / `entries`）+ `entryPoints` + `dependencies`（依赖安装三态）+ `manifestPath` + `registryEntry`；未知 id → 404 |
 | `/api/plugins/:id/extensions` | GET | 该插件的全部注册项（`menus` / `pages` / `routes` / `surfaces` / `toolCards`）+ `rejected[]` + `registerError`；未装载 → 空集合（不 404） |
+| `POST /api/extensions/reload` | 重装插件运行期（`pi-server plugin reload`）；**不重启 server** |
 | `/api/extensions` | GET | **全局**注册项聚合：`menus[]`（`{pluginId, def}`，已排序）+ `pages[]`；web 端导航唯一入口 |
 | `/api/sessions/:id/extensions` | GET | **会话级**注册项：`surfaces[]` / `toolCards[]`，只保留该会话 `enabled` 的插件；占位会话 → 空 |
 | `/api/sessions/:id/plugins` | GET | 会话级解析结果：只返回该会话 `enabled` 的插件（依赖未启用 → 不出现） |

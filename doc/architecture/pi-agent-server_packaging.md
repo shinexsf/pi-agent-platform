@@ -125,7 +125,7 @@ native binding 加载、运行期 `import.meta.url` 锚点是否指向正确目�
 | 镜像 | `pi-packtest:ubuntu2604-node24`（与宿主同版本：Ubuntu 26.04 + Node 24） |
 | 容器 | `pi-packtest` 常驻，数据卷 `pi-packtest-data` → `/root/.pi`（凭据 / DB / **全局 npm 包**） |
 | 端口 | `127.0.0.1:9911` → 容器内 `9102`（容器内 `config.env` 的 `PORT` 必须对齐） |
-| 进包方式 | 只挂 `tmp/packtest-dist`（:ro），不挂整棵仓库 |
+| 进包方式 | 只挂 tgz 所在的临时目录（:ro），不挂整棵仓库 |
 
 日常三步：`pack`（`pnpm pack:cli` + 拷 tgz）→ `install`（容器内 `npm i -g --prefix /root/.pi/npm-global`
 + 重启 `pi-server`）→ `verify`（health / models / agents / 版本）。
@@ -294,3 +294,24 @@ CLI `stop` 命令：
 - `pi-server config` 命令读写 `config.env`（post-MVP）
 - 跨平台 CI（GitHub Actions Windows + Linux matrix，post-MVP）
 - 公开到 npmjs.com（保持私有 + 本地 tarball）
+
+## 随包插件与插件类型（change: plugin-mechanism-v2）
+
+tarball 里多两样东西，**少一样都不会在 dev 态暴露**：
+
+| 路径 | 谁生成 | 缺了会怎样 |
+|---|---|---|
+| `dist/server/plugins/<id>/` | `build-cli` 的 step 8b（跑 `pnpm build:plugins` + 复制 `platform/plugins`） | 装载器扫不到随包插件 → 插件列表里静默少几项 |
+| `dist/server/plugin-types/*.d.ts` | step 8c（复制 `packages/plugin-types/dist`） | `pi-server plugin check` 写不进 vendored 类型 → 作者侧类型校验失效 |
+
+`plugin-types` 是 **types-only** 包，因此**不在 `RUNTIME_PACKAGES` 里**（`dist` 下没有 `.js`，运行期谁都不 import 它）。它的 `.d.ts` 仍然要随包分发，供 `plugin check` 写入插件目录。
+
+`check-packaged` 对应的断言：
+
+- **A**：`server/plugin-types/{index.d.ts,web.d.ts}` 存在
+- **B2**：每个随包插件有 `package.json` + `piServer.apiVersion` + 声明 facet 的入口 + `web/*.js` 产物
+
+打包态**极易漏掉的两处路径解析**（都踩过，dev 态被环境变量掩盖）：
+
+1. `bundledPluginsDir` 默认值不能写死相对层级 —— 同一个文件在 dev 由 tsx 从 `src/` 跑、打包由 node 从 `dist/server/` 跑，差一层就静默找不到。现按**存在性**挑候选。
+2. 插件 web 资源目录解析必须走**插件快照**，不能只查 registry —— bundled 插件不进 registry。

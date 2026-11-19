@@ -26,7 +26,7 @@ flowchart TB
         K5["coreConfig()<br/>入口注入，内核不读 env"]
         K2["SessionRegistry · Session · repos<br/>WorkerPool · 超时回收 · 斜杠命令"]
         K1["db：只建 3 张内核表<br/>agents / sessions / attachments"]
-        K6["宿主 API 六面<br/>db · sessions · lifecycle<br/>outbound · events · web"]
+        K6["宿主 API 四面<br/>db · sessions · agents · lifecycle"]
         K3["capabilities 控制面<br/>registry → dispatch → 鉴权 → 审计"]
         K4["插件宿主<br/>facet 注册表 · 会话级闸门"]
     end
@@ -44,7 +44,7 @@ flowchart TB
     K2 --> K1
     K6 --- K3
     K6 --- K4
-    PLG -->|"只能经这六个面访问内核"| K6
+    PLG -->|"只能经这四个面访问内核"| K6
 ```
 
 依赖方向**严格单向**：入口 → 内核。内核不依赖任何入口，也**不依赖投影包**——它不知道 UI 长什么样。这条不变量有可执行断言（见下文「验收」）。
@@ -103,18 +103,24 @@ initCoreConfig({
 
 插件最终要访问内核（建会话、读写自己的表、注册反向方法、发事件），但它们**不能 import 内核内部模块**——那样每次内核重构都会打断插件，且插件之间可以互相穿透。
 
-所以契约收敛成六个面（形状在内核，实现在组合根）：
+所以契约收敛成**四个**面（形状在内核，实现在组合根）：
 
 | 面 | 内容 |
 |---|---|
-| `db` | `executeMigration(name, ddl)` —— 模块自带表的迁移入口 |
-| `sessions` | `hasRow(sessionId)` / `subscribe(sessionId, listener, onDispose)` |
+| `db` | `migrate(name, ddl)`（幂等 + 记台账）· `query(sql, params?)`（读写都开放，走审计日志） |
+| `sessions` | `call(sessionId, method, args?)`（**唯一调用口**）· `get` · `list` · `status` · `hasRow` · `subscribe` |
+| `agents` | `list` · `get` · `update(id, patch)` |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` |
-| `outbound` | `registerService(source, kind, handlers)` —— worker → 宿主的反向方法 |
-| `events` | `maxPayloadBytes` —— 插件事件载荷上限 |
-| `web` | `assetBasePath(pluginId)` —— 内核只给约定，托管由入口决定 |
 
-为什么是这六个：每个面回答一类问题，缺一个插件就得自己造轮子；再多就会变成"内核替入口决定暴露到什么程度"。
+**为什么从六个收到四个**（change: `plugin-mechanism-v2`）：
+
+- `web`（`assetBasePath`）本质是"入口怎么托管资源"，属 HTTP 接入层，内核不该知道
+- `events` 只有一个 `maxPayloadBytes` 常量，是出口限流参数，不构成能力；插件侧的 `emit` 在 worker bridge 上
+- `outbound`（反向方法注册）是**注册面**而不是能力面 → 变成 `host.methods.handle`，由装载器 flush 到 `WorkerPool.registerService`
+
+`WorkerPool` 明确**不作为面暴露**：暴露 = 插件能决定杀进程 / 超卖并发。需要"活跃会话"信息的地方用 `sessions.list/status`。
+
+插件侧看到的 `host` 比内核的面多出注册面（`ui` / `http` / `methods`）与事件出口，见 [插件运行期 v2](pi-agent-server_plugins-runtime.md)。
 
 ## 订阅契约
 

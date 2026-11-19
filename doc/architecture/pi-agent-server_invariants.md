@@ -296,3 +296,11 @@ DB 存的路径是 forward slash 形式。传给 `fs.readFile` / `path.resolve` 
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— session 状态机
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— worker 进程模型
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— IPC 协议约束
+
+## 插件运行期（change: plugin-mechanism-v2）
+
+- **顶层零副作用**：插件模块顶层只允许 `import` 与导出对象；装载器在 `import()` 之后、`init()` 之前断言注册增量为 0，非零即拒绝整个插件
+- **注册即返回 disposer**：每个注册/订阅函数必须返回幂等退订函数，由装载器按插件 id 记账；卸载/重载时统一撤除并断言归零
+- **不执行代码就能判兼容**：`apiVersion` 只在 `package.json`，版本不符的插件任何模块都不会被 `import()`
+- **插件不 import 平台包**：`@pi-agent-platform/plugin-types` 是 types-only，运行期 import 会被 `plugin check` 拒绝
+- **bundled 不进 registry**：随包插件以目录存在生效、以墓碑表达卸载；registry 只记用户插件

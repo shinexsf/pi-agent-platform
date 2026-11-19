@@ -1,5 +1,13 @@
 # pi-agent-server 插件机制（`plugin-mechanism`）
 
+> **⚠️ 本文描述 v1 机制，已于 change `plugin-mechanism-v2` 被替换。**
+> 现在的事实来源是：
+> - **平台侧机制** → [插件运行期 v2](pi-agent-server_plugins-runtime.md)
+> - **作者契约** → [插件作者契约 v2](pi-agent-server_plugins-manual.md)
+>
+> 保留本文的理由：装载流程 / 会话级依赖闸门 / 双向窄桥这三块**没有变**，是理解 v2 的背景。
+> 已被废弃的部分在正文里逐条标注「v1 已废弃」。
+
 > 一句话：**插件是「一个带 `package.json` 的目录 + 四种可选 facet」**，平台只负责装载、隔离、下发与转发；插件想加工具就写 pi extension，想加 UI 就写 web facet，平台不发明第二套工具 API。
 >
 > **给插件作者看的手册**：[插件使用手册](pi-agent-server_plugins-manual.md)（三十秒上手 / facet 签名 / 调试 / 坑）。本文只讲平台侧机制。
@@ -14,7 +22,7 @@
 | **不发明对象/契约运行时** | 只借 chord 的**形态**（契约显式、数据跨宿主、UI 住在宿主），不借它的实现；wire 用平台自己的 JSON over HTTP/SSE/IPC |
 | **pi 插件是依赖，不被包装** | 别人的 pi 扩展（能力/UI 类）继续原样用 pi 的 installer 装；平台插件只在 `requires.plugins` 里**校验**它们是否存在并在该 agent 的 `extensions` 白名单启用 |
 | **`apiVersion` 从第一天就有** | 装了几十个插件之后再补版本协商是灾难；今天是常量 `'1'`，不匹配整包跳过并可见 |
-| **不做热加载** | v1 = 启动时扫 + 安装时起会话；改了代码就 `pi-server restart`。热加载会让 worker 已经在跑的会话面临「半新半旧」 |
+| ~~不做热加载~~ **v1 已废弃** | v2 做了热加载，但只对 server facet 立即生效：`plugin reload`（不重启 server）+ cache bust + disposer 账本。worker / pi 扩展 facet 仍是"下次 spawn 生效"，避免半新半旧 |
 
 ## 2. 目录与 manifest
 
@@ -51,9 +59,9 @@
 
 | facet | 跑在哪 | 入口签名 | 能做什么 | 不能做什么 |
 |---|---|---|---|---|
-| `server` | 主进程 | `export function init(host: PluginServerHost)` | 注册菜单/页面/HTTP 端点/UI 槽位/工具卡片 | 直接碰 worker / DB / 会话 |
-| `worker` | session worker | `export function activate(ctx: { bridge: PluginWorkerBridge })` | 用 pi SDK 加工具/中间件、`bridge.emit` 上行 | 阻塞会话启动 |
-| `extension` | worker（作为 pi extension 装载） | `export default async function (pi, { bridge })` | **主力形态**：注册工具 / 工具拦截 / 读文件 | 无 `bridge` 时（未启用 bridged 模式）拿不到 `emit` |
+| `server` | 主进程 | `export default { init(host), dispose?() }` | 页面 / HTTP 端点 / 反向方法 / 表迁移 / UI 槽位 / 工具卡片 | 直接碰 worker / 会话 |
+| `worker` | session worker | `export default { init({ bridge }) }` | 正向方法注册、`bridge.emit` 上行 | 阻塞会话启动 |
+| `extension` | worker（作为 pi extension 装载） | `export default { init(pi, { bridge }) }` | **主力形态**：注册工具 / 命令 / 钩子 | 无 `bridge` 时拿不到 `emit` |
 | `web` | 浏览器（SPA 内） | `export function mount(el, host): () => void`（必须返回 dispose） | 在自己的 `el` 里渲染任意框架、`host.data.subscribe/emit`、`host.api.get/post` | 写全局 CSS / teleport 到 `el` 外 / flush 会话 |
 
 ```ts
@@ -70,6 +78,10 @@ export default async ({ bridge }) => ({
 **bridged mode**：extension facet 默认拿不到 `bridge`（pi 的 extension factory 只有 `pi` 参数）。平台的做法是给 `additionalExtensionPaths` 注入同目录的 **inline 包装模块**（导出 `extensionFactory`，内部 `await import('<插件真入口>')` 再把 `bridge` 塞进去）。代价是调用栈多一层，收益是**零改动复用 pi 扩展写法**。
 
 ## 4. 装载流程（启动时快照，会话时下发）
+
+> **v1 已废弃**：registry 的 facet 级开关（`entry.facets`）与 `installedAt` / `version` 字段已删除；
+> registry 现在只有 `{ id, dir, enabled }` + `removed`（墓碑），bundled 插件**不进 registry**（目录存在即生效）。
+> 详见 [插件运行期 v2 · 两个目录](pi-agent-server_plugins-runtime.md#两个目录bundled-与用户插件)。
 
 ```
 ~/.pi/server/plugins/registry.json        ← 安装事实（唯一事实源，pi 不参与）
@@ -111,6 +123,10 @@ export default async ({ bridge }) => ({
 - 下行落到插件**自己注册**的 `plugin.<id>.emit`；插件没注册该方法时返回 `unknown method`（`handled: false`），不是静默成功，也不影响会话
 
 ## 6. 运行期注册（唯一入口）
+
+> **v1 已废弃**：路由不再是精确匹配 —— 支持段级 `:param` 与末段 `*`，且**字面量优先于模式**；
+> `global.* / session.*` 双命名空间降级为兼容别名，主形态是 `host.ui.* / host.http / host.methods`；
+> 每个注册返回 disposer，由装载器按插件记账。
 
 界面与端点贡献**全部来自运行期注册**，没有声明式清单：
 

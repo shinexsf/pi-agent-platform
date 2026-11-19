@@ -1,324 +1,244 @@
-# 插件使用手册（写一个平台插件）
+# 插件作者契约（v2）
 
-> 面向**插件作者**。想知道为什么这样设计、内部怎么装载 → 看 [插件机制架构](pi-agent-server_plugins.md)。
-> 本文只讲：写出来、装进去、跑起来、出问题怎么查。
+> change: `plugin-mechanism-v2`。这份文档是**写给插件作者**的：目录怎么放、代码怎么写、产物长什么样、怎么自查。
+> 运行期的内部设计（装载器、账本、热加载）见 [插件运行期](pi-agent-server_plugins-runtime.md)。
 
 ## 0. 三十秒上手
 
-最小可用插件 = 一个目录 + 一个 `package.json` + 一个**注册脚本**（server 进程执行）+ 一个浏览器入口。
-
-```
-~/my-plugin/
-├── package.json
-└── web/
-    ├── index.js          # register(host)：在 server 进程里注册槽位
-    └── panel.js          # mount(el, host)：在浏览器里渲染
-```
-
-```json
-{
-  "name": "@me/hello",
-  "version": "0.0.1",
-  "type": "module",
-  "piServer": { "apiVersion": "1" }
-}
-```
-
-```js
-// web/index.js —— 跑在 server 进程里（不碰 DOM）
-export function register(host) {
-  host.session.surfaces.register({ id: 'hello', slot: 'chat.rail.right', entry: 'panel', title: 'Hello', icon: 'plug' });
-}
-```
-
-```js
-// web/panel.js —— 跑在浏览器里，不用构建、不用打包
+```bash
+# 一个最小插件：只提供一个配置页
+mkdir -p my-plugin/server && cd my-plugin
+cat > package.json <<'EOF'
+{ "name": "my-plugin", "version": "0.1.0", "type": "module", "piServer": { "apiVersion": "1" } }
+EOF
+cat > server/index.js <<'EOF'
+export default {
+  init(host) {
+    host.ui.page({ path: '/my-plugin', label: '我的插件', icon: 'plug', component: 'page' });
+  },
+};
+EOF
+mkdir -p web && cat > web/page.js <<'EOF'
 export function mount(el, host) {
-  el.innerHTML = '<div style="padding:12px">hello, 这是会话 ' + host.sessionId.slice(0, 8) + '</div>';
-  return () => { el.innerHTML = ''; };   // 清理：抽屉关闭时调用
+  el.innerHTML = '<h2>Hello</h2><p>这个页面由插件提供。</p>';
+  return () => { el.innerHTML = ''; };
 }
+EOF
+
+pi-server plugin check .      # 机械校验（会顺手写入类型声明）
+pi-server plugin add .        # 登记 + 触发装载
 ```
 
-安装并刷新页面：
+刷新浏览器：顶层导航多出「我的插件」，点进去就是 `web/page.js` 渲染的内容，URL 是 `/my-plugin`。
 
-```bash
-pi-server plugin add ~/my-plugin --enable
-```
-
-会话页右上角轨道出现按钮 → 点开抽屉就是你的面板。**注册是启动期一次性**：改 `register()` 需要重启 server；改 `mount()` 刷新页面即可。
-
-## 1. 目录与 manifest 参考
+## 1. 目录与 `package.json`
 
 ```
-~/.pi/server/plugins/<id>/          ← id 就是 package.json 的 name（@scope/name 有子目录）
-├── package.json
-├── server/index.js                 ← 可选：跑在主进程
-├── worker/index.js                 ← 可选：跑在 session worker 里（直接拿 SDK）
-├── extension/index.js              ← 可选：以 pi extension 身份装载（最常用）
-└── web/<entry>.js                  ← 可选：跑在浏览器
+my-plugin/
+├── package.json          ← 只放两行元数据（见下）
+├── server/               ← ① 装载点：目录存在即声明
+│   └── index.js          export default { init(host), dispose?() }
+├── worker/               ← ②
+│   └── index.js          同上
+├── extension/            ← ③
+│   └── index.js          export default { init(pi, host) }
+├── web/                  ← ④ 浏览器产物（原生 ESM）
+│   ├── page.js           export function mount(el, host)
+│   └── panel.js
+└── types/plugin-types/   ← `plugin check` 写入的 vendored 类型（不要手改、不要提交进 git）
 ```
 
-`piServer` 的全部字段（**只有安装事实与兼容性闸门，没有界面声明**）：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `apiVersion` | ✅ | 当前只能是 `"1"`。缺失或不匹配 → 整包跳过（`status: degraded`，原因可查） |
-| `requires.plugins` | — | `{ "包名": "semver range" }`。**只校验**：未安装、或该 agent 没在 `extensions` 里启用它 → 本插件不加载。**它绝不会帮用户开启依赖** |
-
-界面贡献（菜单、页面、槽位、工具卡片）与 HTTP 端点**全部在代码里注册**，见 2.4 / 4.x 节。
-
-**依赖 pi 插件时**，代码要 `import` 它，所以同样的包名必须出现在 `peerDependencies`（安装时不做真实解析，但它是契约的一部分）：
+`package.json` 只有两项是平台认的：
 
 ```json
 {
-  "peerDependencies": { "billion-context-pi": ">=1.0.0" },
-  "piServer": { "apiVersion": "1", "requires": { "plugins": { "billion-context-pi": ">=1.0.0" } } }
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "piServer": {
+    "apiVersion": "1",
+    "requires": { "plugins": { "some-pi-extension": "^1.0.0" } }
+  }
 }
 ```
 
-## 2. 四种 facet
-
-按**跑在哪**分，不是按功能分。四个都可以有，也可以只有一个。
-
-### 2.1 `web` —— 浏览器里的面板
-
-```js
-export function mount(el, host) { /* ... */ return dispose; }
-```
-
-`host` 提供（详见第 3 节）：`sessionId` · `data.subscribe` · `api.post` · `theme.get/subscribe` · `log`。
-
-规则：
-
-- 所有 DOM 必须落在 `el` 里面（**不许 teleport** 到 body 或别的容器）
-- **不许写全局 CSS**（`body {}`、`* {}`、`:root {}` 都算越界）；要配色就用 `host.theme` + 白名单变量
-- 返回的 `dispose` 在抽屉关闭/切换会话时调用；关闭顺序是「停推数据 → dispose() → 移除 el」
-
-### 2.2 `extension` —— 以 pi extension 身份加工具（主力形态）
-
-写法和原生 pi 扩展**完全一样**，只多一个可选的第二个参数 `{ bridge }`：
-
-```js
-// extension/index.js
-export default async function ({ bridge } = {}) {
-  return {
-    name: 'hello-tools',
-    factory: (pi) => ({
-      tool: () => ({
-        name: 'hello_ping',
-        description: 'Ping the platform UI',
-        parameters: { type: 'object', properties: {}, additionalProperties: false },
-        execute: async () => {
-          bridge?.emit('ping', { at: Date.now() });   // 推到浏览器面板
-          return { content: [{ type: 'text', text: 'pong' }] };
-        },
-      }),
-    }),
-  };
-}
-```
-
-> 平台在 `additionalExtensionPaths` 里注入一层 **inline 包装模块**给你塞 `bridge`：所以你既可以用标准 pi 扩展签名，也能拿到上行桥。代价只是调用栈多一层。
-> 注意：**没有启用 bridged 模式时 `bridge` 是 `undefined`**，用 `bridge?.emit` 保底。
-
-### 2.3 `worker` —— 直接跑在 session worker 里
-
-```js
-// worker/index.js
-// 入口是 `export default` 或 `export function activate(ctx)`，ctx = { bridge }
-export default function activate({ bridge }) {
-  // 注册本插件可被下行调用的方法：完整名 plugin.<本插件 id>.emit 由封装层拼
-  bridge.registerMethod?.('emit', async ({ name, data }) => {
-    if (name === 'ping') bridge.emit('pong', { got: data, at: Date.now() });
-    return { ok: true };
-  });
-  return () => {};   // 可选清理
-}
-```
-
-> **worker facet 拿不到 `pi` 实例**——它是"同进程的旁观者"，只能通过 `bridge` 收发。要挂 `pi.on(...)` 钩子或注册工具，用 `extension` facet。
-
-什么时候选 `worker` 而不是 `extension`：你需要不被 pi extension 装配顺序影响地持有长生命周期状态，并且只靠事件就能工作。
-
-### 2.4 `server` —— 主进程里的注册器（菜单 / 页面 / 端点 / 槽位 / 工具卡片）
-
-```js
-// server/index.js
-export function init(host) {                       // host.id / host.dir / host.log
-  host.global.menus.register({ id: 'demo', label: '演示页', page: 'about', order: 1050 });
-  host.global.pages.register({ id: 'about', title: '演示页', entry: 'page' });
-  host.global.routes.register({ method: 'GET', path: '/echo', handler: (c) => c.json({ ok: true }) });
-  host.session.surfaces.register({ id: 'hud', slot: 'chat.rail.right', title: 'HUD', icon: 'layers', entry: 'panel' });
-  host.session.toolCards.register({ tool: 'sendFileToUser', mode: 'replace', entry: 'card' });
-}
-```
-
-- **`init` 在 server 进程执行**（不是浏览器），因此不能碰 `document`/`window`；浏览器部分的代码放在 `web/` 里，由 `mount` 自己跑
-- **作用域写在 API 形状里**：`host.global.*`（菜单/页面/路由）与 `host.session.*`（槽位/工具卡片）；会话级注册项会带上 `sessionId` 下发
-- **注册是启动期一次性的**：改 `register()`/`init()` 需要重启 server；运行期只读
-- 注册失败（未知槽位、id 冲突、抛错、超时）不静默——进 `rejected` / `registerError`，在配置页「平台插件」详情里能看到原因
-
-## 2.5 三个入口的职责划分
-
-| 文件 | 导出 | 跑在哪 | 干什么 |
-|---|---|---|---|
-| `server/index.js` | `init(host)` | server 主进程 | 注册一切（菜单/页面/端点/槽位/卡片） |
-| `web/index.js` | `register(host)` | **也跑在 server** | 只注册 `web.surfaces` 类贡献（现等价于 `init` 里的 session.surfaces） |
-| `web/<entry>.js` | `mount(el, host)` | 浏览器 | 渲染自己的 DOM |
-
-`web/index.js` 的 `register` 与 `server/index.js` 的 `init` 拿到的是**同一个 host**（`id` / `dir` / `global` / `session` / `log`），区别只在**阶段**：`routes.register` 在 `register()` 阶段会被拒（"路由只能在 init(host) 里注册"），其余注册器两个阶段都能用。两者都有 **5 秒执行上限**，超时/抛错都会回收该插件的全部注册项（`rollbackPlugin`），避免"半个菜单 + registerError"的自相矛盾。
-
-## 3. 三个宿主 API 一览
-
-### `PluginWebHost`（web facet）
-
-| 成员 | 说明 |
+| 字段 | 语义 |
 |---|---|
-| `sessionId` | 只读会话 id |
-| `data.subscribe(fn)` | 收 worker/extension 侧 `bridge.emit` 的数据。**载荷是冻结的普通 JSON**（不是 Vue 响应式对象），要渲染自己转一层 |
-| `api.post(path, body)` | 调**你自己前缀**下的 REST（相对 `/api/p/<pluginId>/`）；未注册该路径 → 404 |
-| `theme.get()` / `theme.subscribe(fn)` | `'light' \| 'dark'`；配色只用白名单变量：`--bg` `--surface` `--fg` `--fg-dim` `--border` `--accent` `--ok` `--warn` `--err` |
-| `log(level, msg)` | 进平台日志（自动带 pluginId） |
+| `piServer.apiVersion` | 平台契约版本。**必须写在 `package.json`**（装载器要**不执行你的代码**就判掉不兼容的包） |
+| `piServer.requires.plugins` | 依赖的**pi 原生插件**（包名 → semver）。只做校验：未安装、或该 agent 没启用 → 你的插件不装载，平台**不会**替你勾选 |
 
-### `PluginWorkerBridge`（worker / extension facet）
+`piServer.facets` 这类声明式配置**已删除**：facet 由目录存在性表达，行为由代码默认导出表达。两者之外不设第三套真相。
 
-| 成员 | 说明 |
-|---|---|
-| `pluginId` | 只读 |
-| `emit(name, data)` | **上**行：worker → 浏览器。经 SSE 固定事件名 `plugin`，载荷 `{ pluginId, name, data }`。无回执、可丢、高频 |
-| `registerMethod(name, handler)` | **下**行：注册 `plugin.<本插件 id>.<name>`，由 master / 浏览器调用。**有回执、有顺序**；handler 收到一个 `params` 对象 |
-| `call(method, args?)` | 调反向方法（宿主 API），如 `call('plugin.im.sendFile', [{ filePath }])`。正向方法名（`prompt` 等）会得到 `unknown method` |
-| `log(level, msg, extra?)` | 进平台日志 |
+## 2. 装载点与默认导出
 
-> 选 `emit` 还是 `registerMethod`：**要回执、要顺序 → `registerMethod`；可丢、高频 → `emit`**。平台不在事件上叠回执。
-
-### 硬上限（超了会被截断/丢弃，记一条 warn）
-
-- 单条载荷 > **64 KiB** → 截断
-- 每会话每秒 > **100 条** → 丢弃
-- 日志**只记** pluginId / name / 字节数，不落原始载荷
-
-## 4. 槽位与 mount 协议
-
-| 槽位 | 位置 | 说明 |
-|---|---|---|
-| `chat.rail.right` | 会话页右上角 icon 轨道 | 每个面 → 一个按钮；点击展开该插件的抽屉，内容为 `web/<entry>.js` 的 `mount` |
+### 2.1 `server/index.js` —— 进程内注册（菜单 / 页面 / 端点 / 方法 / 迁移）
 
 ```js
-// server/index.js —— 注册
-host.session.surfaces.register({ id: 'hud', slot: 'chat.rail.right', title: 'HUD', icon: 'layers', entry: 'panel', order: 10 });
+export default {
+  init(host) {
+    // R1 页面：菜单与路由一次注册（菜单由路由推出，不要分别注册）
+    host.ui.page({ path: '/im/channels', label: 'IM 渠道', icon: 'chat', component: 'channels', order: 10 });
+
+    // R9 局部挂载点：槽位名只能取平台已定义的（当前仅 chat.rail.right）
+    host.ui.slot({ slot: 'chat.rail.right', id: 'my-panel', title: '我的面板', component: 'panel' });
+
+    // R10 工具卡接管
+    host.ui.toolCard({ tool: 'my_tool', mode: 'replace', entry: 'card' });
+
+    // R2 HTTP 端点：挂在 /api/p/<插件 id>/ 下
+    host.http.route({ method: 'GET', path: '/stats', handler: async (req) => ({ json: { ok: true } }) });
+    host.http.route({ method: 'POST', path: '/webhooks/*', handler: (req) => ({ json: { raw: req.path } }) });
+    host.http.route({ method: 'GET', path: '/item/:id', handler: (req) => ({ json: { id: req.params.id } }) });
+
+    // R3 反向方法：worker → 你（完整名 plugin.<你的 id>.<name> 由宿主拼）
+    host.methods.handle('sendFile', async ({ filePath }) => { /* ... */ });
+
+    // R4 表迁移（幂等；平台记台账，卸载时提示"留下的表"）
+    host.db.migrate('my_notes', 'CREATE TABLE IF NOT EXISTS my_notes (id TEXT PRIMARY KEY, body TEXT)');
+  },
+
+  // 可选：平台不等待、不重试、不校验结果。定时器 / 长连接自己清。
+  dispose() { clearInterval(myTimer); },
+};
 ```
 
-- 资产由 server 同源托管：`GET /plugins/<id>/web/<file>`。插件自己 import 的第三方库要么用 CDN，要么装进插件目录的 `node_modules`（`plugin add` 会原样复制）
-- 路径穿越与扩展名白名单双向校验；`id` 从 registry 的 `dir` 解析（不是字符串拼接）
-- **一个槽位就是一个入口**：按钮由宿主渲染，抽屉内容是同一 `entry` 的 `mount(el, host)`；插件不需要为抽屉再声明一次槽位（`el.dataset.slot` 恒为 `'chat.rail.right'`）
-- 未知槽位名会被拒（进 `rejected`），不会静默丢弃
-- 宿主给你的 `el` 上是 `div.plugin-surface`，带 `data-plugin-id` 与 `data-slot`；这就是你全部能碰的外部状态
-
-## 4.5 页面、菜单与 HTTP 端点
+### 2.2 `worker/index.js` —— 会话进程内（正向方法）
 
 ```js
-host.global.menus.register({ id: 'demo', label: '演示页', page: 'about', order: 1050 });   // 出现左侧导航
-host.global.pages.register({ id: 'about', title: '演示页', entry: 'page' });              // 路由 /plugin-page/<id>/about
-host.global.routes.register({ method: 'GET', path: '/echo', handler: (c) => c.json({ ok: true }) });  // → /api/p/<id>/echo
+export default {
+  init({ bridge }) {
+    // R5 正向方法：master 或浏览器可以通过 sessions.call(会话, 'plugin.<id>.scan', args) 调到你
+    bridge.registerMethod?.('scan', async (params) => ({ scanned: params }));
+    bridge.emit('ready', { at: Date.now() });          // 上行事件（无回执，可丢）
+    bridge.call?.('plugin.notifications.post', [{...}]); // 调反向方法
+  },
+};
 ```
 
-- 菜单项必须有对应 `page`；没有会进 `rejected`
-- 页面路由是**平台 router 里的一条静态路径**（`/plugin-page/:pluginId/:pageId`），`entry` 指向 `web/<entry>.js`
-- 端点挂在 `/api/p/<id>/` 下，由启动时注册的**唯一一条分发器**承载（Hono 路由表首次请求后冻结，不能在运行期追加）；`c.req.path` 已剥离前缀
-- 端点没有鉴权（与平台其它 REST 一致）
-
-## 4.6 工具卡片
+### 2.3 `extension/index.js` —— 以 pi 扩展身份（工具 / 命令 / 钩子）
 
 ```js
-host.session.toolCards.register({ tool: 'sendFileToUser', mode: 'replace', entry: 'card' });
-host.session.toolCards.register({ tool: 'mcp__rea__', match: 'prefix', mode: 'regions', regions: { footer: 'foot' }, entry: 'foot' });
+export default {
+  async init(pi, { bridge }) {
+    pi.registerTool({
+      name: 'my_tool',
+      label: 'My Tool',
+      description: '...',
+      parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+      execute: async (_id, { text }) => ({ content: [{ type: 'text', text }] }),
+    });
+    pi.registerCommand?.('my-cmd', { handler: async () => 'ok' });
+    pi.on?.('session_start', () => {});
+  },
+};
 ```
 
-| `mode` | 你负责 | 平台负责 |
+### 2.4 `web/*.js` —— 浏览器组件
+
+```js
+export function mount(el, host) {
+  const title = document.createElement('h2');
+  title.textContent = `plugin ${host.pluginId}`;
+  el.append(title);
+
+  const off = host.data.subscribe(({ name, data }) => { /* worker 上行事件 */ });
+  host.api.get('/stats').then((v) => console.log(v));
+
+  return () => { off(); el.replaceChildren(); };   // 必须返回清理函数
+}
+```
+
+**硬约束**：
+
+- 产物必须是**原生 ESM**，且**不含裸说明符**（浏览器没有 import map，`import 'vue'` 只会在挂载时失败）
+- 不得 import node 内建；不得写全局 CSS 选择器、不得 teleport 到 `el` 之外
+- 所有 DOM 落在 `el` 之内；边界两侧只交换普通 JSON / 回调 / DOM 节点
+- 想用框架可以自带运行时，但**不要 bundle 一份宿主已有的框架副本**（两边不共享实例）
+
+## 3. 宿主能力面（`host`）
+
+| 面 | 能用在哪 | 方法 |
 |---|---|---|
-| `replace` | 整张卡片（含头部） | 容器与错误降级 |
-| `regions` | 声明的区域（`header`/`body`/`footer`） | 其余区域、折叠/展开交互 |
+| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` |
+| `agents` | 全部 | `list` · `get` · `update(id, patch)` |
+| `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
+| `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` |
+| `events` | **仅 worker** | `emit(name, data)`（server 侧本期未接通，调用会 warn） |
+| `ui` | 仅 server | `page` · `slot` · `toolCard` |
+| `http` | 仅 server | `route({ method, path, handler })` |
+| `methods` | server / worker | `handle(name, fn)` |
 
-`mount` 的 `host` 额外有 `call`（冻结快照：`toolName`/`args`/`result`/`isError`/`images`/`durationMs`）与 `subscribe`（流式更新）；可用 `host.ui.toolCardShell()` 复用平台头部与折叠。
+- 每个注册 / 订阅都返回**退订函数**（平台卸载时也会统一撤，但你自己的资源要自己清）
+- `sessions.call` 是唯一调用口：`prompt` / `abort` 这类平台方法与插件正向方法形状相同；**`sessionId` 永远由你给**（平台不提供"选会话"）
+- 除 `db.migrate` 建表之外，别碰平台表
 
-## 5. 会话维度：谁能看到你的插件
-
-两层语义，别混：
-
-| 层 | 谁决定 | 效果 |
-|---|---|---|
-| **全局开关** | `registry.json` 的 `enabled` / `facets.*`（CLI `enable` / `disable`） | 关掉 → 任何会话都不加载 |
-| **会话闸门** | 该会话 agent 的 `extensions` 白名单 × 你声明的 `requires.plugins` | 依赖没启用 → **这个会话**不加载你，`reason: 依赖未启用: xxx` |
-
-浏览器侧槽位是**按会话拉取**的（`GET /api/sessions/:id/plugins`），所以：会话 A 的 agent 启用依赖 → 图标在；会话 B 没启用 → 图标不出现。这不是前端隐藏，是服务端根本不下发。
-
-## 6. 调试手册
+## 4. 类型：vendored 文件，不走 npm
 
 ```bash
-pi-server plugin list                 # id / version / status / facets / 失败原因
-pi-server plugin list --json
-pi-server plugin enable|disable <id>
-pi-server plugin remove <id> [--purge]   # --purge 同时删目录
-pi-server plugin add ./pkg --enable      # 复制目录 + 写 registry
+pi-server plugin check .     # 写入 types/plugin-types/{index.d.ts,web.d.ts,tsconfig.hint.json}
 ```
 
-| 现象 | 先看这里 |
+作者的 `tsconfig.json`：
+
+```json
+{ "compilerOptions": { "paths": { "@pi-agent-platform/plugin-types": ["./types/plugin-types/index.d.ts"] } } }
+```
+
+写法：
+
+```ts
+import type { PluginDefinition } from '@pi-agent-platform/plugin-types';
+export default { init(host) { /* ... */ } } satisfies PluginDefinition;
+```
+
+为什么不用 `peerDependencies`：`@pi-agent-platform/plugin-types` 是 private 包，不在 npm registry 上 —— `npm i` 必然失败。类型以**文件**交付，文件里带版本常量，`plugin check` 会与平台版本比对（防止你照着过期类型写）。
+
+`plugin-types` 是 **types-only**：它没有任何运行期导出。产物里出现 `import '@pi-agent-platform/plugin-types'`（非 `import type`）会被 `plugin check` 拒绝。
+
+## 5. 自查与调试
+
+```bash
+pi-server plugin check <dir>     # 入口存在 / ESM / 说明符 / web 产物 / 类型版本
+pi-server plugin list            # id / version / source(bundled|user) / status / facets / dir
+pi-server plugin reload          # 让运行中的 server 重装插件（不重启）
+pi-server plugin disable <id>    # 停用（保留数据）
+pi-server plugin remove <id>     # 卸载（bundled 写墓碑；用户插件删登记，--purge 才删目录）
+```
+
+REST：
+
+| 端点 | 看什么 |
 |---|---|
-| 图标没出现 | `GET /api/sessions/<id>/plugins` 里有没有它 → 没有就是闸门拦了（看 `reason`）；有但不显示 → 前端槽位挂载失败，看浏览器 console |
-| `status: degraded` | `GET /api/plugins` 的 `reason`：`apiVersion` 不对 / 目录缺 `package.json#piServer.apiVersion` / facet 声明了但缺入口文件 |
-| 抽屉报「插件加载失败」 | web 入口 404 或 `mount` 抛异常；`/plugins/<id>/web/<entry>.js` 手动打开试试 |
-| 面板收不到数据 | `bridge.emit` 是否真的调用（worker 日志）；下行处理器是否用 `registerMethod('emit', …)` 注册；检查 64 KiB / 100fps 上限 |
-| 改了代码不生效 | v1 **没有热加载**：`pi-server restart`。web 侧刷新页面即可 |
-| 想看每个会话的闸门解释 | `GET /debug/sessions/<id>`（dev 模式）→ `plugins[]` 每条的 `issues[].reason` |
+| `GET /api/plugins` | 所有插件的状态、facet 探测结果 |
+| `GET /api/plugins/:id/extensions` | 你注册了什么，**以及被拒了什么**（`rejected` 带原因） |
+| `GET /api/extensions` | 全局页面（已带导航字段） |
+| `GET /api/sessions/:id/extensions` | 该会话的槽位 / 工具卡 |
+| `GET /api/p/<id>/...` | 你自己的端点 |
 
-**坏插件不会拖垮别人**：`mount` 抛错只影响自己那个槽位（抽屉里显示失败原因 + 一条 console 错误）；extension/worker facet 抛错会记 `facet failed to load (session continues)`，会话照跑。
+生效时机：**server facet 立即**（`plugin reload` 或 registry 变化）；**worker / pi 扩展等下次 spawn**；**浏览器刷新**。
 
-### 6.1 用配置页「平台插件」看自己提供了什么
+## 6. 打包与分发
 
-`配置 → 平台插件`（`/config/plugins`）是自查第一站，**只读**：
+- **第三方**：自己编译 web 产物（平台不替你编译），发布 `.js`
+- **随包（bundled）**：仓库 `platform/plugins/<id>/web/src/*.ts`，`pnpm build:plugins` 编译成 `web/*.js`；`check-packaged` 会断言产物存在
+- 安装：本地目录 → `pi-server plugin add <dir>`；**没有**网页安装入口
 
-- **列表**：`id / 版本 / status / 描述 / 扩展点徽标 / 依赖摘要`。扩展点徽标有四态：`✓`（会执行）、`已关`（开关关掉）、`入口缺失`（目录在、入口文件没了）、`未装载`（平台没实现，如 `server`）、`未登记`（目录在但 registry 没登记）
-- **详情**：扩展点四态表（声明 / 开关 / 入口路径 / 是否装载）；依赖的 pi 插件三态（`✓ 已安装` / `✗ 未安装` / `? 未知`）；`web` 槽位表；底部等价 CLI 命令
+## 7. 已知坑
 
-排查思路：
-
-| 你在页面上看到 | 说明 | 怎么办 |
-|---|---|---|
-| 插件根本没出现 | registry 里没有它（`orphan` 会显示但标"未登记"） | `pi-server plugin add ./pkg --enable` |
-| `worker 入口缺失` | 目录有、`worker/index.js` 没有（或只编到了 `dist/` 下且路径对不上） | 补齐入口文件；期望路径在详情里 |
-| `server 未装载` | 已装载（`init(host)`）；若仍显示未装载，看 `registerError` | 检查 `server/index.js` 是否导出 `init` 或 default 函数 |
-| 依赖 `✗ 未安装` | pi 侧没有这个插件，会话闸门会拦 | `pi install <pkg>` 并把它加进 agent 的 `extensions` |
-| 依赖 `? 未知` | `~/.pi/agent/settings.json` 读不出来 | 查权限/JSON 语法 |
-| `status: active` 但会话里没效果 | `active` 只代表静态检查通过 | 去 `GET /debug/sessions/<id>` 看 `plugins[].reason` |
-
-## 7. 打包与分发
-
-- 纯 JS 即可，**不需要构建**；需要 TS 就自己先编成 `web/*.js`、`*/index.js`
-- 装到别的机器：`pi-server plugin add <目录>`；跨机器分发用目录打包（tgz/zip）后解压再 add
-- `pi-server plugin add <npm 包名>` 走 `npm pack`，在部分 Node 版本上会因类型剥离限制失败——**先本地 npm install 再 add 目录**更稳
-- 打包态（容器/正式包）里插件目录是 `~/.pi/server/plugins/`，与 dev 共用同一套路径
-
-## 8. 已知坑（踩过的）
-
-| 坑 | 说明 |
+| 症状 | 原因 |
 |---|---|
-| `entry` 与文件名不符 | `entry: "panel"` 必须对应 `web/panel.js`，写成 `web/panel/index.js` 不行 |
-| 在 `mount` 外缓存 `el` | 抽屉关闭会换元素；不要在模块级存 DOM 引用 |
-| 用全局事件总线通信 | 禁止（不变量 5）；插件之间要走平台事件或各自 `api` |
-| 在 extension facet 里 import 别的 pi 插件 | 用 `requires.plugins` 声明依赖，别去 `node_modules` 里 direct import——那是平台负责解析的 |
-| 指望 `requires.plugins` 会「顺手启用」依赖 | 不会。依赖必须在该 agent 的 `extensions` 里，否则插件不加载 |
-| 面板数据带不进压缩后的历史 | 若你需要「压缩后的投影」，必须自己读压缩块（例如 sidecar）；平台不下发加工后的历史 |
-| `PI_PLUGINS=off` | 应急开关：registry 仍可读，所有插件 `status: disabled`，平台自身功能不受影响 |
+| 插件列表里没有、也没有报错 | 用户插件必须登记（`plugin add`）；bundled 靠目录存在，落在错误的 `PI_SERVER_BUNDLED_PLUGINS_DIR` 下就不会被扫到 |
+| `degraded`：`apiVersion` 不匹配 | `package.json` 的 `piServer.apiVersion` 与平台不一致（版本号写对了才能被装载） |
+| 注册项进了 `rejected` | 重名 / 未定义槽位 / `*` 位置不合法 / web 入口文件不存在 —— 原因字段写清了 |
+| 改了代码没生效 | 插件**代码**变化不会被文件监听捕获，跑 `pi-server plugin reload`；worker/pi 扩展还要等下次 spawn |
+| 页面白屏、导航有项 | web 产物 404：检查 `web/<component>.js` 是否真的存在（`plugin check` 会红） |
+| 顶层注册导致整个插件被拒 | `import()` 后平台断言"注册增量为 0"，注册只能发生在 `init()` 里 |
 
-## 9. 完整参考示例
+## 8. 完整参考
 
-仓库里 `plugins/` 是**本地**插件区（gitignored），验证插件机制时用的三个真实例子：
+随包示例（`plugin add` 直接可用）：
 
-| 插件 | 位置 | 演示什么 |
-|---|---|---|
-| `@probe/hud-demo` | `~/.pi/server/plugins/`（本机） | 最小四件套：rail + drawer + worker `registerMethod('emit')` 回显 + extension 加工具 |
-| `@probe/hud-pack` | 同上 | 打包态（容器里）下的同一形态 |
-| `@platform/session-projection` | 仓库 `plugins/session-projection/` | 真实场景：extension facet 用 `pi.on('context')` 抓发给模型的消息数组，web facet 按序渲染成「messages 视图」 |
+- `apps/pi-agent-server/skills/builtin/pi-plugin-authoring/examples/hello-plugin` —— 最小集（server + web）
+- `apps/pi-agent-server/skills/builtin/pi-plugin-authoring/examples/kitchen-sink` —— 四类 facet 全景
 
-`@platform/session-projection` 是照着本手册写出来的，可以直接当模板抄。
+平台自带的 inline 插件（`callServer`）见 `workers/session-worker/src/inline-plugins.ts`：它演示了"声明 → 白名单过滤 → 注入"的完整形状，也是"实现方在平台代码里"时的写法。
