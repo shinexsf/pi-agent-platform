@@ -44,11 +44,13 @@ node_modules/
 /nul
 /pi-agent-idea/.kotlin/
 
-# 本机自用插件开发目录（非 bundled，只对本机 pi-server 生效；不进代码库、不进 tgz）
+# 本机自用插件（非 bundled）：只对**打包实例**（pi-server start）生效；不进代码库、不进 tgz
 # 布局与命令见 plugins/README.md；脚手架复制自 _template/
+# 对照：dev 专用插件 → /platform/.dev-data/plugins/；装载器坏插件 fixture → /test-workspace/demo-plugins/
 /plugins/
 
-# dev 专用数据目录（插件 registry / 隔离配置），与已安装实例分开
+# dev 专用数据目录：dev 实例的注册表与**用户插件库**（plugins/），与已安装实例完全分开
+# 清空它 = 把 dev 插件与配置一次归零（`rm -rf platform/.dev-data`）
 /platform/.dev-data/
 
 # bundled 插件的 web 产物（由 pnpm build:plugins 生成，源码在 web/src/*.ts）
