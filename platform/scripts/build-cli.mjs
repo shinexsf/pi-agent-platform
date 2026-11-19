@@ -23,7 +23,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -41,6 +41,8 @@ const SERVER_SKILLS = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'skills
 const WORKER_DIST = path.join(PLATFORM_DIR, 'workers', 'session-worker', 'dist');
 const CHANNELS_DIR = path.join(PLATFORM_DIR, 'channels');
 const MANIFEST = path.join(CHANNELS_DIR, 'manifest.json');
+/** bundled 插件：目录存在即生效，随包分发（不进 registry）。 */
+const BUNDLED_PLUGINS_DIR = path.join(PLATFORM_DIR, 'plugins');
 
 function log(msg) {
   process.stdout.write(`[build-cli] ${msg}\n`);
@@ -286,6 +288,42 @@ async function main() {
   }
   // Note: channels/shared/ is copied separately in step 3 and already lives at
   // <CLI_DIST>/server/channels/shared/.
+
+  log('step 8b/10: build bundled plugin web facets + copy plugins to cli/dist/server/plugins');
+  // web facet 的 TS 源码要编译成浏览器可直接加载的 ESM（平台只替**随包**插件编译）。
+  await run('node', [path.join(PLATFORM_DIR, 'scripts', 'build-plugins.mjs')], { cwd: PLATFORM_DIR });
+  const pluginsOut = path.join(CLI_DIST, 'server', 'plugins');
+  if (existsSync(BUNDLED_PLUGINS_DIR)) {
+    cpSync(BUNDLED_PLUGINS_DIR, pluginsOut, {
+      recursive: true,
+      // 只带运行期需要的东西：web/src 是源（产物已在 web/*.js），node_modules 是开发残留。
+      filter: (srcPath) => {
+        const segments = srcPath.split(/[\\/]/);
+        if (segments.includes('node_modules')) return false;
+        if (segments.includes('src')) return false;
+        return !/\.(ts|map)$/.test(srcPath);
+      },
+    });
+    log(`  copied ${BUNDLED_PLUGINS_DIR} → ${pluginsOut}`);
+  } else {
+    log('  no bundled plugins directory — skipped');
+  }
+
+  log('step 8c/10: copy plugin-types .d.ts (vendored delivery for `plugin check`)');
+  // `plugin-types` 是 types-only 包（不在 RUNTIME_PACKAGES 里），但 `plugin check` 要
+  // 把类型写进插件目录，所以声明文件必须随 CLI 分发。
+  const typesSrc = path.join(PLATFORM_DIR, 'packages', 'plugin-types', 'dist');
+  const typesOut = path.join(CLI_DIST, 'server', 'plugin-types');
+  if (existsSync(typesSrc)) {
+    mkdirSync(typesOut, { recursive: true });
+    for (const name of readdirSync(typesSrc)) {
+      if (name.endsWith('.d.ts')) cpSync(path.join(typesSrc, name), path.join(typesOut, name));
+    }
+    log(`  copied .d.ts → ${typesOut}`);
+  } else {
+    process.stderr.write('[build-cli] plugin-types dist missing — run `pnpm --filter @pi-agent-platform/plugin-types build`\n');
+    process.exit(1);
+  }
 
   log('step 9/10: scan channels package.json deps and merge into cli/package.json');
   const cliPkgPath = path.join(CLI_DIR, 'package.json');

@@ -1,7 +1,7 @@
 /**
  * extension facet —— 作为 **pi 扩展** 在 worker 进程里装载。
  *
- * 入口签名：默认导出 async (pi, { bridge }) => { ... }
+ * 入口：`export default { async init(pi, { bridge }) { ... } }`（与其它 facet 同形）
  *   pi     —— pi 的 ExtensionAPI（registerTool / registerCommand / on(...) 等）
  *   bridge —— 与 worker facet 相同的上行桥（可用于把工具进度推给浏览器）
  *
@@ -9,7 +9,8 @@
  * 加载失败只隔离自己（会话继续），所以别在顶层抛错。
  */
 
-export default async function extension(pi, { bridge }) {
+export default {
+  async init(pi, { bridge }) {
   // 注册一个工具（参数用 JSON Schema；pi 内部按 TypeBox 形状消费）
   pi.registerTool({
     name: 'demo_echo',
@@ -33,4 +34,5 @@ export default async function extension(pi, { bridge }) {
   });
 
   bridge.log('info', 'extension facet registered demo_echo');
-}
+  },
+};

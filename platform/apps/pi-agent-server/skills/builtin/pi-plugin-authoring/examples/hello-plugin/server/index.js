@@ -1,11 +1,13 @@
 /**
  * server facet —— 在主进程里执行。
  *
- * 唯一入口：默认导出 init(host)。所有注册都必须发生在这里（路由表首次请求后冻结）。
+ * 唯一入口：`export default { init(host) }`（纯对象；顶层零副作用）。
+ * 所有注册都必须发生在 `init()` 里（路由表首次请求后冻结）。
  * 这个文件演示最小集：一个配置二级菜单项 + 一个页面 + 一个 GET 端点。
  */
 
-export function init(host) {
+export default {
+  init(host) {
   // 1) 菜单：parent: 'config' 挂到「配置」二级；order 小者靠前
   host.global.menus.register({
     id: 'hello',
@@ -31,4 +33,5 @@ export function init(host) {
 
   // 4) 日志进平台日志（自动带 pluginId）
   host.log('info', 'hello-plugin registered');
-}
+  },
+};

@@ -73,6 +73,7 @@ async function main() {
     agentDir: config.agentDir,
     attachmentsDir: config.attachmentsDir,
     pluginsDir: config.pluginsDir,
+    bundledPluginsDir: config.bundledPluginsDir,
     serverBuiltinSkillsDir: config.serverBuiltinSkillsDir,
     mcpConfigPath: config.mcpConfigPath,
     workerStartupTimeoutMs: config.workerStartupTimeoutMs,
@@ -98,8 +99,8 @@ async function main() {
   // and server-side failures are its only callers.
   const notifier = createNotifier({ notificationRepo });
 
-  // 插件与内核之间唯一稳定缝（六个面）；形状在内核，实现在入口。
-  const hostApi = createHostApi({ raw, sessionRepo, workerPool });
+  // 插件与内核之间唯一稳定缝（四个能力面）；形状在内核，实现在入口。
+  const hostApi = createHostApi({ raw, sessionRepo, workerPool, agentRepo });
   logger.info({ faces: Object.keys(hostApi) }, 'host api ready');
 
   // 装配交给工厂（可被别的进程内嵌），启动器只负责 listen / 信号。
@@ -114,6 +115,7 @@ async function main() {
     attachmentStore,
     notifier,
     workerPool,
+    hostApi,
   });
 
   // Start HTTP server (after all routes mounted)

@@ -1,28 +1,71 @@
 /**
  * 宿主 API surface —— 插件与内核之间的**唯一稳定缝**。
  *
- * 为什么需要它：插件最终要访问内核（建会话、读写自己的表、注册反向方法、发事件），
+ * 为什么需要它：插件最终要访问内核（读会话、建自己的表、改 agent 配置、订阅生命周期），
  * 但它们不能 import 内核内部模块 —— 那样每次内核重构都会打断插件，且插件间可以互相
- * 穿透。把能力收敛成六个面之后，内核内部怎么改都不影响插件契约。
+ * 穿透。把能力收敛成四个面之后，内核内部怎么改都不影响插件契约。
  *
- * 为什么是六个：每个面回答一类问题，且缺一个插件就得自己造轮子。
+ * 为什么是四个（change: plugin-mechanism-v2 / D2）：
+ * - 旧 `web` 面（`assetBasePath`）本质是"入口怎么托管资源"，属 HTTP 接入层，内核不该知道
+ * - 旧 `events` 面只有一个 `maxPayloadBytes` 常量，是出口限流参数，不构成能力；
+ *   插件侧的 `events.emit` 在入口/worker 侧实现
+ * - 旧 `outbound` 面是"反向方法注册"，属**注册面**而非能力面，归装载器内部
+ * - 新增 `agents`：插件要维护自己的配置块就得读写 agent
+ *
  * 只声明形状，实现在组合根完成（内核不替入口决定"暴露到什么程度"）。
+ * `WorkerPool` 明确**不作为面暴露**：暴露 = 插件能决定杀进程/超卖并发；
+ * 需要"活跃会话"信息的地方用 `sessions.list/status`。
  */
 
+import type { AgentDTO } from '@pi-agent-platform/shared-types';
 import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
 
-/** 模块自带表的迁移入口（内核只建内核对象的表）。 */
+/** 数据面：迁移登记 + 查询。读写都开放（插件完全可信，每次 query 进审计日志）。 */
 export interface HostDbApi {
-  /** 执行一段幂等 DDL / 迁移。 */
-  executeMigration(name: string, ddl: string): void;
+  /**
+   * 执行一段幂等 DDL 并**登记表归属**（卸载时用于提示"留下的表"）。
+   *
+   * 内核只建内核对象的表（agents / sessions / attachments），模块与插件的表自己建。
+   */
+  migrate(name: string, ddl: string): void;
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): T[];
 }
 
-/** 会话生命周期与会话级订阅。 */
+/** 会话摘要（比 DTO 小：插件只需要"有哪些会话、什么状态"）。 */
+export interface HostSessionSummary {
+  id: string;
+  agentId?: string;
+  /** `missing` = 无运行态对象；`idle` / `running` 来自会话运行态。 */
+  status: string;
+  /** 是否已有 DB 行（placeholder 为 false）。 */
+  hasRow: boolean;
+}
+
+/** 会话能力面 —— 插件对"某个会话做一件事"的唯一入口。 */
 export interface HostSessionsApi {
+  /**
+   * 调一个方法。`prompt` / `abort` 这类平台方法名前带 `plugin.<id>.` 的是插件自己的。
+   *
+   * `sessionId` **永远由调用方给**：宿主不提供"选会话"语义，会话映射归插件自己维护。
+   * 注意：这条路径是**裸 worker 方法调用**，不过 prompt-resolver（斜杠命令 / 附件占位符）。
+   */
+  call<T = unknown>(sessionId: string, method: string, args?: unknown[]): Promise<T>;
+  get(sessionId: string): HostSessionSummary | null;
+  list(): HostSessionSummary[];
+  /** `missing` / `idle` / `running`。 */
+  status(sessionId: string): string;
   /** 该会话是否存在 DB 行。 */
   hasRow(sessionId: string): boolean;
   /** 订阅某个会话的原生事件流；返回幂等退订。 */
   subscribe(sessionId: string, listener: (event: WorkerEvent) => void, onDispose?: (reason: string) => void): () => void;
+}
+
+/** agent 配置能力面。 */
+export interface HostAgentsApi {
+  list(): AgentDTO[];
+  get(agentId: string): AgentDTO | null;
+  /** 部分更新（`id` / `createdAt` 不可改）。不存在时抛错。 */
+  update(agentId: string, patch: Partial<Omit<AgentDTO, 'id' | 'createdAt'>>): void;
 }
 
 /** 生命周期钩子（会话创建 / 终结）。 */
@@ -31,33 +74,10 @@ export interface HostLifecycleApi {
   onSessionDisposed(hook: (sessionId: string, reason: string) => void): () => void;
 }
 
-/** 反向方法注册（worker → 宿主）。 */
-export interface HostOutboundApi {
-  registerService(
-    source: `plugin:${string}`,
-    kind: 'plugin',
-    handlers: Record<string, (sessionId: string, args: unknown[]) => Promise<unknown>>,
-  ): void;
-}
-
-/** 插件事件的上行约束（大小 / 频率由入口侧执行，内核只给出口）。 */
-export interface HostEventsApi {
-  /** 单条插件事件的载荷上限（字节）。 */
-  readonly maxPayloadBytes: number;
-}
-
-/** 界面挂载能力：内核只存数据，不做 HTTP。 */
-export interface HostWebApi {
-  /** 插件 web 资源的同源前缀（由入口决定怎么托管）。 */
-  assetBasePath(pluginId: string): string;
-}
-
-/** 插件拿到的宿主 API。 */
+/** 插件拿到的宿主 API（四个能力面）。 */
 export interface HostApi {
   readonly db: HostDbApi;
   readonly sessions: HostSessionsApi;
+  readonly agents: HostAgentsApi;
   readonly lifecycle: HostLifecycleApi;
-  readonly outbound: HostOutboundApi;
-  readonly events: HostEventsApi;
-  readonly web: HostWebApi;
 }

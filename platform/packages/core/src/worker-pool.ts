@@ -501,6 +501,9 @@ export class WorkerPool extends EventEmitter {
     opts: ReverseServiceOptions,
     handlers: Record<string, ReverseCallHandler>,
   ): void {
+    // 整块替换：重载时同一 source 会重新注册同名方法，而注册表对重名是**硬拒**的。
+    // 先撤掉旧的一组，才能让插件在 reload 后改变自己的方法集合（去掉的不会残留）。
+    const replaced = this.reverseRegistry.unregisterBySource(source);
     // Wrap the sessionId-aware handler into the registry's opaque-ctx shape.
     const wrapped: Record<string, IpcHandler> = {};
     for (const [name, handler] of Object.entries(handlers)) {
@@ -516,7 +519,7 @@ export class WorkerPool extends EventEmitter {
       process.stderr.write(`[server] reverse method registration rejected: ${JSON.stringify(rejected)}\n`);
     }
     process.stderr.write(
-      `[server] reverse service registered source=${source} methods=[${entries.map((e) => e.name).join(', ')}]\n`,
+      `[server] reverse service registered source=${source} replaced=${replaced} methods=[${entries.map((e) => e.name).join(', ')}]\n`,
     );
   }
 

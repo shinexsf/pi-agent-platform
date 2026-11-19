@@ -1,30 +1,24 @@
 /**
- * 插件注册的一级菜单（响应式缓存）。
+ * @deprecated 已被 `plugins/pages.ts` 取代（change: plugin-mechanism-v2 / D10）。
  *
- * 为什么单独一个模块：`nav-tree` 是 `computed`，而插件菜单来自运行时 HTTP，
- * 不是路由表——所以需要一个自己的 `shallowRef` 让依赖能重建。
+ * 现在只有一份数据：`ui.page({ path, label, icon, component })` 一次注册同时产生
+ * 页面与菜单，`/api/extensions` 的 `pages` 已带导航字段。这个文件保留一个版本，
+ * 只为让仓内外还引用 `pluginMenus` / `pluginPagePath` 的代码不立刻断。
+ *
+ * 迁移：`pluginMenus` → `navPages()`（`plugins/pages.ts`）；`refreshPluginMenus()` →
+ * `refreshPluginPages()`；`pluginPagePath(menu)` → `pluginPagePath(page)`。
  */
 
-import { shallowRef, type ShallowRef } from 'vue';
-import type { WithPlugin } from '@pi-agent-platform/api-types';
-import type { MenuRegistration } from '@pi-agent-platform/plugin-types';
-import { listPluginMenus } from './host';
+import type { RegistryPageDTO } from '@pi-agent-platform/api-types';
+import { navPages, pluginPagePath, refreshPluginPages } from './pages';
 
-const menus: ShallowRef<Array<WithPlugin<MenuRegistration>>> = shallowRef([]);
-
-export const pluginMenus = menus;
-
-/** 拉一次注册表（应用启动、插件启停后调用）。失败时清空，不让导航崩。 */
-export async function refreshPluginMenus(): Promise<void> {
-  try {
-    menus.value = await listPluginMenus();
-  } catch (err) {
-    console.warn('[plugin] refresh menus failed', err);
-    menus.value = [];
-  }
+/** @deprecated 用 `navPages()`。 */
+export function listNavPages(): RegistryPageDTO[] {
+  return navPages();
 }
 
-/** 插件页的路径（菜单点击目标）。 */
-export function pluginPagePath(menu: { pluginId: string; page: string }): string {
-  return `/plugin-page/${encodeURIComponent(menu.pluginId)}/${encodeURIComponent(menu.page)}`;
-}
+/** @deprecated 用 `refreshPluginPages()`。 */
+export const refreshPluginMenus = refreshPluginPages;
+
+/** @deprecated 用 `plugins/pages.ts` 的 `pluginPagePath(page)`。 */
+export { pluginPagePath };

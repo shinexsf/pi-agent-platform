@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
- * 插件页面（`/plugin-page/:pluginId/:pageId`）。
+ * 插件页面。
  *
- * 菜单不直接进 Vue Router（路由表运行期变化不触发 nav-tree 重算），
- * 所以所有插件页共用这一条静态路由，由参数决定渲染谁。
+ * 两种入口：
+ * - 插件声明了自己的 `path`（`/probe`）→ 运行期 `router.addRoute` 登记，参数在 `meta`
+ * - 旧式插件没有 `path` → 落到静态路由 `/plugin-page/:pluginId/:pageId`
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -19,13 +20,13 @@ async function load(): Promise<void> {
   const el = hostEl.value;
   if (!el) return;
   el.innerHTML = '';
-  const pluginId = String(route.params.pluginId ?? '');
-  const pageId = String(route.params.pageId ?? '');
+  const pluginId = String(route.meta.pluginId ?? route.params.pluginId ?? '');
+  const pageId = String(route.meta.pageId ?? route.params.pageId ?? '');
   unmount = await mountPluginPage(el, pluginId, pageId);
 }
 
 onMounted(load);
-watch(() => [route.params.pluginId, route.params.pageId], load);
+watch(() => [route.meta.pluginId ?? route.params.pluginId, route.meta.pageId ?? route.params.pageId], load);
 onBeforeUnmount(() => {
   unmount?.();
   unmount = null;

@@ -14,7 +14,7 @@ import { computed, type ComputedRef } from 'vue';
 import { useRouter } from 'vue-router';
 import { CONFIG_SECTIONS } from '../../views/config/sections';
 import { useChannelList } from '../../modules/im-gateway/useChannelList';
-import { pluginMenus, pluginPagePath } from '../../plugins/menus';
+import { navPages, pluginPagePath } from '../../plugins/pages';
 
 /** 二级菜单默认可见项上限。 */
 export const MAX_VISIBLE_SECONDARY = 4;
@@ -81,9 +81,9 @@ export function useNavTree(): {
         label: section.label,
       }));
       // 插件可以向 config 下挂二级项（`parent: 'config'`），拼在内置项之后。
-      const pluginItems = pluginMenus.value
-        .filter((menu) => menu.parent === 'config')
-        .map((menu) => ({ path: pluginPagePath(menu), label: menu.label }));
+      const pluginItems = navPages()
+        .filter((page) => page.parent === 'config')
+        .map((page) => ({ path: pluginPagePath(page), label: page.label as string }));
       return [...builtin, ...pluginItems];
     }
     if (path === '/im') {
@@ -117,16 +117,16 @@ export function useNavTree(): {
     }
     list.sort((a, b) => a.order - b.order);
 
-    // 插件注册的一级菜单：不进 Vue Router（路由表变化不会触发 computed 重算），
-    // 直接拼在这里；点击落到平台的静态路由 `/plugin-page/:pluginId/:pageId`。
-    for (const menu of pluginMenus.value) {
-      if (menu.parent) continue;
+    // 插件页：读 `pages` 这一份合一数据（不再 join menus/pages）。
+    // 页面路径由插件声明（`/probe`），与内置路由冲突时退回归一路径。
+    for (const page of navPages()) {
+      if (page.parent) continue;
       list.push({
-        path: pluginPagePath(menu),
-        label: menu.label,
-        icon: resolveIcon('', menu.icon),
+        path: pluginPagePath(page),
+        label: page.label as string,
+        icon: resolveIcon('', page.icon),
         // 插件项缺省排在内置项之后，但仍低于 200（留给未来的系统项）
-        order: typeof menu.order === 'number' ? 200 + menu.order : 300,
+        order: typeof page.order === 'number' ? 200 + page.order : 300,
         mobileHidden: false,
         children: [],
       });

@@ -37,7 +37,9 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@pi-agent-platform/core": "workspace:*",
     "@pi-agent-platform/plugin-types": "workspace:*",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0"
   }

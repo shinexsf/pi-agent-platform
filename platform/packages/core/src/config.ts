@@ -16,8 +16,13 @@ export interface CoreConfig {
   agentDir: string;
   /** 附件根目录（worker 从中读字节）。 */
   attachmentsDir: string;
-  /** 插件目录（registry.json + 各插件子目录）。 */
+  /** 用户插件目录（`registry.json` + 各插件子目录）。只有这里登记。 */
   pluginsDir: string;
+  /**
+   * 随包插件目录（bundled）：**目录存在即生效**，不进 registry。
+   * 为空表示这个进程没有 bundled 插件（例如内嵌场景只跑内核）。
+   */
+  bundledPluginsDir: string | undefined;
   /** 平台随包 skill 的根目录（为空表示不注入）。 */
   serverBuiltinSkillsDir: string | undefined;
   /** 平台 MCP 目录（`mcp.json` 路径），注入给 worker。 */

@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { Hono } from 'hono';
-import { readRegistry } from '@pi-agent-platform/plugin-types/registry';
+import { getPluginSnapshot } from '@pi-agent-platform/core';
 import { childLogger } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-assets');
@@ -52,10 +52,12 @@ export function createPluginAssetsRouter(deps: PluginAssetsRouterDeps): Hono {
       return c.text('bad path', 400);
     }
 
-    const entry = readRegistry(deps.pluginsDir).plugins.find((p) => p.id === pluginId);
-    if (!entry) return c.notFound();
+    // 目录解析必须走**快照**而不是 registry：随包插件（bundled）不进 registry，
+    // 只查 registry 会让它们的 web 资源 404 —— 而页面注册是成功的，症状是"页面白着"。
+    const plugin = getPluginSnapshot(deps.pluginsDir).plugins.find((p) => p.entry.id === pluginId);
+    if (!plugin) return c.notFound();
 
-    const webRoot = path.join(entry.dir, 'web');
+    const webRoot = path.join(plugin.entry.dir, 'web');
     const abs = path.resolve(webRoot, relFile);
     if (!abs.startsWith(path.resolve(webRoot) + path.sep)) {
       return c.text('bad path', 400);

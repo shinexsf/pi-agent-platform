@@ -15,6 +15,7 @@
 
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { resolveRegistryFile } from '@pi-agent-platform/core/plugins';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -81,9 +82,32 @@ export function consoleLogFile(): string {
   return path.join(dataRoot(), 'logs', 'server.console.log');
 }
 
-/** 插件安装根：`$HOME/.pi/server/plugins`。 */
+/** 用户插件安装根：`$HOME/.pi/server/plugins`（只有这里登记 registry）。 */
 export function pluginsDir(): string {
-  return path.join(dataRoot(), 'plugins');
+  return process.env.PI_SERVER_PLUGINS_DIR ?? path.join(dataRoot(), 'plugins');
+}
+
+/** registry 文件（可被 `PI_PLUGIN_REGISTRY` 直接指定，dev 与正式实例必须隔离）。 */
+export function pluginRegistryFile(): string {
+  return resolveRegistryFile(pluginsDir());
+}
+
+/**
+ * 随包插件目录：目录存在即生效，不进 registry。
+ *
+ * 打包态布局 `<cli>/dist/server/plugins`；dev 态回落到仓库的 `platform/plugins`。
+ */
+export function bundledPluginsDir(): string {
+  const fromEnv = process.env.PI_SERVER_BUNDLED_PLUGINS_DIR;
+  if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+  return path.join(cliRoot(), 'dist', 'server', 'plugins');
+}
+
+/** 数据库文件（`plugin remove` 读迁移台账用）。 */
+export function databasePath(): string {
+  const fromEnv = process.env.PI_DATA_DIR;
+  if (fromEnv && fromEnv.trim()) return path.join(path.resolve(fromEnv.trim()), 'data.db');
+  return path.join(dataRoot(), 'data', 'data.db');
 }
 
 /**

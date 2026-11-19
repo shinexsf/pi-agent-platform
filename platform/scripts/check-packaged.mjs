@@ -89,7 +89,7 @@ function checkArtifacts() {
   ];
   // 平台随包 skill 的固定清单（change: server-builtin-skills）。目录在、文件不在时
   // 打包照样成功，只有装完才会发现 available_skills 里什么都没有 —— 必须静态断言。
-  const requiredBuiltinSkills = ['pi-trigger-usage', 'pi-capabilities-usage', 'pi-plugin-authoring'];
+  const requiredBuiltinSkills = ['pi-capabilities-usage', 'pi-plugin-authoring'];
   const requiredExamples = [
     'pi-plugin-authoring/examples/hello-plugin/package.json',
     'pi-plugin-authoring/examples/kitchen-sink/package.json',
@@ -102,6 +102,12 @@ function checkArtifacts() {
   }
 
   // 内置 skill：SKILL.md + 示例工程（示例是 agent 的唯一可读参考，缺了技能价值减半）
+  // vendored 类型的源：`plugin check` 靠它把 .d.ts 写进插件目录
+  for (const name of ['index.d.ts', 'web.d.ts']) {
+    const abs = path.join(distRoot, 'server', 'plugin-types', name);
+    if (!existsSync(abs)) fail('A.artifact', { file: `server/plugin-types/${name}`, detail: '缺少插件类型声明（plugin check 会拿不到类型）' });
+  }
+
   for (const name of requiredBuiltinSkills) {
     const abs = path.join(base, 'dist', 'server', 'skills', 'builtin', name, 'SKILL.md');
     if (!existsSync(abs)) fail('A.builtinSkill', { file: rel(abs), detail: `缺少内置 skill ${name}/SKILL.md` });
@@ -177,6 +183,67 @@ function checkChannels() {
       });
     }
   }
+}
+
+// ── B2. bundled 插件：目录 → 入口 → web 产物 ────────────────────────────────
+//
+// 为什么必须在打包自检里查：bundled 插件**不进 registry**，装载靠"目录存在"。
+// 少复制一个目录、或忘了跑 build:plugins，dev 态完全看不出来（仓库里 plugin 目录还在），
+// 只有干净机器装完才暴露 —— 那时用户看到的是"插件列表里少一项"。
+
+const PLUGIN_FACETS = ['server', 'worker', 'extension', 'web'];
+
+function checkBundledPlugins() {
+  const pluginsRoot = path.join(distRoot, 'server', 'plugins');
+  if (!existsSync(pluginsRoot)) {
+    warn('B2.plugin', { file: 'server/plugins', detail: '产物里没有 bundled 插件目录（如果本版确实不带随包插件，可忽略）' });
+    return 0;
+  }
+  let count = 0;
+  for (const id of readdirSync(pluginsRoot)) {
+    const dir = path.join(pluginsRoot, id);
+    if (!statSync(dir).isDirectory()) continue;
+    count += 1;
+    const pkg = path.join(dir, 'package.json');
+    if (!existsSync(pkg)) {
+      fail('B2.plugin', { file: `server/plugins/${id}`, detail: '缺少 package.json（不是合法插件目录）' });
+      continue;
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(pkg, 'utf8'));
+    } catch (e) {
+      fail('B2.plugin', { file: `server/plugins/${id}/package.json`, detail: `JSON 解析失败：${e.message}` });
+      continue;
+    }
+    if (!manifest.piServer?.apiVersion) {
+      fail('B2.plugin', { file: `server/plugins/${id}/package.json`, detail: '缺少 piServer.apiVersion（装载器会判为不兼容）' });
+    }
+    const declared = PLUGIN_FACETS.filter((f) => existsSync(path.join(dir, f)));
+    if (declared.length === 0) {
+      fail('B2.plugin', { file: `server/plugins/${id}`, detail: '没有声明任何装载点' });
+    }
+    for (const facet of declared) {
+      const facetDir = path.join(dir, facet);
+      if (facet === 'web') {
+        const js = readdirSync(facetDir).filter((n) => n.endsWith('.js'));
+        if (js.length === 0) {
+          fail('B2.plugin', {
+            file: `server/plugins/${id}/web`,
+            detail: 'web facet 没有 .js 产物 —— 先跑 pnpm build:plugins',
+          });
+        }
+        continue;
+      }
+      if (!existsSync(path.join(facetDir, 'index.js'))) {
+        fail('B2.plugin', {
+          file: `server/plugins/${id}/${facet}`,
+          detail: `声明了 ${facet} 但没有 index.js（装载器会判为 degraded）`,
+        });
+      }
+    }
+  }
+  return count;
 }
 
 // ── C. manifest 指向的目标文件 ───────────────────────────────────────────────
@@ -355,6 +422,7 @@ function main() {
 
   checkArtifacts();
   checkChannels();
+  const bundledPlugins = checkBundledPlugins();
   const cliManifest = checkCliManifest();
   const stats = checkSpecifiers(cliManifest);
 
@@ -362,6 +430,7 @@ function main() {
     distRoot: rel(distRoot) || '.',
     files: stats.files,
     specifiers: stats.specifiers,
+    bundledPlugins,
     errors: errors.length,
     warnings: warnings.length,
   };
@@ -373,7 +442,7 @@ function main() {
     for (const e of errors) console.log(`  ✗ ${e.rule}  ${e.file ?? ''}  ${e.detail ?? ''}`);
     console.log(
       `[check-packaged] ${errors.length === 0 ? '通过' : '失败'} — ` +
-        `${summary.files} 个 .js / ${summary.specifiers} 个说明符 / ${errors.length} 错误 / ${warnings.length} 警告`,
+        `${summary.files} 个 .js / ${summary.specifiers} 个说明符 / ${bundledPlugins} 个随包插件 / ${errors.length} 错误 / ${warnings.length} 警告`,
     );
   }
 

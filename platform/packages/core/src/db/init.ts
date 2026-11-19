@@ -47,6 +47,14 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       last_active_at INTEGER NOT NULL
     );
 
+    -- 插件迁移台账：谁登记过哪些表。plugin remove 用它提示「留下的表」（不自动删）。
+    CREATE TABLE IF NOT EXISTS plugin_migrations (
+      plugin_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (plugin_id, name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
     CREATE INDEX IF NOT EXISTS idx_sessions_last_active_at ON sessions(last_active_at);

@@ -319,6 +319,8 @@ export interface PluginEntryDTO {
   /** 插件 id = npm 包名。 */
   id: string;
   version: string;
+  /** 来源：`bundled` 随包分发（目录即在），`user` 用户登记。 */
+  source: 'bundled' | 'user';
   status: PluginStatus;
   /** 人类可读的降级/停用原因。 */
   reason?: string;
@@ -376,11 +378,11 @@ export interface PluginDetailDTO {
   manifestPath: string;
   registryEntry: {
     id: string;
-    version: string;
     dir: string;
     enabled: boolean;
-    facets?: Partial<Record<PluginFacetName, boolean>>;
-    installedAt?: string;
+    /** `bundled` 的插件不在 registry 里（目录存在即生效）。 */
+    source: 'bundled' | 'user';
+    inRegistry: boolean;
   };
 }
 
@@ -394,9 +396,22 @@ export interface GetPluginDetailResponse {
 export type WithPlugin<T> = T & { pluginId: string };
 
 /** `GET /api/extensions`：全局注册（导航用）。 */
+/** 插件页面 + 导航展示字段（服务端已把菜单摊进来，前端不再 join 两遍）。 */
+export interface RegistryPageDTO extends PageRegistration {
+  pluginId: string;
+  label?: string;
+  icon?: string;
+  order?: number;
+  parent?: 'config';
+}
+
 export interface GlobalExtensionsResponse {
+  /** 合一列表：`pages` 已带导航字段（有 `label` 才进导航）。 */
+  pages: RegistryPageDTO[];
+  /**
+   * 旧字段，保留一个版本。前端不再读它；第三方若读过，等移除时一起清。
+   */
   menus: WithPlugin<MenuRegistration>[];
-  pages: WithPlugin<PageRegistration>[];
   disabledByFlag: boolean;
 }
 

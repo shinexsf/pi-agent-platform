@@ -38,7 +38,7 @@ import ProviderEditorView from './views/config/ProviderEditorView.vue';
 import ResourceEditorView from './views/config/ResourceEditorView.vue';
 import AgentEditorView from './views/agents/AgentEditorView.vue';
 import TemplatesView from './views/templates/TemplatesView.vue';
-import { refreshPluginMenus } from './plugins/menus';
+import { refreshPluginPages, syncPluginRoutes } from './plugins/pages';
 
 // Step 1: base routes（一级导航由 `components/layout/nav-tree.ts` 从 meta 读取）
 const baseRoutes = [
@@ -194,8 +194,8 @@ const router = createRouter({
 });
 routerRef.router = router;
 installRouteTransitions(router);
-// 插件注册的一级菜单来自 server 注册表，启动时拉一次（失败就空导航，不阻塞启动）。
-void refreshPluginMenus();
+// 插件页面（导航 + 路由）来自 server 注册表，启动时拉一次（失败就空导航，不阻塞启动）。
+void refreshPluginPages().then(() => syncPluginRoutes(router));
 
 // Set up the global ChannelAdminHost object so channel admin pages can use
 // window.__channelAdminHost.apiFetch() etc. The current channel type is

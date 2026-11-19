@@ -19,8 +19,9 @@ import {
   scanPluginDirs,
   detectFacetEntry,
   listFacetDirs,
-} from '@pi-agent-platform/plugin-types/registry';
-import { FACET_SUPPORT, PLUGIN_FACET_NAMES } from '@pi-agent-platform/plugin-types';
+} from '../plugins/registry.js';
+import { isTombstoned, resolveRegistryFile } from '../plugins/registry.js';
+import { FACET_SUPPORT, PLUGIN_FACET_NAMES } from '../plugins/constants.js';
 import type {
   FacetEntryPoint,
   PluginFacetName,
@@ -34,13 +35,16 @@ import type {
   PluginDetailDTO,
   PluginEntryDTO,
 } from '@pi-agent-platform/api-types';
+import { coreConfig } from '../config.js';
 import { childLogger } from '../logger.js';
-import { loadPluginExtensions } from './plugin-extensions.js';
+import { extensionSummary, loadPluginExtensions, type ExtensionSummary, type PluginRuntimeDeps } from './plugin-extensions.js';
 
 const logger = childLogger('plugins');
 
 export interface LoadedPlugin {
   entry: PluginRegistryEntry;
+  /** `bundled` = 随包分发（目录存在即生效）；`user` = 用户在 registry 登记。 */
+  source: 'bundled' | 'user';
   status: PluginStatus;
   reason?: string;
   /** 开关 ∧ 声明 ∧ 入口（可加载）。 */
@@ -62,6 +66,8 @@ export interface PluginSnapshot {
   disabledByFlag: boolean;
   /** 注册表文件路径，便于日志/调试。 */
   registryPath: string;
+  /** 本次扫描的 bundled 目录（无 bundled 时为 undefined）。 */
+  bundledDir?: string;
 }
 
 /** `PI_PLUGINS=0` 关闭全部插件（回退开关）。 */
@@ -77,28 +83,34 @@ export function killSwitchActive(env: NodeJS.ProcessEnv = process.env): boolean 
  * - 目录缺失 / 清单坏 / 契约版本不符 → `degraded`
  * - 有目录未登记 → 额外产出 `orphan` 条目（不加载，仅供展示）
  */
-export function loadPlugins(pluginsDir: string): PluginSnapshot {
-  const registryPath = path.join(pluginsDir, 'registry.json');
+export function loadPlugins(pluginsDir: string, bundledDir?: string): PluginSnapshot {
+  const registryFile = resolveRegistryFile(pluginsDir);
   const disabledByFlag = killSwitchActive();
+  const bundledRoot = bundledDir ? path.resolve(bundledDir) : undefined;
   if (disabledByFlag) {
     logger.info({ pluginsDir }, 'plugins disabled by PI_PLUGINS flag');
-    return { plugins: [], disabledByFlag, registryPath };
+    return { plugins: [], disabledByFlag, registryPath: registryFile, bundledDir: bundledRoot };
   }
 
   let file;
   try {
-    file = readRegistry(pluginsDir);
+    file = readRegistry(registryFile);
   } catch (err) {
-    logger.error({ err: String(err), registryPath }, 'failed to read plugin registry — continuing with no plugins');
-    return { plugins: [], disabledByFlag, registryPath };
+    logger.error({ err: String(err), registryFile }, 'failed to read plugin registry — continuing with no plugins');
+    return { plugins: [], disabledByFlag, registryPath: registryFile, bundledDir: bundledRoot };
   }
 
-  const plugins: LoadedPlugin[] = [];
+  const insideBundled = (dir: string): boolean => {
+    if (!bundledRoot) return false;
+    const abs = path.resolve(dir);
+    return abs === bundledRoot || abs.startsWith(bundledRoot + path.sep);
+  };
 
-  for (const entry of file.plugins) {
+  const toLoaded = (entry: PluginRegistryEntry, source: LoadedPlugin['source']): LoadedPlugin => {
     const state = describePluginState(entry);
-    plugins.push({
+    return {
       entry,
+      source,
       status: state.status,
       reason: state.reason,
       facets: state.facets,
@@ -107,19 +119,61 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
       entries: state.entries,
       loadedFacets: state.loadedFacets,
       manifest: state.manifest,
-    });
+    };
+  };
+
+  // ── 1. bundled：目录存在即生效（墓碑挡掉已卸载的） ──────────────────────
+  const plugins: LoadedPlugin[] = [];
+  const byId = new Map<string, LoadedPlugin>();
+  const tombstoned: string[] = [];
+  if (bundledRoot) {
+    for (const dir of scanPluginDirs(bundledRoot)) {
+      const id = path.basename(dir);
+      if (isTombstoned(file, id)) {
+        tombstoned.push(id);
+        continue;
+      }
+      const loaded = toLoaded({ id, dir, enabled: true }, 'bundled');
+      plugins.push(loaded);
+      byId.set(id, loaded);
+    }
   }
 
-  // 目录存在但未登记 → orphan（不加载）
+  // ── 2. 用户插件：只有登记过才装载 ────────────────────────────────────────
+  for (const entry of file.plugins) {
+    // 旧 registry 里可能残留 bundled 条目（v1 把所有插件都登记进去）——
+    // 现在 bundled 走目录扫描，这些条目直接丢弃，避免同一插件被装两遍。
+    if (insideBundled(entry.dir)) {
+      logger.info({ pluginId: entry.id }, 'registry 里的 bundled 条目已废弃（bundled 改为目录扫描）');
+      continue;
+    }
+    const existing = byId.get(entry.id);
+    if (existing) {
+      // 同 id 冲突：bundled 优先（平台随包的东西不允许被用户目录覆盖）。
+      logger.warn(
+        { pluginId: entry.id, bundledDir: existing.entry.dir, userDir: entry.dir },
+        'bundled 与用户插件同 id —— 以 bundled 为准，用户那份被忽略',
+      );
+      continue;
+    }
+    const loaded = toLoaded(entry, 'user');
+    plugins.push(loaded);
+    byId.set(entry.id, loaded);
+  }
+
+  // ── 3. 用户目录里未登记的 → orphan（不加载，只展示） ─────────────────────
   const registered = new Set(file.plugins.map((p) => path.resolve(p.dir)));
   for (const dir of scanPluginDirs(pluginsDir)) {
     if (registered.has(path.resolve(dir))) continue;
+    const id = path.basename(dir);
+    if (byId.has(id)) continue;
     const manifest = readManifest(dir);
     const entries: Partial<Record<PluginFacetName, FacetEntryPoint>> = {};
     for (const facet of PLUGIN_FACET_NAMES) entries[facet] = detectFacetEntry(dir, facet);
     const declaredFacets = listFacetDirs(dir);
     plugins.push({
-      entry: { id: path.basename(dir), version: manifest?.version ?? '?', dir, enabled: false },
+      entry: { id, dir, enabled: false },
+      source: 'user',
       status: 'orphan',
       reason: '目录存在但未在 registry.json 登记（用 pi-server plugin add 重新登记）',
       facets: {},
@@ -129,13 +183,20 @@ export function loadPlugins(pluginsDir: string): PluginSnapshot {
       loadedFacets: [],
       manifest,
     });
+    byId.set(id, plugins[plugins.length - 1]!);
   }
 
   logger.info(
-    { count: plugins.length, active: plugins.filter((p) => p.status === 'active').length, registryPath },
+    {
+      count: plugins.length,
+      active: plugins.filter((p) => p.status === 'active').length,
+      bundled: plugins.filter((p) => p.source === 'bundled').length,
+      tombstoned: tombstoned.length,
+      registryFile,
+    },
     'plugin snapshot loaded',
   );
-  return { plugins, disabledByFlag, registryPath };
+  return { plugins, disabledByFlag, registryPath: registryFile, bundledDir: bundledRoot };
 }
 
 /** 转成对外的只读 DTO。 */
@@ -143,7 +204,8 @@ export function toPluginEntryDTO(plugin: LoadedPlugin): PluginEntryDTO {
   const manifest = plugin.manifest;
   return {
     id: plugin.entry.id,
-    version: plugin.entry.version,
+    version: manifest?.version ?? '?',
+    source: plugin.source,
     status: plugin.status,
     reason: plugin.reason,
     description: manifest?.description,
@@ -158,7 +220,6 @@ export function toPluginEntryDTO(plugin: LoadedPlugin): PluginEntryDTO {
     ) as Record<PluginFacetName, FacetEntryPoint>,
     requires: manifest?.requiresPlugins ?? {},
     dir: plugin.entry.dir,
-    installedAt: plugin.entry.installedAt,
   };
 }
 
@@ -244,11 +305,11 @@ export function describePluginDetail(
     manifestPath: path.join(plugin.entry.dir, 'package.json'),
     registryEntry: {
       id: plugin.entry.id,
-      version: plugin.entry.version,
       dir: plugin.entry.dir,
       enabled: plugin.entry.enabled,
-      facets: plugin.entry.facets,
-      installedAt: plugin.entry.installedAt,
+      source: plugin.source,
+      /** bundled 插件不在 registry 里 —— 它靠目录存在生效，卸载靠墓碑。 */
+      inRegistry: plugin.source === 'user',
     },
   };
 }
@@ -335,10 +396,19 @@ let cached: { snapshot: PluginSnapshot; at: number } | null = null;
 const SNAPSHOT_TTL_MS = 1_000;
 
 /** 读快照（默认 1s 缓存，watcher 会主动失效）。 */
+/** bundled 目录来自内核配置（入口注入）；未初始化配置时退化为"没有 bundled 插件"。 */
+function configuredBundledDir(): string | undefined {
+  try {
+    return coreConfig().bundledPluginsDir;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getPluginSnapshot(pluginsDir: string): PluginSnapshot {
   const now = Date.now();
   if (cached && now - cached.at < SNAPSHOT_TTL_MS) return cached.snapshot;
-  const snapshot = loadPlugins(pluginsDir);
+  const snapshot = loadPlugins(pluginsDir, configuredBundledDir());
   cached = { snapshot, at: now };
   return snapshot;
 }
@@ -354,20 +424,33 @@ export function invalidatePluginSnapshot(): void {
  * 装载分两步：先算静态快照，再执行插件代码（`register()` / `init()`）。
  * 后者可能抛错/超时，所以整体是异步的。
  */
-export async function startPluginRuntime(pluginsDir: string): Promise<() => void> {
+/** 运行期句柄：`stop()` 停监听，`reload()` 立刻按磁盘现状重装一遍（`plugin reload`）。 */
+export interface PluginRuntimeHandle {
+  stop(): void;
+  reload(): Promise<ExtensionSummary>;
+}
+
+export async function startPluginRuntime(
+  pluginsDir: string,
+  deps: PluginRuntimeDeps,
+): Promise<PluginRuntimeHandle> {
   invalidatePluginSnapshot();
   const snapshot = getPluginSnapshot(pluginsDir);
-  await loadPluginExtensions(snapshot);
-  const stopWatch = watchRegistry(pluginsDir, () => {
+  await loadPluginExtensions(snapshot, deps);
+
+  const reload = async (): Promise<ExtensionSummary> => {
     invalidatePluginSnapshot();
     const next = getPluginSnapshot(pluginsDir);
-    void loadPluginExtensions(next).catch((err) =>
-      logger.error({ err: String(err) }, 'plugin extensions reload failed'),
-    );
+    await loadPluginExtensions(next, deps);
     logger.info(
       { count: next.plugins.length, active: next.plugins.filter((p) => p.status === 'active').length },
-      'plugin registry changed — snapshot reloaded (web/server facets reload now; worker/extension facets on next spawn)',
+      'plugin runtime reloaded (server facets now; worker/extension facets on next spawn)',
     );
+    return extensionSummary();
+  };
+
+  const stopWatch = watchRegistry(pluginsDir, () => {
+    void reload().catch((err) => logger.error({ err: String(err) }, 'plugin extensions reload failed'));
   });
-  return stopWatch;
+  return { stop: stopWatch, reload };
 }

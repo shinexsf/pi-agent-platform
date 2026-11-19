@@ -7,7 +7,8 @@
  * 3. 路由路径精确匹配、不支持通配符；请求体是原始文本，要 JSON 自己 parse
  */
 
-export function init(host) {
+export default {
+  init(host) {
   // ── 会话页右侧轨道槽位：声明一次 = 轨道按钮 + 抽屉面板 ───────────────────
   host.session.surfaces.register({
     id: 'kitchen-sink',
@@ -44,4 +45,5 @@ export function init(host) {
   // （触发器扩展点在触发器子系统下线时一并移除；插件化后重新引入）
 
   host.log('info', 'kitchen-sink registered');
-}
+  },
+};

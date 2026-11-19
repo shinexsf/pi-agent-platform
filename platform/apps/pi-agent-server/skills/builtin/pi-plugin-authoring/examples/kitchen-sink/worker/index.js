@@ -13,7 +13,8 @@
  * 加载失败只隔离自己，不影响会话启动；所以这里不要做阻塞式初始化。
  */
 
-export async function activate({ bridge }) {
+export default {
+  async init({ bridge }) {
   bridge.log('info', 'worker facet loaded');
 
   // 会话开始后主动上行一条，浏览器侧 panel.js 的 data.subscribe 会收到
@@ -25,4 +26,5 @@ export async function activate({ bridge }) {
     if (name === 'ping') bridge.emit('pong', { echo: data, at: Date.now() });
     return { ok: true };
   });
-}
+  },
+};

@@ -8,15 +8,29 @@
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { GlobalExtensionsResponse } from '@pi-agent-platform/api-types';
 import { childLogger } from '@pi-agent-platform/core';
-import { dispatchPluginRoute, hasRoutes, listGlobalExtensions, listPluginIds } from '@pi-agent-platform/core';
+import {
+  dispatchPluginRoute,
+  hasRoutes,
+  listGlobalExtensions,
+  listGlobalPageItems,
+  listPluginIds,
+} from '@pi-agent-platform/core';
 import { killSwitchActive, getPluginSnapshot } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-runtime');
 
 export interface PluginRuntimeRouterDeps {
   pluginsDir: string;
+  /**
+   * 立刻按磁盘现状重装插件运行期（`plugin reload` / 诊断用）。
+   *
+   * 存在的理由：插件**代码**变化不会被 registry 监听捕获（本期不监听插件目录），
+   * 所以需要一个不用重启 server 的手动入口。
+   */
+  reload?: () => Promise<unknown>;
 }
 
 /** `GET /api/extensions` */
@@ -28,20 +42,29 @@ export function createExtensionsRouter(deps: PluginRuntimeRouterDeps): Hono {
       const body: GlobalExtensionsResponse = { menus: [], pages: [], disabledByFlag: true };
       return c.json(body);
     }
-    const { menus, pages } = listGlobalExtensions();
+    const { menus } = listGlobalExtensions();
     const body: GlobalExtensionsResponse = {
+      // 合一列表：页面自带导航字段，前端一次读够（不再 join menus/pages）。
+      pages: listGlobalPageItems(),
       menus: menus.map(({ pluginId, def }) => ({ pluginId, ...def })),
-      pages: pages.map(({ pluginId, def }) => ({ pluginId, ...def })),
       disabledByFlag: false,
     };
     return c.json(body);
   });
 
-  // 调试：强制重读插件目录（不装/卸插件，只是立刻重算快照）
-  app.get('/reload', (c) => {
-    getPluginSnapshot(deps.pluginsDir);
-    return c.json({ reloaded: true });
-  });
+  // 重装插件运行期（不重启 server）。GET 保留给浏览器/curl 手搓，CLI 用 POST。
+  const reload = async (c: Context) => {
+    if (!deps.reload) return c.json({ error: 'plugin runtime handle not available' }, 503);
+    try {
+      const summary = await deps.reload();
+      return c.json({ reloaded: true, ...(summary as object) });
+    } catch (err) {
+      logger.error({ err: String(err) }, 'plugin reload failed');
+      return c.json({ error: String(err) }, 500);
+    }
+  };
+  app.get('/reload', reload);
+  app.post('/reload', reload);
 
   return app;
 }

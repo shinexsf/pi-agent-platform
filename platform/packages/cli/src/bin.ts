@@ -14,6 +14,8 @@ import {
   pluginEnableCommand,
   pluginListCommand,
   pluginRemoveCommand,
+  pluginReloadCommand,
+  pluginCheckCommand,
 } from './commands/plugin.js';
 
 const program = new Command();
@@ -83,6 +85,21 @@ plugin
   .description('disable a plugin without removing its files')
   .action(async (id: string) => {
     await pluginDisableCommand(id);
+  });
+
+plugin
+  .command('check <dir>')
+  .description('mechanically validate a plugin directory (entry points, ESM, specifiers) + refresh vendored types')
+  .action(async (dir: string) => {
+    await pluginCheckCommand(dir);
+  });
+
+plugin
+  .command('reload')
+  .description('reload the running server\'s plugin runtime without restarting it')
+  .option('-p, --port <port>', 'server port (defaults to the pidfile port)')
+  .action(async (opts: { port?: string }) => {
+    await pluginReloadCommand(opts.port ? { port: Number(opts.port) } : {});
   });
 
 plugin

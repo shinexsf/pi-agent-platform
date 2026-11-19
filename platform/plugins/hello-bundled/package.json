@@ -1,0 +1,7 @@
+{
+  "name": "hello-bundled",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "随包分发的示例插件（目录存在即生效，不进 registry）",
+  "piServer": { "apiVersion": "1" }
+}

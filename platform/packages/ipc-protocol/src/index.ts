@@ -284,6 +284,31 @@ export class IpcMethodRegistry {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /**
+   * Remove every method a source registered (whole group).
+   *
+   * Why delete instead of disable: a plugin reload re-registers the SAME names, and
+   * `register()` rejects duplicates ("name already registered by ..."). Disabling
+   * would make reload fail; whole-group removal is the only semantics that lets a
+   * plugin change its method set across reloads. Idempotent — unknown source → 0.
+   *
+   * The source's rejected-entry history is dropped too, so post-reload diagnostics
+   * describe the current attempt rather than a stale one.
+   */
+  unregisterBySource(source: IpcMethodSource): number {
+    let removed = 0;
+    for (const [name, entry] of this.entries) {
+      if (entry.source !== source) continue;
+      this.entries.delete(name);
+      this.handlers.delete(name);
+      removed += 1;
+    }
+    for (let i = this.rejectedEntries.length - 1; i >= 0; i--) {
+      if (this.rejectedEntries[i]!.source === source) this.rejectedEntries.splice(i, 1);
+    }
+    return removed;
+  }
+
   /** Disable every method a plugin contributed. Entries are kept (not deleted) so
    *  callers can tell "disabled" apart from "never existed". */
   disableByPlugin(pluginId: string): number {

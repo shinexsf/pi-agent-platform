@@ -49,8 +49,10 @@ export type {
   HostApi,
   HostDbApi,
   HostSessionsApi,
+  HostSessionSummary,
+  HostAgentsApi,
   HostLifecycleApi,
-  HostOutboundApi,
-  HostEventsApi,
-  HostWebApi,
 } from './host-api.js';
+
+// ── 插件运行期：常量 + registry 读写（契约类型在 @pi-agent-platform/plugin-types）──
+export * from './plugins/index.js';

@@ -4,13 +4,16 @@
  * (undefined/null → none; [] → none; array → allowlist — explicit-agent-config),
  * independent from `builtinTools` (pi builtin tools only).
  *
- * Each tool is a pi SDK ToolDefinition created per-session via closures
- * that capture sessionId and callMaster. Adding a server tool = append a
- * factory here + list its name in the agent config (no default list).
+ * 工具有两个来源（change: plugin-mechanism-v2 / D16）：
+ * 1. **inline 插件**（`inline-plugins.ts`）：实现方在平台代码里、不可卸载 —— 如 `callServer`
+ * 2. **尚未下沉的硬编码壳**：`sendFileToUser`（等 im 插件）/ `postNotification`（等 notifications 插件）
+ *
+ * 两者都受 `serverBuiltinTools` 白名单约束：**声明 ≠ 对该 agent 开放**。
  */
 
 import type { CapabilityIndexEntry } from '@pi-agent-platform/shared-types';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { INLINE_PLUGINS } from './inline-plugins.js';
 
 export type CallMasterFn = (method: string, args: unknown[]) => Promise<unknown>;
 
@@ -22,7 +25,9 @@ export interface ServerToolsOptions {
   capabilityIndex?: CapabilityIndexEntry[];
 }
 
-// ── sendFileToUser ──────────────────────────────────────────────────────────
+// ── sendFileToUser（**待下沉**）───────────────────────────────────────────────
+// 归属：im 插件（实现方是渠道网关，不是平台内核）。等 im 插件落地时随其 R6 迁过去，
+// 迁走后本文件只剩 inline 声明 + postNotification 这个过渡壳。
 
 /**
  * Parameters for sendFileToUser tool.
@@ -115,6 +120,8 @@ interface PostNotificationParams {
   severity?: 'info' | 'warning' | 'error';
 }
 
+// ── postNotification（**待下沉**）────────────────────────────────────────────
+// 归属：notifications 插件（实现方是通知收件箱模块）。
 function createPostNotificationTool(
   sessionId: string,
   callMaster: CallMasterFn,
@@ -163,86 +170,7 @@ function createPostNotificationTool(
  * schemas are NOT expressible here; they are self-described via the builtin
  * `list` / `detail` methods and embedded in the description below.
  */
-const callServerSchema = {
-  type: 'object',
-  properties: {
-    method: {
-      type: 'string',
-      description: 'Capability method name, e.g. "server.status", "agent.list", "session.update"',
-    },
-    params: {
-      type: 'object',
-      description: 'Method params — run the `detail` builtin first if unsure about the shape',
-    },
-  },
-  required: ['method'],
-  additionalProperties: false,
-} as const;
-
-interface CallServerParams {
-  method: string;
-  params?: Record<string, unknown>;
-}
-
 /** Build the tool description embedding the capability index (D2: zero-round-trip first use). */
-function buildCallServerDescription(index: CapabilityIndexEntry[]): string {
-  const lines = index.map((e) => `- ${e.method} (${e.access}${e.scoped ? ', scoped' : ''}): ${e.summary}`);
-  return [
-    'Call host-server management capabilities (query server status, agents, sessions; update configs).',
-    '',
-    'Available methods (authorized for this session):',
-    ...(lines.length > 0 ? lines : ['(no authorized business methods; `list` / `detail` still work)']),
-    '',
-    'Builtins:',
-    '- list: grouped index of your authorized methods by module (server/agent/session/channel/config)',
-    '- detail: full params schema + return shape + effect timing of one method — { method: "<name>" }',
-    '',
-    'Unknown method errors include the available method list.',
-  ].join('\n');
-}
-
-function createCallServerTool(
-  callMaster: CallMasterFn,
-  index: CapabilityIndexEntry[],
-): ToolDefinition {
-  return {
-    name: 'callServer',
-    label: 'Call Server Capability',
-    description: buildCallServerDescription(index),
-    promptSnippet:
-      'Query or manage the host server (server/agent/session capabilities). `list` enumerates your authorized methods by module; `detail` explains exact params of a method.',
-    promptGuidelines: [
-      'Use callServer for anything about the host platform: server status, listing/updating agents or sessions.',
-      'Before calling a method you have not used this session, call `detail` with { method } to get its exact params and effect timing.',
-      'Write capabilities (access: write) may be denied by policy — surface the error to the user instead of retrying blindly.',
-    ],
-    parameters: callServerSchema as any,
-    execute: async (
-      _toolCallId: string,
-      params: CallServerParams,
-      _signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown,
-    ) => {
-      try {
-        const result = await callMaster('plugin.admin.invoke', [params.method, params.params]);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result ?? null) }],
-          details: result,
-        };
-      } catch (err) {
-        // Control-plane errors are model-readable by design (unknown method lists
-        // available methods; denials state the reason) — relay verbatim.
-        const errorMsg = (err as Error).message;
-        return {
-          content: [{ type: 'text' as const, text: `callServer error: ${errorMsg}` }],
-          details: { error: errorMsg },
-        };
-      }
-    },
-  };
-}
-
 // ── Server tools registry ───────────────────────────────────────────────────
 
 /**
@@ -264,8 +192,14 @@ export function createServerTools(
   if (enabled.has('postNotification')) {
     tools.push(createPostNotificationTool(sessionId, callMaster));
   }
-  if (enabled.has('callServer')) {
-    tools.push(createCallServerTool(callMaster, opts.capabilityIndex ?? []));
+  // `callServer` 不再是硬编码壳：由 **inline 插件**声明（inline-plugins.ts），
+  // 走与普通插件同一个注册面。白名单语义不变 —— 声明 ≠ 对该 agent 开放。
+  for (const plugin of INLINE_PLUGINS) {
+    const defs = plugin.extension.tools?.({ sessionId, callMaster, capabilityIndex: opts.capabilityIndex }) ?? [];
+    for (const def of defs) {
+      if (!enabled.has(def.name)) continue;
+      tools.push(def);
+    }
   }
   return tools;
 }

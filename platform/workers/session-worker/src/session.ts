@@ -426,8 +426,13 @@ export async function createSession(
             extension?: unknown;
             activate?: unknown;
           };
-          const fn = mod.default ?? mod.extension ?? mod.activate;
-          if (typeof fn !== 'function') throw new Error('extension facet 未导出默认工厂函数');
+          // 主形态：`export default { init(pi, host) }`；函数形态继续认（见 worker facet 注释）。
+          const def = mod.default as { init?: unknown } | ((pi: unknown, ctx: unknown) => unknown) | undefined;
+          const fn =
+            typeof def === 'function'
+              ? def
+              : (def?.init ?? mod.extension ?? mod.activate);
+          if (typeof fn !== 'function') throw new Error('extension facet 未导出 init（期望 `export default { init(pi, host) }`）');
           await (fn as (pi: unknown, ctx: unknown) => unknown)(pi, { bridge: bridgeFor(p.id) });
           logger.info({ pluginId: p.id }, 'extension facet loaded');
         } catch (err) {
@@ -556,9 +561,13 @@ export async function createSession(
         default?: unknown;
         activate?: unknown;
       };
-      const fn = mod.default ?? mod.activate;
-      if (typeof fn !== 'function') throw new Error('worker facet 未导出默认函数');
-      await (fn as (ctx: unknown) => unknown)({ bridge: bridgeFor(p.id) });
+      // 主形态：`export default { init(host) }`（与 server facet 同形）。
+      // 函数形态（`export default (ctx) => …` / `activate`）继续认 —— 这是**形状**兼容，
+      // 不是"声明双源"：两者都只有一个 init 动作。
+      const def = mod.default as { init?: unknown } | ((ctx: unknown) => unknown) | undefined;
+      const fn = typeof def === 'function' ? def : (def?.init ?? mod.activate);
+      if (typeof fn !== 'function') throw new Error('worker facet 未导出 init（期望 `export default { init(host) }`）');
+      await (fn as (ctx: unknown) => unknown)({ bridge: bridgeFor(p.id), log: logger });
       logger.info({ pluginId: p.id }, 'worker facet loaded');
     } catch (err) {
       logger.error({ pluginId: p.id, err: String(err) }, 'worker facet failed to load (session continues)');

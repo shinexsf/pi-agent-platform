@@ -15,7 +15,9 @@
     "pack:cli": "node scripts/build-cli.mjs",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "verify:sdk": "pnpm --filter @pi-agent-platform/server exec tsx ../../scripts/verify-sdk.mts"
+    "verify:sdk": "pnpm --filter @pi-agent-platform/server exec tsx ../../scripts/verify-sdk.mts",
+    "verify:plugins": "pnpm --filter @pi-agent-platform/server exec tsx ../../scripts/verify-plugins.mts",
+    "build:plugins": "node scripts/build-plugins.mjs"
   },
   "engines": {
     "node": ">=22.19.0",
@@ -24,6 +26,7 @@
   "packageManager": "pnpm@11.22.0",
   "devDependencies": {
     "jsdom": "^30.1.1",
-    "mermaid": "^12.0.0"
+    "mermaid": "^12.0.0",
+    "esbuild": "^0.24.0"
   }
 }

@@ -42,9 +42,34 @@ export interface ServerConfig {
    * `registry.json` 在其中；安装只能走 `pi-server plugin add`（无 HTTP 端点）。
    */
   pluginsDir: string;
+  /**
+   * 随包插件目录（bundled）：目录存在即生效，不进 registry。
+   * 打包态 = `<安装根>/dist/server/plugins`；dev 态 = 仓库 `platform/plugins`。
+   * `undefined` = 这个进程没有随包插件（内嵌场景）。
+   */
+  bundledPluginsDir: string | undefined;
   /** Directory for user-uploaded image attachments, organized as <root>/<sessionId>/<sha>.<ext>.
    *  Read tool images (live session) are NOT stored here — they're owned by the source filesystem path. */
   attachmentsDir: string;
+}
+
+/**
+ * 定位随包插件目录。
+ *
+ * 不能只写死一个相对层级：这个文件在 dev 态被 tsx 从 `src/` 跑、打包态被 node 从
+ * `dist/server/` 跑，差一层就静默找不到（然后"随包插件全没了"却没有任何报错）。
+ * 所以按**存在性**挑第一个命中；都不存在就返回 undefined（内嵌场景本来就没有随包插件）。
+ */
+function resolveBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
+  const fromEnv = env.PI_SERVER_BUNDLED_PLUGINS_DIR;
+  if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(here, 'plugins'),            // 打包态：dist/server/plugins
+    path.join(here, '..', '..', 'plugins'), // dev 态：apps/pi-agent-server/src → platform/plugins
+    path.join(here, '..', 'plugins'),       // 其它布局兜底
+  ];
+  return candidates.find((dir) => existsSync(dir));
 }
 
 function parseIntStrict(name: string, raw: string | undefined, fallback: number): number {
@@ -98,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
     serverBuiltinSkillsDir: resolveServerBuiltinSkillsDir(env),
     pluginsDir: env.PI_SERVER_PLUGINS_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugins'),
+    bundledPluginsDir: resolveBundledPluginsDir(env),
     attachmentsDir,
   };
 }

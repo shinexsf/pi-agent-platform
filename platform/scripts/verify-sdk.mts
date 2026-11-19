@@ -134,6 +134,7 @@ initCoreConfig({
   maxWorkers: 2,
   agentDir,
   attachmentsDir,
+  bundledPluginsDir: undefined,
   pluginsDir: path.join(path.dirname(agentDir), 'server', 'plugins'),
   serverBuiltinSkillsDir: undefined,
   mcpConfigPath: path.join(path.dirname(agentDir), 'server', 'mcp.json'),

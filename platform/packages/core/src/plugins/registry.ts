@@ -1,8 +1,8 @@
 /**
- * 插件注册表运行期辅助（`@pi-agent-platform/plugin-types/registry`）。
+ * 插件注册表运行期辅助（`@pi-agent-platform/core/plugins`）。
  *
- * 单独一个子路径入口：server 与 CLI 共用同一套读写逻辑，网页端永远不会把这些
- * node:fs 依赖打进 bundle（包根不 re-export 本文件）。
+ * 从 `plugin-types` 搬来：契约包只放类型，带 `node:fs` 的实现归内核。
+ * server 与 CLI 共用同一套读写逻辑；网页端不会碰这个入口（内核包根不 re-export 本文件）。
  *
  * 职责边界：
  * - 目录存在 = "文件在盘上"
@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { FACET_SUPPORT, PLUGIN_API_VERSION, PLUGIN_FACET_NAMES } from './index.js';
+import { FACET_SUPPORT, PLUGIN_API_VERSION, PLUGIN_FACET_NAMES } from './constants.js';
 import type {
   FacetEntryPoint,
   PluginFacetName,
@@ -29,13 +29,36 @@ import type {
   PluginRegistryEntry,
   PluginRegistryFile,
   PluginStatus,
-} from './index.js';
+  RemovedPluginEntry,
+} from '@pi-agent-platform/plugin-types';
 
 export const REGISTRY_FILENAME = 'registry.json';
+
+/** 当前 registry 结构版本。v1（带 version/facets/installedAt）读入时在内存里迁到 v2。 */
+export const REGISTRY_VERSION = 2 as const;
 
 /** `<pluginsDir>/registry.json` */
 export function registryPath(pluginsDir: string): string {
   return path.join(pluginsDir, REGISTRY_FILENAME);
+}
+
+/**
+ * registry 文件位置解析（**优先级固定**，便于 dev 与正式实例隔离）：
+ *
+ * 1. 显式参数（CLI `--registry`）
+ * 2. `PI_PLUGIN_REGISTRY`（直接给文件路径）
+ * 3. `PI_SERVER_PLUGINS_DIR` 下的 `registry.json`
+ * 4. 调用方给的默认目录下的 `registry.json`
+ *
+ * 为什么必须可指定：dev 与已安装实例共用一份 registry 时，双方的文件监听会互相
+ * 触发重载 —— 你停用一个插件，另一个实例跟着重装一遍。
+ */
+export function resolveRegistryFile(pluginsDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnvFile = env.PI_PLUGIN_REGISTRY;
+  if (fromEnvFile && fromEnvFile.trim()) return path.resolve(fromEnvFile.trim());
+  const fromEnvDir = env.PI_SERVER_PLUGINS_DIR;
+  if (fromEnvDir && fromEnvDir.trim()) return registryPath(path.resolve(fromEnvDir.trim()));
+  return registryPath(pluginsDir);
 }
 
 /** `<pluginsDir>/<id>` */
@@ -44,20 +67,7 @@ export function pluginDir(pluginsDir: string, id: string): string {
 }
 
 function emptyRegistry(): PluginRegistryFile {
-  return { version: 1, plugins: [] };
-}
-
-/**
- * 读注册表。文件不存在 → 空注册表；JSON 损坏 → 抛出（由调用方决定降级策略）。
- */
-export function readRegistry(pluginsDir: string): PluginRegistryFile {
-  const file = registryPath(pluginsDir);
-  if (!existsSync(file)) return emptyRegistry();
-  const raw = readFileSync(file, 'utf-8');
-  if (!raw.trim()) return emptyRegistry();
-  const parsed = JSON.parse(raw) as Partial<PluginRegistryFile>;
-  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
-  return { version: 1, plugins: plugins.filter(isRegistryEntry) };
+  return { version: REGISTRY_VERSION, plugins: [], removed: [] };
 }
 
 function isRegistryEntry(value: unknown): value is PluginRegistryEntry {
@@ -66,13 +76,59 @@ function isRegistryEntry(value: unknown): value is PluginRegistryEntry {
   return typeof entry.id === 'string' && typeof entry.dir === 'string';
 }
 
+/**
+ * 读注册表。文件不存在 → 空注册表；JSON 损坏 → 抛出（由调用方决定降级策略）。
+ *
+ * **v1 自动迁移（在内存里）**：早期条目带 `version` / `facets` / `installedAt`，
+ * 现在只认 `id` / `dir` / `enabled`。多出来的字段直接丢弃 —— 它们是可再生的
+ * 派生信息（读代码与目录即可得出），留着只会过期。写回由调用方决定（CLI 写、server 只读）。
+ */
+export function readRegistry(fileOrDir: string): PluginRegistryFile {
+  const file = fileOrDir.endsWith('.json') ? fileOrDir : registryPath(fileOrDir);
+  if (!existsSync(file)) return emptyRegistry();
+  const raw = readFileSync(file, 'utf-8');
+  if (!raw.trim()) return emptyRegistry();
+  const parsed = JSON.parse(raw) as Partial<PluginRegistryFile> & { plugins?: unknown[] };
+  const plugins = (Array.isArray(parsed.plugins) ? parsed.plugins : [])
+    .filter(isRegistryEntry)
+    .map((e) => ({ id: e.id, dir: e.dir, enabled: e.enabled !== false }));
+  const removed = (Array.isArray(parsed.removed) ? parsed.removed : [])
+    .filter((r): r is RemovedPluginEntry => Boolean(r) && typeof (r as RemovedPluginEntry).id === 'string')
+    .map((r) => ({ id: r.id, removedAt: r.removedAt ?? new Date(0).toISOString() }));
+  return { version: REGISTRY_VERSION, plugins, removed };
+}
+
 /** 原子写（tmp + rename），避免 CLI 与 server 交错时读到半个文件。 */
-export function writeRegistry(pluginsDir: string, data: PluginRegistryFile): void {
-  mkdirSync(pluginsDir, { recursive: true });
-  const file = registryPath(pluginsDir);
+export function writeRegistry(fileOrDir: string, data: PluginRegistryFile): void {
+  const file = fileOrDir.endsWith('.json') ? fileOrDir : registryPath(fileOrDir);
+  mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
   renameSync(tmp, file);
+}
+
+/** 该 id 是否已被墓碑挡掉（bundled 卸载后不复活）。 */
+export function isTombstoned(data: PluginRegistryFile, id: string): boolean {
+  return data.removed.some((r) => r.id === id);
+}
+
+/** 写墓碑（重复写保持幂等，不刷新时间戳）。 */
+export function addTombstone(data: PluginRegistryFile, id: string): PluginRegistryFile {
+  if (isTombstoned(data, id)) return data;
+  return {
+    version: REGISTRY_VERSION,
+    plugins: data.plugins,
+    removed: [...data.removed, { id, removedAt: new Date().toISOString() }],
+  };
+}
+
+/** 恢复 bundled 插件（移除墓碑）。 */
+export function removeTombstone(data: PluginRegistryFile, id: string): PluginRegistryFile {
+  return {
+    version: REGISTRY_VERSION,
+    plugins: data.plugins,
+    removed: data.removed.filter((r) => r.id !== id),
+  };
 }
 
 export function findEntry(data: PluginRegistryFile, id: string): PluginRegistryEntry | undefined {
@@ -82,13 +138,17 @@ export function findEntry(data: PluginRegistryFile, id: string): PluginRegistryE
 /** 插入或替换（按 id）。 */
 export function upsertEntry(data: PluginRegistryFile, entry: PluginRegistryEntry): PluginRegistryFile {
   const plugins = data.plugins.filter((p) => p.id !== entry.id);
-  plugins.push(entry);
+  plugins.push({ id: entry.id, dir: entry.dir, enabled: entry.enabled !== false });
   plugins.sort((a, b) => a.id.localeCompare(b.id));
-  return { version: 1, plugins };
+  return { version: REGISTRY_VERSION, plugins, removed: data.removed };
 }
 
 export function removeEntry(data: PluginRegistryFile, id: string): PluginRegistryFile {
-  return { version: 1, plugins: data.plugins.filter((p) => p.id !== id) };
+  return {
+    version: REGISTRY_VERSION,
+    plugins: data.plugins.filter((p) => p.id !== id),
+    removed: data.removed,
+  };
 }
 
 /**
@@ -227,7 +287,7 @@ export interface PluginState {
   facets: Partial<Record<PluginFacetName, boolean>>;
   /** 磁盘上声明了哪些 facet（只看目录存在，不看入口与开关）。 */
   declaredFacets: PluginFacetName[];
-  /** registry 里显式关闭的 facet（原样，未与声明求交）。 */
+  /** 历史字段（v1 的 facet 级开关已废弃），恒为空对象，保留一版给消费方。 */
   switches: Partial<Record<PluginFacetName, boolean>>;
   /** 各 facet 的入口文件探测结果。 */
   entries: Partial<Record<PluginFacetName, FacetEntryPoint>>;
@@ -247,7 +307,7 @@ export interface PluginState {
  */
 export function describePluginState(entry: PluginRegistryEntry): PluginState {
   const facets: Partial<Record<PluginFacetName, boolean>> = {};
-  const switches: Partial<Record<PluginFacetName, boolean>> = { ...(entry.facets ?? {}) };
+  const switches: Partial<Record<PluginFacetName, boolean>> = {};
   const entries: Partial<Record<PluginFacetName, FacetEntryPoint>> = {};
 
   // 目录探测与入口探测都不依赖开关：先算出来，这样"停用"的插件也能看到它声明了什么。
@@ -257,7 +317,8 @@ export function describePluginState(entry: PluginRegistryEntry): PluginState {
   const base = { facets, declaredFacets, switches, entries, loadedFacets: [] as PluginFacetName[] };
 
   if (!entry.enabled) {
-    return { ...base, status: 'disabled', reason: '已在 registry 中停用', manifest: null };
+    // 停用 ≠ 不可见：只读 `package.json`（不执行代码）拿到版本与描述，界面照样能展示。
+    return { ...base, status: 'disabled', reason: '已在 registry 中停用', manifest: readManifest(entry.dir) };
   }
   const manifest = readManifest(entry.dir);
   if (!dirExists(entry.dir)) {
@@ -368,15 +429,16 @@ export function acquireRegistryLock(pluginsDir: string): RegistryLock | null {
 
 /** 读-改-写注册表，全程持锁。 */
 export function withRegistry<T>(
-  pluginsDir: string,
+  fileOrDir: string,
   mutate: (data: PluginRegistryFile) => { data: PluginRegistryFile; result: T },
 ): { ok: true; result: T } | { ok: false; reason: string } {
-  const lock = acquireRegistryLock(pluginsDir);
+  const file = fileOrDir.endsWith('.json') ? fileOrDir : registryPath(fileOrDir);
+  const lock = acquireRegistryLock(path.dirname(file));
   if (!lock) return { ok: false, reason: '注册表被另一个进程锁定（等待 2 分钟后重试）' };
   try {
-    const current = readRegistry(pluginsDir);
+    const current = readRegistry(file);
     const { data, result } = mutate(current);
-    writeRegistry(pluginsDir, data);
+    writeRegistry(file, data);
     return { ok: true, result };
   } finally {
     lock.release();

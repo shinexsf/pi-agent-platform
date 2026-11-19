@@ -13,22 +13,29 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync 
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
+import Database from 'better-sqlite3';
 import {
   acquireRegistryLock,
+  addTombstone,
   describePluginState,
   detectFacets,
+  isTombstoned,
   pluginDir,
   readRegistry,
+  removeEntry,
+  removeTombstone,
   scanPluginDirs,
   upsertEntry,
   writeRegistry,
   withRegistry,
   deletePluginDir,
-} from '@pi-agent-platform/plugin-types/registry';
-import { PLUGIN_API_VERSION } from '@pi-agent-platform/plugin-types';
+} from '@pi-agent-platform/core/plugins';
+import { PLUGIN_API_VERSION } from '@pi-agent-platform/core/plugins';
 import type { PluginRegistryFile } from '@pi-agent-platform/plugin-types';
 import { error, log, warn } from '../logger.js';
-import { piNpmModulesDir, pluginsDir } from '../paths.js';
+import { resolveServerPort } from '../daemon.js';
+import { bundledPluginsDir, databasePath, piNpmModulesDir, pluginRegistryFile, pluginsDir } from '../paths.js';
+import { ensureVendoredTypes, PLUGIN_TYPES_VERSION, readVendoredTypesVersion } from '../plugin-types-vendor.js';
 
 interface PackageJsonLike {
   name?: string;
@@ -163,15 +170,20 @@ export async function pluginAddCommand(rawDir: string): Promise<void> {
       warn(`peer link verification failed (a second copy may shadow pi's): ${badLinks.join('; ')}`);
     }
 
-    const entry: PluginRegistryFile['plugins'][number] = {
-      id: pkg.name as string,
-      version: pkg.version as string,
-      dir,
-      enabled: true,
-      installedAt: new Date().toISOString(),
-    };
-    const next = upsertEntry(readRegistry(pluginsDir()), entry);
-    writeRegistry(pluginsDir(), next);
+    // 安装前先机械校验：入口在不在、是不是 ESM、web 产物有没有裸说明符。
+    // 失败就不写 registry —— 避免"登记了但跑不起来"的僵尸条目。
+    const { checkPluginDir, formatCheckResult } = await import('@pi-agent-platform/core/plugins');
+    const check = checkPluginDir(dir);
+    if (!check.ok) {
+      for (const line of formatCheckResult(check)) error(line);
+      error('plugin check failed — nothing registered');
+      process.exit(1);
+    }
+    ensureVendoredTypes(dir);
+
+    const entry: PluginRegistryFile['plugins'][number] = { id: pkg.name as string, dir, enabled: true };
+    const next = upsertEntry(readRegistry(pluginRegistryFile()), entry);
+    writeRegistry(pluginRegistryFile(), next);
 
     log(`registered ${pkg.name}@${pkg.version} (facets: ${facets.join(', ')})`);
     log('restart the server, or wait for the registry watcher, to load it');
@@ -181,50 +193,90 @@ export async function pluginAddCommand(rawDir: string): Promise<void> {
 }
 
 export async function pluginListCommand(): Promise<void> {
-  const dir = pluginsDir();
-  const data = readRegistry(dir);
-  const byDir = new Map(scanPluginDirs(dir).map((d) => [path.basename(d), d]));
+  const registry = pluginRegistryFile();
+  const data = readRegistry(registry);
+  const bundledRoot = bundledPluginsDir();
+  const rows: string[] = [];
+  const seen = new Set<string>();
 
-  if (data.plugins.length === 0 && byDir.size === 0) {
+  // bundled：目录存在即生效（墓碑挡掉的不列）
+  for (const dir of scanPluginDirs(bundledRoot)) {
+    const id = path.basename(dir);
+    seen.add(id);
+    if (isTombstoned(data, id)) {
+      rows.push(`${id}  -  removed(bundled)  -  ${dir}  (已卸载；plugin enable 可恢复)`);
+      continue;
+    }
+    const state = describePluginState({ id, dir, enabled: true });
+    rows.push(formatRow(id, 'bundled', state));
+  }
+
+  for (const entry of data.plugins) {
+    seen.add(entry.id);
+    const state = describePluginState(entry);
+    rows.push(formatRow(entry.id, 'user', state));
+  }
+
+  // 用户目录里有目录但没登记 → orphan
+  for (const dir of scanPluginDirs(pluginsDir())) {
+    const id = path.basename(dir);
+    if (seen.has(id)) continue;
+    rows.push(`${id}  -  orphan  -  -  -  ${dir}  (目录存在但未登记；用 plugin add 重新登记)`);
+  }
+
+  if (rows.length === 0) {
     log('no plugins installed');
     return;
   }
+  process.stdout.write(`id  version  source  status  facets  dir\n${rows.join('\n')}\n`);
+  process.stdout.write(`\nregistry: ${registry}\nbundled:  ${bundledRoot}\n`);
+}
 
-  const rows: string[] = [];
-  for (const entry of data.plugins) {
-    byDir.delete(entry.id);
-    const state = describePluginState(entry);
-    const facetList = Object.entries(state.facets)
+function formatRow(id: string, source: 'bundled' | 'user', state: ReturnType<typeof describePluginState>): string {
+  const facetList =
+    Object.entries(state.facets)
       .filter(([, on]) => on)
       .map(([name]) => name)
-      .join(',');
-    rows.push(
-      [
-        entry.id,
-        entry.version,
-        state.status,
-        facetList || '-',
-        entry.dir,
-        state.reason ? `(${state.reason})` : '',
-      ]
-        .filter(Boolean)
-        .join('  '),
-    );
-  }
-  // 有目录但未登记 → orphan（不加载）
-  for (const [name, dir] of byDir) {
-    rows.push(`${name}  -  orphan  -  ${dir}  (目录存在但未登记；用 plugin add 重新登记)`);
-  }
+      .join(',') || '-';
+  return [
+    id,
+    state.manifest?.version ?? '?',
+    source,
+    state.status,
+    facetList,
+    state.manifest ? '' : '(no package.json)',
+    state.reason ? `(${state.reason})` : '',
+  ]
+    .filter(Boolean)
+    .join('  ');
+}
 
-  process.stdout.write(`id  version  status  facets  dir\n${rows.join('\n')}\n`);
+/** bundled 插件是否在盘上（用于决定 enable/disable/remove 走哪条路）。 */
+function isBundled(id: string): boolean {
+  return existsSync(path.join(bundledPluginsDir(), id, 'package.json'));
 }
 
 function setEnabled(id: string, enabled: boolean): void {
-  const res = withRegistry(pluginsDir(), (data) => {
+  if (isBundled(id)) {
+    // bundled 的"停用/启用"= 墓碑的增删：目录不能删（随包分发），登记也不该有。
+    const res = withRegistry(pluginRegistryFile(), (data) => ({
+      data: enabled ? removeTombstone(data, id) : addTombstone(data, id),
+      result: true,
+    }));
+    if (!res.ok) {
+      error(`failed to write registry: ${res.reason}`);
+      process.exit(1);
+    }
+    log(`${id} (bundled) ${enabled ? 'enabled' : 'disabled'}`);
+    log('生效：server facet 立即（插件目录变化会被监听）；worker/pi 扩展 facet 待下次 spawn');
+    return;
+  }
+
+  const res = withRegistry(pluginRegistryFile(), (data) => {
     const entry = data.plugins.find((p) => p.id === id);
     if (!entry) return { data, result: null };
     const next = data.plugins.map((p) => (p.id === id ? { ...p, enabled } : p));
-    return { data: { version: 1, plugins: next }, result: entry };
+    return { data: { ...data, plugins: next }, result: entry };
   });
   if (!res.ok) {
     error(`failed to write registry: ${res.reason}`);
@@ -245,28 +297,128 @@ export async function pluginDisableCommand(id: string): Promise<void> {
   setEnabled(id, false);
 }
 
-export async function pluginRemoveCommand(id: string, opts: { purge?: boolean }): Promise<void> {
-  const res = withRegistry(pluginsDir(), (data) => {
-    const exists = data.plugins.some((p) => p.id === id);
-    return { data: { version: 1, plugins: data.plugins.filter((p) => p.id !== id) }, result: exists };
-  });
-  if (!res.ok) {
-    error(`failed to write registry: ${res.reason}`);
+/** 读迁移台账，返回该插件登记过的表名（DB 不存在 / 表不存在 → 空）。 */
+function pluginTables(id: string): string[] {
+  const file = databasePath();
+  if (!existsSync(file)) return [];
+  try {
+    const raw = new Database(file, { readonly: true });
+    try {
+      const rows = raw
+        .prepare('SELECT name FROM plugin_migrations WHERE plugin_id = ? ORDER BY name')
+        .all(id) as Array<{ name: string }>;
+      return rows.map((r) => r.name);
+    } finally {
+      raw.close();
+    }
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * `plugin remove` —— 只删登记与墓碑，**数据一律保留**。
+ *
+ * bundled：写墓碑（目录随包分发，删了下次升级又回来，所以用墓碑表达"用户不要它"）。
+ * user：删 registry 条目（`--purge` 才删目录）。
+ * 两种都把"留下的表"打出来让用户自己决定 —— 自动删表不可逆，平台不做。
+ */
+export async function pluginRemoveCommand(id: string, opts: { purge?: boolean } = {}): Promise<void> {
+  const bundled = isBundled(id);
+  const tables = pluginTables(id);
+
+  if (bundled) {
+    const res = withRegistry(pluginRegistryFile(), (data) => ({
+      data: addTombstone(data, id),
+      result: true,
+    }));
+    if (!res.ok) {
+      error(`failed to write registry: ${res.reason}`);
+      process.exit(1);
+    }
+    log(`${id} (bundled) removed — 目录保留，墓碑已写入（升级不会复活；plugin enable 可恢复）`);
+  } else {
+    const res = withRegistry(pluginRegistryFile(), (data) => {
+      const exists = data.plugins.some((p) => p.id === id);
+      return { data: removeEntry(data, id), result: exists };
+    });
+    if (!res.ok) {
+      error(`failed to write registry: ${res.reason}`);
+      process.exit(1);
+    }
+    log(res.result ? `${id} unregistered` : `${id} was not registered (nothing to unregister)`);
+    if (opts.purge) {
+      const dir = pluginDir(pluginsDir(), id);
+      if (existsSync(dir)) {
+        deletePluginDir(pluginsDir(), id);
+        log(`deleted ${dir}`);
+      }
+    } else {
+      log('install directory kept (use --purge to delete it)');
+    }
+  }
+
+  if (tables.length > 0) {
+    log('');
+    log(`留下的表（数据未删除，需要时自行清理）：${tables.join(', ')}`);
+  }
+}
+
+/**
+ * `pi-server plugin reload` —— 让运行中的 server 按磁盘现状重装插件（**不重启**）。
+ *
+ * 为什么需要它：插件**代码**变化不会被 registry 监听捕获（本期不监听插件目录）。
+ * 生效边界：server facet 立即生效；worker / pi 扩展 facet 等下次 spawn；浏览器刷新。
+ */
+export async function pluginReloadCommand(opts: { port?: number } = {}): Promise<void> {
+  const port = opts.port ?? resolveServerPort();
+  const url = `http://localhost:${port}/api/extensions/reload`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  let body: Record<string, unknown> | null = null;
+  try {
+    const res = await fetch(url, { method: 'POST', signal: ctrl.signal });
+    body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!res.ok) {
+      error(`reload failed (${res.status}): ${body ? JSON.stringify(body) : 'no body'}`);
+      process.exit(1);
+    }
+  } catch (err) {
+    error(`cannot reach server at ${url} — is it running? (${String(err)})`);
+    process.exit(1);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const s = body ?? {};
+  log(
+    `reloaded: plugins=${s.plugins ?? '?'} menus=${s.menus ?? '?'} pages=${s.pages ?? '?'} ` +
+      `routes=${s.routes ?? '?'} rejected=${s.rejected ?? '?'} imports=${s.imports ?? '?'}`,
+  );
+  log('生效范围：server facet 已生效；worker / pi 扩展 facet 待下次 spawn；浏览器刷新即可');
+}
+
+/**
+ * `pi-server plugin check <dir>` —— 安装前/排障用的机械校验。
+ *
+ * 与打包自检共用同一套规则（`core/plugins/check.ts`）：存在性 / ESM / 说明符白名单。
+ * 顺便把 vendored 类型写进插件目录并比对版本。
+ */
+export async function pluginCheckCommand(dir: string): Promise<void> {
+  const target = path.resolve(dir);
+  const { checkPluginDir, formatCheckResult } = await import('@pi-agent-platform/core/plugins');
+  const result = checkPluginDir(target);
+  for (const line of formatCheckResult(result)) {
+    if (line.includes('✗')) error(line);
+    else if (line.includes('!')) warn(line);
+    else log(line);
+  }
+  ensureVendoredTypes(target);
+  const typesVersion = readVendoredTypesVersion(target);
+  if (typesVersion && typesVersion !== PLUGIN_TYPES_VERSION) {
+    error(`vendored types are stale (${typesVersion} ≠ ${PLUGIN_TYPES_VERSION})`);
     process.exit(1);
   }
-  if (!res.result) {
-    warn(`${id} was not registered (nothing to unregister)`);
-  } else {
-    log(`${id} unregistered`);
-  }
-  if (opts.purge) {
-    const dir = pluginDir(pluginsDir(), id);
-    if (existsSync(dir)) {
-      deletePluginDir(pluginsDir(), id);
-      log(`deleted ${dir}`);
-    }
-  } else {
-    log('install directory kept (use --purge to delete it)');
-  }
-  log('plugin tables (if any) are NOT dropped — only remove derived data you can recompute');
+  if (!result.ok) process.exit(1);
+  log('check passed');
 }

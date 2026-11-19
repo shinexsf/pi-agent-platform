@@ -21,6 +21,7 @@ import { createConfigRouter } from './routes/config.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createPluginsRouter } from './routes/plugins.js';
 import { createExtensionsRouter, createPluginDispatcherRouter } from './routes/plugin-runtime.js';
+import { recordPluginMigration } from './host-api-impl.js';
 import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
 import { startPluginRuntime } from '@pi-agent-platform/core';
@@ -34,7 +35,7 @@ import { listAvailableModels } from './model-registry.js';
 import type { config as ServerConfig } from './config.js';
 import type { DB } from '@pi-agent-platform/core/db';
 import type Database from 'better-sqlite3';
-import type { AgentRepo, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
+import type { AgentRepo, HostApi, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
 import type { AttachmentStore } from '@pi-agent-platform/core';
 import type { TemplateRepo } from './repos/template.repo.js';
 import type { NotificationRepo } from './repos/notification.repo.js';
@@ -54,6 +55,8 @@ export interface ServerAppDeps {
   attachmentStore: AttachmentStore;
   notifier: Notifier;
   workerPool: WorkerPool;
+  /** 宿主能力面（入口实现）；插件经它访问内核 —— 四个面，不是死接口。 */
+  hostApi: HostApi;
 }
 
 /** 工厂返回：可 mount 的应用 + 释放它启动的资源。 */
@@ -64,7 +67,7 @@ export interface ServerApp {
 }
 
 export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
-  const { config, db, raw, agentRepo, sessionRepo, templateRepo, notificationRepo, attachmentStore, notifier, workerPool } = deps;
+  const { config, db, raw, agentRepo, sessionRepo, templateRepo, notificationRepo, attachmentStore, notifier, workerPool, hostApi } = deps;
 
   const app = new Hono();
 
@@ -116,13 +119,28 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
     },
   );
   // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
-  app.route('/api/extensions', createExtensionsRouter({ pluginsDir: config.pluginsDir }));
+  app.route(
+    '/api/extensions',
+    createExtensionsRouter({
+      pluginsDir: config.pluginsDir,
+      // 等 startPluginRuntime 完成再 reload（首次装载是异步的）
+      reload: async () => (await pluginRuntime).reload(),
+    }),
+  );
   app.route('/api/p', createPluginDispatcherRouter({ pluginsDir: config.pluginsDir }));
 
   // 插件 web 资源（change: plugin-mechanism 6.1）：按 registry 解析插件真实目录。
   app.route('/plugins', createPluginAssetsRouter({ pluginsDir: config.pluginsDir }));
   // 启动插件运行期：静态快照 + 执行 register()/init() + 监听 registry 变化
-  void startPluginRuntime(config.pluginsDir);
+  // 运行期句柄（reload 走这条，不重启 server）
+  const pluginRuntime = startPluginRuntime(config.pluginsDir, {
+    host: hostApi,
+    // R3：插件注册的反向方法挂到 worker→master 分发表（内核不暴露 WorkerPool）。
+    registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
+    // R4：迁移台账（卸载时提示"留下的表"）。
+    recordMigration: (pluginId, name) => recordPluginMigration(raw, pluginId, name),
+  });
+  void pluginRuntime.catch((err) => logger.error({ err: String(err) }, 'plugin runtime start failed'));
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
   app.route('/api/server-logs', createServerLogsRouter());
   // IPC 方法清单（注册表的可观测面；只读诊断）
