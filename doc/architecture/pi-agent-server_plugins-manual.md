@@ -79,11 +79,24 @@ export default {
     // R1 页面：菜单与路由一次注册（菜单由路由推出，不要分别注册）
     host.ui.page({ path: '/im/channels', label: 'IM 渠道', icon: 'chat', component: 'channels', order: 10 });
 
+    // 只登记路由、不占导航项（入口在别处，例如顶栏面板里的「查看全部」）
+    host.ui.page({ path: '/im/all', label: 'IM', icon: 'chat', component: 'all', nav: false });
+
     // R9 局部挂载点：槽位名只能取平台已定义的（当前仅 chat.rail.right）
     host.ui.slot({ slot: 'chat.rail.right', id: 'my-panel', title: '我的面板', component: 'panel' });
 
     // R10 工具卡接管
     host.ui.toolCard({ tool: 'my_tool', mode: 'replace', entry: 'card' });
+
+    // R11 顶栏动作：图标按钮 + 点开的面板；`badge.endpoint` 返回 { count } 就显示角标
+    host.ui.headerAction({
+      id: 'inbox',
+      icon: 'bell',
+      title: '通知',
+      component: 'hdr',
+      order: 10,
+      badge: { endpoint: '/unread-count' },
+    });
 
     // R2 HTTP 端点：挂在 /api/p/<插件 id>/ 下
     host.http.route({ method: 'GET', path: '/stats', handler: async (req) => ({ json: { ok: true } }) });
@@ -133,7 +146,23 @@ export default {
 };
 ```
 
-### 2.4 `web/*.js` —— 浏览器组件
+### 2.4 顶栏动作（R11）
+
+顶栏右侧是插件可扩展的图标区。注册一次 = 一个图标按钮 + 点开就地展开的面板（不跳页、不占导航项）：
+
+```js
+host.ui.headerAction({
+  id: 'inbox', icon: 'bell', title: '通知', component: 'hdr', order: 10,
+  badge: { endpoint: '/unread-count' },   // 宿主定期 GET，返回 { count } 显示角标
+});
+```
+
+- **折叠由宿主决定**：桌面平铺；窄屏只留前几个，其余进「更多」菜单（插件不用管）
+- **角标要一个只读端点**：注册发生在 server 侧，拿不到浏览器里的实时状态
+- 面板里做站内跳转用 `host.ui.navigate('/some/path')`（SPA 路由，不整页刷新）
+- 想要"既能在顶栏快速看、又有正式页面"：R11 + `ui.page({ ..., nav: false })` 配对
+
+### 2.5 `web/*.js` —— 浏览器组件
 
 ```js
 export function mount(el, host) {
@@ -164,7 +193,8 @@ export function mount(el, host) {
 | `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
 | `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` |
 | `events` | **仅 worker** | `emit(name, data)`（server 侧本期未接通，调用会 warn） |
-| `ui` | 仅 server | `page` · `slot` · `toolCard` |
+| `ui`（注册面） | 仅 server | `page`（`nav: false` 可只登记路由）· `slot` · `headerAction` · `toolCard` |
+| `ui`（浏览器侧） | 浏览器 | `navigate(path)` · `toast` · `sheet` |
 | `http` | 仅 server | `route({ method, path, handler })` |
 | `methods` | server / worker | `handle(name, fn)` |
 

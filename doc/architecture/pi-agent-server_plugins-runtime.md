@@ -27,7 +27,7 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 
 **平台自身能力走同一条路**：`callServer` 是 worker 侧的 **inline 插件**（`workers/session-worker/src/inline-plugins.ts`），编译进平台、不经目录发现、不可卸载，但注册动作与目录插件完全一致。判定分界 = **实现方在不在平台代码里**。
 
-## 十个注册扩展点
+## 十一个注册扩展点
 
 | # | 装载点 | 扩展点 | 注册调用 |
 |---|---|---|---|
@@ -41,12 +41,24 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 | R8 | pi 扩展 | 钩子 / 资源注入 | `pi.on(...)` 等 pi 原生面 |
 | R9 | 浏览器 | 挂载点 + 组件 | `host.ui.slot({ slot, id, component })` |
 | R10 | 浏览器 | 工具卡接管 | `host.ui.toolCard({ tool, mode, entry })` |
+| R11 | 浏览器 | 顶栏动作（图标按钮 + 面板） | `host.ui.headerAction({ id, icon, title, component, badge? })` |
 
 定时器**不在清单里**：它没有注册动作，是 `init()` 里自起的资源（平台不管调度、不补跑）。
 
+### 顶栏动作区（R11）
+
+顶栏右侧是**插件可扩展的图标按钮区**（GitHub 右上角那种），平台的架构图 / 主题切换与插件动作共处一排：
+
+- **形状仍是一条**："地址 + 组件" —— 点开后在顶栏下方就地展开面板（不跳页），面板内容 = `web/<component>.js` 的 `mount(el, host)`
+- **折叠**：桌面全平铺；紧凑端只留 `INLINE_ON_COMPACT`（当前 1）个插件动作，其余与平台的架构图一起进「更多」菜单。**主题切换始终常驻**（全站开关，藏进二级菜单没人找得到）
+- **角标**：`badge: { endpoint: '/unread-count' }` → 宿主每 60s `GET /api/p/<id><endpoint>` 取 `{ count }`，面板关闭时再刷一次。用只读端点而不是回调，因为注册发生在 server 侧，拿不到浏览器里的实时状态
+- **面板单实例**：同时只开一个；点空白 / Esc / 再点同一个都关
+
 ### UI 只有一种形状
 
-`ui.page` 与 `slot` / `toolCard` 都是"**地址 + 组件**"，装载路径完全一致：同源 URL → 动态 `import()` → `mount(el, host)`。差别只在**位置**：整页（页面 + 菜单）vs 局部（已经存在的页面里的一个坑）。
+`ui.page` / `slot` / `toolCard` / `headerAction` 都是"**地址 + 组件**"，装载路径完全一致：同源 URL → 动态 `import()` → `mount(el, host)`。差别只在**位置**：整页、页面里的一个坑、顶栏的一个按钮。
+
+`ui.page` 还带一个 `nav?: boolean`（默认 `true`）：`nav: false` = **只登记路由、不占导航项**，用于"入口在别处但需要一个正式页面"——例如顶栏铃铛的面板里放「查看全部」跳到 `/notifications`，这样既不用在导航里再造一个同名入口，也有正式页可分享/刷新。
 
 - 槽位名由**平台硬编码**（当前只有 `chat.rail.right`）：插件不能新造槽位，加槽位要改 UI 并发版
 - 与内置路由冲突时插件页**不抢**：退回到 `/plugin-page/<pluginId>/<pageId>` 兜底路径

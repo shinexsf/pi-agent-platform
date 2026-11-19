@@ -360,3 +360,13 @@ agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Buil
 - **收件箱**：severity 色条 + 筛选 chips + 全部已读；点击标已读并跳 `actionUrl`；**没有输入框**（要回复必须进会话）
 
 收件箱本身属独立子系统，见 [notifications 文档](pi-agent-server_notifications.md) §6。
+
+## 顶栏右侧（插件可扩展，R11）
+
+顶栏图标区是插件扩展点：平台的「架构图」「主题切换」与插件动作共处一排。
+
+- **数据来源**：`GET /api/extensions` 的 `headerActions`（服务端注册，浏览器只消费）
+- **折叠**：桌面平铺；紧凑端只留 1 个插件动作，其余与「架构图」一起进「更多」菜单；**主题切换始终常驻**
+- **面板**：点图标就地展开（不跳页），内容由插件 `web/<component>.js` 的 `mount(el, host)` 渲染，宿主只给外壳与定位
+- **角标**：`badge.endpoint` → 宿主 60s 轮询 `{ count }`，面板关闭时再刷
+- **跳转**：插件用 `host.ui.navigate(path)` 做站内跳转（不暴露 router 实例）
