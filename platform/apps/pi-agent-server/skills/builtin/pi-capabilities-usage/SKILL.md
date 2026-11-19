@@ -18,8 +18,18 @@ description: 当需要查询或修改平台状态（server 版本与 worker 池�
 
 ## 2. 两层授权，被拒时看原因本身
 
-1. **会话白名单**：只有 agent / session 配置里显式列出的方法才可调用。没配 → 一个都不能调；配了空数组 → 同理。
-2. **own-scope（写操作）**：写方法只能指向**你自己的** agent / session / 触发器行。读方法可以跨 agent 看（个人平台）。
+1. **白名单**：只有 agent / session 配置里显式列出的方法才可调用。没配 → 一个都不能调；配了空数组 → 同理。
+   **没有任何授权方法时，`callServer` 工具根本不会被注入** —— 你会看到"我没有这个工具"，
+   那不是装载失败，是"没有可调的东西，注入了也只是噪音"。
+2. **own-scope（写操作）**：写方法只能指向**你自己的** agent / session 行（定时任务 / webhook 入口的
+   归属校验由各自插件自己按 `ctx.sessionId → agentId` 做）。读方法可以跨 agent 看（个人平台）。
+
+> **能力 ≠ 插件**：`capabilities` 决定"`callServer` 能调哪些方法"，`plugins` 决定"哪些插件工具与
+> skill 注入这个会话"。两者独立，任一缺失对应一整套东西消失（这也是排查"工具不见了"的第一分叉）。
+
+> **一个会静默降级的坑**：会话行的 `capabilities` 键存在且为 `null` 时，会**覆盖** agent 的授权
+> （`'capabilities' in rowConfig` 就算"已配置"）。表现是"首次开会话能用，重启/resume 后 callServer 没了"——
+> 因为 spawn 顺序是"首次用 agent 配置、之后用会话行快照"。遇到先查会话行的 `capabilities` 是不是 null。
 
 典型拒绝信息与含义：
 
@@ -56,7 +66,7 @@ description: 当需要查询或修改平台状态（server 版本与 worker 池�
 | `server` | `status`：版本、uptime、端口、worker 池统计 | 只读，且**不含任何凭据**；排查"卡住了/没 worker"先看它 |
 | `agent` | 搜索/取详情/局部更新配置 | 更新只影响未来会话；`workspacePath` 必须是已存在路径 |
 | `session` | 搜索/取详情/改名/换模型/改配置/重启 | `config.*` 下次 spawn；`restart` 会打断当前轮次 |
-| `channel` / `config` | 占位（目前无业务方法） | 出现在 `list` 里不等于可用 |
+| —— | 目前**只有** server / agent / session 三个模块 | 渠道配置、平台配置还没有 callServer 方法，别去找 |
 
 ## 6. 你手里没有的东西
 

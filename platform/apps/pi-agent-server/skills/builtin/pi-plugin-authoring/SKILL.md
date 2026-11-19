@@ -1,6 +1,6 @@
 ---
 name: pi-plugin-authoring
-description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约：目录约定、四个装载点的默认导出写法、五个能力面、vendored 类型、`plugin check` 自查、产物硬约束（原生 ESM、无裸说明符）、常见坑。
+description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约：目录约定、四个装载点 + 顶栏动作的默认导出写法、五个能力面（含 bus / sessions.ensure / systemEvent）、插件自带 skill、web 主题变量、vendored 类型、`plugin check` 自查、产物硬约束（原生 ESM、无裸说明符）、常见坑。
 ---
 
 # 给平台写插件
@@ -30,6 +30,7 @@ pi-server plugin reload               # 已装过、改了代码时用这个（�
 | 加个配置页 / 一级页面 | `server/index.js` + `web/page.js` | R1 `host.ui.page` |
 | 在会话页右侧轨道塞个面板 | 同上 + `web/panel.js` | R9 `host.ui.slot` |
 | 接管某个工具的卡片渲染 | `server/index.js` + `web/card.js` | R10 `host.ui.toolCard` |
+| 顶栏加图标按钮 + 点开的面板（铃铛类） | `server/index.js` + `web/<component>.js` | R11 `host.ui.headerAction` |
 | 提供 HTTP 端点（webhook / 回调） | `server/index.js` | R2 `host.http.route` |
 | 让 worker 能反向调我 | `server/index.js` | R3 `host.methods.handle` |
 | 建自己的表 | `server/index.js` | R4 `host.db.migrate` |
@@ -47,6 +48,7 @@ my-plugin/
 ├── worker/index.js       export default { init({ bridge }) }
 ├── extension/index.js    export default { init(pi, { bridge }) }
 ├── web/*.js              export function mount(el, host)
+├── skills/<name>/SKILL.md ← 可选：插件自带的 agent 技能（见 §5）
 └── types/plugin-types/   ← plugin check 写入，不要手改
 ```
 
@@ -66,6 +68,13 @@ my-plugin/
 export default {
   init(host) {
     host.ui.page({ path: '/my-plugin', label: '我的插件', icon: 'plug', component: 'page' });
+    // 入口在顶栏、但也需要一个正式页面时：nav:false 只登记路由，不占导航项
+    // （否则铃铛 + 同名导航项 = 两个入口，用户会当成 bug）
+    host.ui.page({ path: '/my-notifications', label: '通知', icon: 'bell', component: 'page', nav: false });
+    host.ui.headerAction({
+      id: 'bell', icon: 'bell', title: '通知', component: 'panel', order: 10,
+      badge: { endpoint: '/unread' },   // 浏览器定期 GET /api/p/<id>/unread 取 { count }
+    });
     host.ui.slot({ slot: 'chat.rail.right', id: 'panel', title: '面板', component: 'panel' });
     host.ui.toolCard({ tool: 'my_tool', mode: 'replace', entry: 'card' });
 
@@ -84,14 +93,48 @@ export default {
 
 | 面 | 用途 | 要点 |
 |---|---|---|
-| `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` | `call` 是唯一调用口；`sessionId` 永远由你给（平台不提供"选会话"） |
+| `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` / `ensure` / `systemEvent` | `call` 是裸 worker 方法调用；`sessionId` 永远由你给（平台不提供"选会话"）。`ensure` = 无人值守跑一轮的唯一入口（新建或复用，陌生 id **抛错**而不是照建）；`systemEvent` 把 `<system-event>` 信封交给会话，**信封文本由内核构造**，你只给结构化字段 |
 | `agents` | `list` / `get` / `update` | 维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放，走审计日志；只建自己的表 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 返回退订函数 |
+| `bus` | `publish(topic, payload)` / `subscribe(topic, fn)` | 插件**之间**唯一的协作通道：无回执、同步派发、无订阅者静默丢弃。别叫它 `events` —— `events` 是发给浏览器的出口 |
 | `events` | `emit` | **仅 worker 侧**有效；server 侧调用会 warn |
 | `ui` / `http` / `methods` | 注册面 | 都返回退订函数，卸载时平台也会统一撤 |
 
-## 5. 硬约束（这些不是风格建议）
+## 5. 插件自带 skill（给 agent 的技能）
+
+插件可以带 agent 技能：`skills/<name>/SKILL.md`，装载时被扫进 `skillPaths` 一并下发
+（worker 的 `additionalSkillPaths`）—— **装好插件、agent 就有这个技能，不需要逐 agent 勾选**。
+目录是**数据不是装载点**（没有 `index.js`），所以不参与"顶层零副作用"那套校验。
+
+```markdown
+---
+name: my-skill            # 必填，与目录名一致
+description: 一句话说清什么时候该读这份（模型按它决定要不要加载）
+---
+
+正文：什么时候用 / 不要用、参数怎么填、常见错误。
+```
+
+`plugin check` 会校验文件存在与 frontmatter 字段（`skill-no-frontmatter` / `skill-frontmatter-field` /
+`skill-missing-file` / `skills-empty`）；打包自检额外要求 `skills/<name>/SKILL.md` 真的进了 tgz ——
+**漏了不会让插件 degraded，只会静默少一个技能**，所以这一步只能靠自检。
+
+写 skill 的两条经验（来自 marketplace 级的踩坑）：
+
+- **不要贴平台消息的原文示例**（`<system-event>` 那类信封）：模型会照着伪造一条"用户要求"。
+  说清语义即可。
+- **工具用法要写"先查再建"**：模型最爱凭印象拼参数。
+
+## 6. web 产物的两条硬规矩
+
+1. **主题变量只能用平台清单里的**：`packages/core/src/plugins/constants.ts` 的 `PLATFORM_THEME_VARS`
+   （颜色、间距、圆角…）。写错变量名**不会报错**，只是渲染成透明/继承 —— `plugin check` 会以
+   `theme-var-unknown` 告警，所以写完跑一次 check，别靠肉眼。
+2. **拿不到路由参数**：`mountPluginPage(el, host)` 只给 `(el, host)`，没有 router / params。
+   需要 id（例如编辑页 `/my-plugin/:id`）就从 `window.location.pathname` 自己解析。
+
+## 7. 硬约束（这些不是风格建议）
 
 1. **顶层零副作用**：模块顶层只能 `import` 与导出对象。装载器在 `import()` 之后、`init()` 之前断言"注册增量为 0"，非零即**拒绝整个插件**（缓存失效会重复执行顶层，因此这条是硬的）
 2. **注册只能发生在 `init()` 里**
@@ -99,11 +142,15 @@ export default {
 4. **`mount(el, host)` 必须导出**并返回清理函数；DOM 只落在 `el` 内，不写全局 CSS
 5. **不要在运行期 import 平台包**：`@pi-agent-platform/plugin-types` 是 types-only（用 `import type`）
 6. **不要建平台表**（agents / sessions / attachments / plugin_migrations）
+7. **不要留空的装载点目录**：`web/`、`server/` 等目录存在但没有任何产物 → 整个插件判 degraded
+8. **图标别靠 emoji**：插件 web 侧拿不到平台的 `AppIcon`，emoji 在缺字体的环境（headless 容器）
+   会渲染成豆腐块 —— 用 inline SVG 或纯文字
 
-## 6. 自测（装完怎么看它对不对）
+## 8. 自测（装完怎么看它对不对）
 
 ```bash
 pi-server plugin check <dir>          # 入口 / ESM / 说明符 / web 产物 / 类型版本
+                                      # + skills frontmatter + 主题变量名 + 平台包运行期 import
 pi-server plugin list                 # id / version / source / status / facets / dir
 pi-server plugin reload              # 不重启 server 重装（server facet 立即生效）
 ```
@@ -113,7 +160,7 @@ pi-server plugin reload              # 不重启 server 重装（server facet �
 - `GET /api/p/<id>/...` → 你自己的端点
 - 生效时机：**server facet 立即；worker / pi 扩展等下次 spawn；浏览器刷新**
 
-## 7. 常见反模式
+## 9. 常见反模式
 
 | 反模式 | 为什么错 | 正解 |
 |---|---|---|
@@ -124,3 +171,5 @@ pi-server plugin reload              # 不重启 server 重装（server facet �
 | 用 `piServer.facets` 声明装载点 | 该字段已删除（第二套真相） | 放目录，让目录存在性说话 |
 | 直接把平台包写进 `dependencies` | private 包，`npm i` 必失败 | 类型用 `plugin check` 写入的 `types/plugin-types/` |
 | 插件读 registry 想自己判断启停 | registry 只是台账，bundled 插件根本不在里面 | 用 `/api/plugins` 或 `host` |
+| 在 web 里自己写颜色（`#333`、`rgba(...)`） | 跟平台主题脱节，暗色下直接不可读 | 用 `PLATFORM_THEME_VARS` 里的变量 |
+| 用 emoji 当按钮图标 | 容器/headless 环境缺字体 → 豆腐块 | inline SVG 或文字 |
