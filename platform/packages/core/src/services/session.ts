@@ -70,7 +70,12 @@ async function resolvePluginsFromConfig(agentConfig: AgentConfig | undefined): P
     const settings = await readSettings(coreConfig().agentDir);
     const installed = extractExtensionNames(settings);
     const agentExtensions = agentConfig?.extensions ?? [];
-    const resolved = resolveSessionPlugins({ snapshot, agentExtensions, installedPiExtensions: installed });
+    const resolved = resolveSessionPlugins({
+      snapshot,
+      enabledPlugins: agentConfig?.plugins ?? [],
+      agentExtensions,
+      installedPiExtensions: installed,
+    });
     for (const p of resolved.filter((r) => !r.enabled && r.reason)) {
       logger.debug({ pluginId: p.id, reason: p.reason }, 'plugin gated off for session');
     }
@@ -83,6 +88,7 @@ async function resolvePluginsFromConfig(agentConfig: AgentConfig | undefined): P
       ...(p.reason ? { reason: p.reason } : {}),
       ...(p.extensionPath ? { extensionPath: p.extensionPath } : {}),
       ...(p.workerPath ? { workerPath: p.workerPath } : {}),
+      ...((p.skillPaths?.length ?? 0) > 0 ? { skillPaths: p.skillPaths } : {}),
     }));
   } catch (err) {
     logger.error({ err: String(err) }, 'plugin resolution failed — session continues without plugins');
@@ -779,6 +785,42 @@ export class SessionRegistry {
       }
     }
     return session;
+  }
+
+  /**
+   * 取一个**可用**会话（插件侧"无人值守跑一轮"的入口）。
+   *
+   * 三态语义与旧 trigger `resolveSession()` 逐条一致：
+   * - 无 `sessionId` → 新建（createFromAgent 拿 id + 占位 worker，再 getOrCreate 落行）
+   * - 有 `sessionId` → 行必须存在且同 agent（否则抛错，fail closed —— `getOrCreate`
+   *   对陌生 id 会照建一个，不校验就会静默写到别人的会话里），然后懒恢复
+   * - `title` 只在新建时写（归因用，不动 sessions schema）
+   */
+  async ensure(input: {
+    agentId: string;
+    sessionId?: string;
+    title?: string;
+  }): Promise<{ sessionId: string; created: boolean }> {
+    const agent = this.deps.agentRepo.get(input.agentId);
+    if (!agent) throw new Error(`agent not found: ${input.agentId}`);
+
+    if (input.sessionId) {
+      const bound = input.sessionId;
+      const row = this.deps.sessionRepo.get(bound);
+      if (!row) throw new Error(`session not found (deleted?): ${bound}`);
+      if (row.agentId !== input.agentId) {
+        throw new Error(`session ${bound} does not belong to agent ${input.agentId}`);
+      }
+      const revived = await this.getOrCreate(bound, agent);
+      if (!revived) throw new Error(`failed to revive session ${bound}`);
+      return { sessionId: bound, created: false };
+    }
+
+    const session = await this.createFromAgent(input.agentId);
+    const persisted = await this.getOrCreate(session.id, agent);
+    if (!persisted) throw new Error(`failed to persist session ${session.id}`);
+    if (input.title) this.deps.sessionRepo.update(session.id, { title: input.title });
+    return { sessionId: session.id, created: true };
   }
 
   /** Get-or-create a WORKERLESS session object (subscription anchor for SSE /

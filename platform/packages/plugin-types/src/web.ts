@@ -84,7 +84,24 @@ export interface PluginWebHost {
   };
   /** 工具卡片专属能力；非卡片挂载点下为 `undefined`。 */
   toolCard?: ToolCardHostExtras;
-  /** 主题：只保证约定的 CSS 变量存在于 `el` 的祖先链上。 */
+  /**
+   * 主题：平台保证下列 CSS 变量存在于 `el` 的**祖先链**上（暗色自动切换，插件不用自己判断）。
+   *
+   * 这条是约定，也是**唯一**正确的着色方式 —— 不要写死颜色，也不要猜变量名：
+   * 猜错时 `var(--x, #fff)` 会静默走 fallback，结果就是暗色下一片白底
+   * （`plugin check` 会扫出未承诺的变量名并告警）。
+   *
+   * | 类别 | 变量 |
+   * |---|---|
+   * | 背景/表面 | `--bg` `--surface` `--surface-raised` `--surface-subtle` `--surface-hover` |
+   * | 文字 | `--text` `--text-secondary` `--text-tertiary` |
+   * | 描边 | `--border` `--border-subtle` `--border-strong` |
+   * | 主色 | `--accent` `--accent-hover` `--accent-ink` `--accent-soft` |
+   * | 语义 | `--success` `--success-soft` `--warning` `--warning-soft` `--danger` `--danger-hover` `--danger-soft` `--on-error` |
+   * | 其它 | `--focus` `--shadow-soft` `--shadow-raised` `--radius-sm/md/lg` `--font-sans` `--font-mono` |
+   *
+   * `get()` / `subscribe()` 只在需要"给画布/图表定色"这类拿不到 CSS 的场景用。
+   */
   theme: {
     get(): 'light' | 'dark';
     subscribe(fn: (theme: 'light' | 'dark') => void): () => void;

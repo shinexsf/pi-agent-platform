@@ -71,7 +71,8 @@ export const BASE_AGENT_CONFIG = {
   skills: [] as string[],
   prompts: [] as string[],
   mcp: { enabled: false, servers: [] as string[] },
-  serverBuiltinTools: ['sendFileToUser'],
+  /** 平台插件启用列表（新表单默认全选：见编辑器加载后的 autoSelectNewAgentDefaults）。 */
+  plugins: [] as string[],
   /** 平台随包 skill（change: server-builtin-skills）——默认全关，按需勾选。 */
   serverBuiltinSkills: [] as string[],
   capabilities: null as string[] | null,
@@ -96,12 +97,10 @@ export function withMcpDependencies(selected: readonly string[]): string[] {
   return next;
 }
 
-/** Server-side custom tools (AgentConfig.serverBuiltinTools) — separate axis from pi tools. */
-export const SERVER_BUILTIN_TOOLS = ['sendFileToUser', 'callServer', 'postNotification'];
-
-/** 每个 server 工具对用户的一句话说明（勾选清单里的 tooltip）。 */
-export const SERVER_BUILTIN_TOOL_HINTS: Record<string, string> = {
-  sendFileToUser: '把一个文件发给用户（会话内下载）。',
-  callServer: '通过 callServer 使用平台能力面（capabilities 授权后才能调）。',
-  postNotification: '向 server 通知中心写一条消息，出现在 /notifications 收件箱（平台不对外推送）。',
-};
+/**
+ * 平台工具（`sendFileToUser` / `callServer` / `postNotification`）**不再出现在勾选清单里**。
+ *
+ * 规则改成了"谁提供，谁决定"：插件（含 inline 插件）对该会话生效 → 工具自动注入。
+ * 于是没有"某个 agent 能用 sendFileToUser、另一个不能"这种配置 —— 要关就关插件。
+ * `capabilities` 仍然独立（它是 callServer 的**方法级授权**，不是工具开关）。
+ */

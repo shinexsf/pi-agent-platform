@@ -153,6 +153,8 @@ export interface ResolvedPlugin {
   extensionPath?: string;
   /** `<dir>/worker/index.js` 存在且启用时才有。 */
   workerPath?: string;
+  /** 插件自带的 skill 目录（`<dir>/skills/<name>`），与工具同源生效。 */
+  skillPaths?: string[];
 }
 
 /** 插件向宿主注册的 UI 槽位（= 一个完整界面入口：按钮 + 打开后的内容）。 */
@@ -378,6 +380,26 @@ export interface PluginSessionsApi {
   hasRow(sessionId: string): Promise<boolean>;
   /** 订阅该会话的原生事件流；返回幂等退订。 */
   subscribe(sessionId: string, listener: (event: unknown) => void, onDispose?: (reason: string) => void): Disposer;
+  /**
+   * 取一个**可用**会话（无人值守跑一轮的入口）。
+   *
+   * 不给 `sessionId` = 新建；给了就必须存在且属于该 agent（否则抛错，fail closed）。
+   */
+  ensure(input: { agentId: string; sessionId?: string; title?: string }): Promise<{ sessionId: string; created: boolean }>;
+  /**
+   * 把一条非用户消息（`<system-event>` 信封）交给会话。
+   *
+   * 信封文本由内核唯一构造，插件只给结构化字段；**返回即"送到"**。
+   */
+  systemEvent(input: {
+    sessionId: string;
+    kind: string;
+    source?: string;
+    name?: string;
+    run?: string;
+    instruction?: string;
+    data?: unknown;
+  }): Promise<void>;
 }
 
 /** 会话摘要（与内核 `HostSessionSummary` 同形，契约包不依赖内核所以单列一份）。 */
@@ -411,6 +433,18 @@ export interface PluginLifecycleApi {
 /** 事件出口：仅 worker 侧可发（worker → server → SSE），无回执、可丢。 */
 export interface PluginEventsApi {
   emit(name: string, data: unknown): void;
+}
+
+/**
+ * 插件间事件总线（**进程内**）—— 发布方与订阅方互不认识。
+ *
+ * 与 `events` 的区别：`events` 是"发给浏览器"，`bus` 是"发给别的插件"。
+ * 语义：无回执、同步派发、无订阅者时静默丢弃、单个订阅者抛错不影响别人。
+ * 订阅返回的 disposer 进插件账本（卸载即退订）。
+ */
+export interface PluginBusApi {
+  publish(topic: string, payload?: unknown): void;
+  subscribe(topic: string, listener: (payload: unknown) => void): Disposer;
 }
 
 /**
@@ -494,6 +528,7 @@ export interface PluginHost {
   readonly db: PluginDbApi;
   readonly lifecycle: PluginLifecycleApi;
   readonly events: PluginEventsApi;
+  readonly bus: PluginBusApi;
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
 }
 

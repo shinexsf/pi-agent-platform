@@ -1,0 +1,8 @@
+{
+  "name": "scheduler",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "定时任务：cron/一次性计划 + 会话绑定 + runs 台账 + 调度器（无人值守跑一轮）",
+  "piServer": { "apiVersion": "1" }
+}

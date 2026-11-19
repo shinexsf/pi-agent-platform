@@ -10,12 +10,12 @@
  * 归属是数据（`id`），注册动作是统一的。
  *
  * 判定分界（design D16）：**实现方在不在平台代码里**。
- * - 在（`callServer`）→ inline，卸载即失效（这里没有"卸载"，它就是平台的一部分）
- * - 不在（`sendFileToUser` 靠 im、`postNotification` 靠 notifications）→ 随插件走，
- *   插件卸载 → 工具消失
+ * - 在（`callServer`、`sendFileToUser` 的网关侧）→ inline，随平台走
+ * - 不在（`postNotification` 的收件箱、未来 im 插件的渠道能力）→ 随**那个插件**走，
+ *   插件停用 → 工具消失
  *
- * 白名单语义不变：`AgentConfig.serverBuiltinTools` 决定"这个 agent 能不能用"，
- * **声明 ≠ 开放**。
+ * 没有逐 agent 白名单了（`serverBuiltinTools` 已退役）：**插件生效 → 工具自动注入**。
+ * 插件自己可以收窄（例如 `callServer` 在没有任何授权能力时返回空）。
  */
 
 import type { CapabilityIndexEntry } from '@pi-agent-platform/shared-types';
@@ -37,7 +37,7 @@ export interface InlinePluginDefinition {
   readonly id: string;
   readonly apiVersion: string;
   readonly extension: {
-    /** R6 工具注册。返回的定义按 `serverBuiltinTools` 白名单过滤后才注入。 */
+    /** R6 工具注册。返回什么就注入什么（插件自己决定要不要收窄）。 */
     tools?(ctx: InlineToolContext): ToolDefinition[];
   };
 }
@@ -122,13 +122,80 @@ function createCallServerTool(
     },
   };
 }
+// ── sendFileToUser（inline：实现方是 im 网关，属平台代码）─────────────────────
+// 归属：im 插件（等它落地时随 R6 迁过去，届时 inline 这一项删除）。
+// 现在没有逐 agent 开关了，所以它对所有会话可用；没有 IM 渠道时调用会得到反向方法
+// 不存在的错误 —— 那是运行期事实，不是配置问题。
+
+const sendFileToUserSchema = {
+  type: 'object',
+  properties: {
+    filePath: { type: 'string', description: 'Absolute path to the file to send' },
+    fileName: {
+      type: 'string',
+      description: 'Friendly display name without extension (system auto-appends the correct extension from the actual file)',
+    },
+  },
+  required: ['filePath'],
+  additionalProperties: false,
+} as const;
+
+interface SendFileToUserParams {
+  filePath: string;
+  fileName?: string;
+}
+
+function createSendFileToUserTool(sessionId: string, callMaster: CallMasterFn): ToolDefinition {
+  return {
+    name: 'sendFileToUser',
+    label: 'Send File To User',
+    description:
+      'Send a file to the user through the active IM channel (QQ / WeChat). Use absolute paths inside the workspace.',
+    promptSnippet: 'Send a file to the user via IM',
+    parameters: sendFileToUserSchema as any,
+    execute: async (
+      _toolCallId: string,
+      params: SendFileToUserParams,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      _ctx: unknown,
+    ) => {
+      try {
+        const result = await callMaster('plugin.im.sendFile', [
+          { sessionId, filePath: params.filePath, fileName: params.fileName },
+        ]);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result ?? { ok: true }) }],
+          details: result ?? { ok: true },
+        };
+      } catch (err) {
+        const errorMsg = `Failed to send file: ${(err as Error).message}`;
+        return {
+          content: [{ type: 'text' as const, text: errorMsg }],
+          details: { error: errorMsg },
+        };
+      }
+    },
+  };
+}
+
 /** 平台自带的 inline 插件清单。新增一个 = 在这里加一项（不需要目录、不需要 registry）。 */
 export const INLINE_PLUGINS: readonly InlinePluginDefinition[] = [
   {
     id: 'callServer',
     apiVersion: '1',
     extension: {
-      tools: ({ callMaster, capabilityIndex }) => [createCallServerTool(callMaster, capabilityIndex ?? [])],
+      // 没有任何授权能力时不注入：一个"能调什么？什么都不能调"的工具只是噪音，
+      // 而且会把 capabilities 的默认空策略伪装成"有这个能力"。
+      tools: ({ callMaster, capabilityIndex }) =>
+        (capabilityIndex?.length ?? 0) > 0 ? [createCallServerTool(callMaster, capabilityIndex ?? [])] : [],
+    },
+  },
+  {
+    id: 'sendFileToUser',
+    apiVersion: '1',
+    extension: {
+      tools: ({ sessionId, callMaster }) => [createSendFileToUserTool(sessionId, callMaster)],
     },
   },
 ];

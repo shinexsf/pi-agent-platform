@@ -1,7 +1,7 @@
 /**
  * 宿主 API 的实现（入口侧）。
  *
- * 内核只声明四个面的**形状**（`packages/core/src/host-api.ts`），实现放在组合根 ——
+ * 内核只声明五个面的**形状**（`packages/core/src/host-api.ts`），实现放在组合根 ——
  * 因为"暴露到什么程度"是入口的决定（桌面端可能不给 `db.query`）。
  *
  * 这是插件与内核之间唯一应该被依赖的缝：插件拿 `HostApi`，不 import 内核内部模块。
@@ -10,7 +10,7 @@
  */
 
 import type { HostApi, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
-import { childLogger, sessionRegistry } from '@pi-agent-platform/core';
+import { buildSystemEnvelope, childLogger, createEventBus, sessionRegistry } from '@pi-agent-platform/core';
 import type Database from 'better-sqlite3';
 
 const logger = childLogger('host-api');
@@ -49,6 +49,14 @@ export function listPluginMigrationTables(raw: Database.Database, pluginId: stri
     .prepare('SELECT name FROM plugin_migrations WHERE plugin_id = ? ORDER BY name')
     .all(pluginId) as Array<{ name: string }>;
   return rows.map((r) => r.name);
+}
+
+/** 进程内事件总线单例 —— 插件之间唯一的协作通道（双方互不相识）。 */
+const eventBus = createEventBus();
+
+/** 当前订阅数（验收用：插件卸载后必须归零）。 */
+export function pluginEventSubscriberCount(): number {
+  return eventBus.subscriberCount();
 }
 
 export function createHostApi(deps: HostApiDeps): HostApi {
@@ -103,6 +111,26 @@ export function createHostApi(deps: HostApiDeps): HostApi {
       hasRow: (sessionId) => Boolean(deps.sessionRepo.get(sessionId)),
       subscribe: (sessionId, listener, onDispose) =>
         sessionRegistry().track(sessionId).subscribe(listener, onDispose),
+      // 无人值守跑一轮的入口：三态语义见内核 `SessionRegistry.ensure`。
+      ensure: (input) => sessionRegistry().ensure(input),
+      // 非用户消息（信封）的唯一投递口：文本由内核构造，返回即"送到"。
+      async systemEvent(input) {
+        const envelope = buildSystemEnvelope({
+          kind: input.kind,
+          ...(input.source ? { source: input.source } : {}),
+          ...(input.name ? { name: input.name } : {}),
+          fired: new Date().toISOString(),
+          ...(input.run ? { run: input.run } : {}),
+          ...(input.instruction !== undefined ? { instruction: input.instruction } : {}),
+          ...(input.data !== undefined ? { data: input.data } : {}),
+        });
+        await deps.workerPool.call(input.sessionId, 'prompt', [envelope, {}]);
+      },
+    },
+
+    bus: {
+      publish: (topic, payload) => eventBus.emit(topic, payload),
+      subscribe: (topic, listener) => eventBus.subscribe(topic, listener),
     },
 
     agents: {

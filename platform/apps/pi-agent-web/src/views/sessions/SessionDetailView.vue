@@ -16,7 +16,6 @@ import { setCrumbName } from '../../composables/breadcrumbNames';
 import {
   BASE_AGENT_CONFIG,
   BUILTIN_TOOL_NAMES,
-  SERVER_BUILTIN_TOOLS,
   withMcpDependencies,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
@@ -75,12 +74,13 @@ const thinkingLevel = ref('');
 // （session 有 key 用 session 的，否则用 agent 的归一结果），保存即把七项固化到 session 行。
 const builtinTools = ref<string[]>([...BASE_AGENT_CONFIG.builtinTools]);
 const mcp = ref<{ enabled: boolean; servers: string[] }>({ enabled: false, servers: [] });
-const serverBuiltinTools = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinTools]);
 /** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
 const serverBuiltinSkills = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinSkills]);
 // callServer 方法级授权：null = 走全局策略（唯一保留的 tri-state）、[] = 全禁、数组 = 白名单
 const capabilities = ref<string[] | null>(null);
 const extensions = ref<string[]>([]);
+/** 平台插件启用列表（会话内能力来源；server/web facet 不受它影响）。 */
+const plugins = ref<string[]>([]);
 const skills = ref<string[]>([]);
 const prompts = ref<string[]>([]);
 
@@ -88,9 +88,9 @@ const issues = useConfigIssues();
 const issueIndex = computed(() => issues.buildIssueIndex(
   {
     builtinTools: builtinTools.value,
-    serverBuiltinTools: serverBuiltinTools.value,
     serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
+    plugins: plugins.value,
     skills: skills.value,
     prompts: prompts.value,
     capabilities: capabilities.value,
@@ -101,9 +101,9 @@ const issueIndex = computed(() => issues.buildIssueIndex(
 const configIssues = computed(() => issues.issuesFor(
   {
     builtinTools: builtinTools.value,
-    serverBuiltinTools: serverBuiltinTools.value,
     serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
+    plugins: plugins.value,
     skills: skills.value,
     prompts: prompts.value,
     capabilities: capabilities.value,
@@ -140,18 +140,32 @@ watch(mcpEnabled, (on) => {
 // available resources
 const availableSkills = ref<{ name: string }[]>([]);
 const availablePrompts = ref<{ name: string }[]>([]);
-const availableExtensions = ref<{ names: string[] }>({ names: [] });
+interface PluginCandidate {
+  id: string;
+  dir: string;
+  piExtension: boolean;
+  workerFacet: boolean;
+  skills: string[];
+}
+const availableExtensions = ref<{ names: string[]; plugins: PluginCandidate[] }>({
+  names: [],
+  plugins: [],
+});
+/** 某个平台插件往会话里塞了什么（勾选框旁的说明）。 */
+function pluginProvides(p: PluginCandidate): string {
+  const parts: string[] = [];
+  if (p.piExtension) parts.push('pi 扩展（工具/命令）');
+  if (p.workerFacet) parts.push('worker 方法');
+  if (p.skills.length) parts.push(`skill: ${p.skills.join(', ')}`);
+  return parts.join(' · ') || '无会话内能力';
+}
 const availableServerBuiltinSkills = ref<Array<{ name: string; description?: string }>>([]);
 const skillNames = computed(() => availableSkills.value.map(i => i.name));
 const promptNames = computed(() => availablePrompts.value.map(i => i.name));
 
-/** callServer 是否启用（显式清单）——联动 Capabilities 区显隐 */
-const callServerEnabled = computed(() => serverBuiltinTools.value.includes('callServer'));
-
-// 关掉 callServer 时清空方法级授权（与 agent 编辑页同一规则；保存时 normalizeAgentConfig 也会兜底）
-watch(callServerEnabled, (on) => {
-  if (!on) capabilities.value = [];
-});
+// capabilities 是 callServer 的方法级授权；工具本身由 inline 插件在有授权时注入，
+// 所以这一区永远可见（空 = 不会注入 callServer）。
+const callServerEnabled = computed(() => true);
 const capabilityGroups = computed(() => capabilityModules.value.filter(g => g.capabilities.length > 0));
 const allCapabilityMethods = computed(() => capabilityModules.value.flatMap(g => g.capabilities.map(c => c.method)));
 function capabilitiesSummary(items: string[] | null): string {
@@ -180,10 +194,10 @@ function currentTemplateTarget() {
   return {
     builtinTools: builtinTools.value,
     mcp: { enabled: mcp.value.enabled === true, servers: [...mcp.value.servers] },
-    serverBuiltinTools: serverBuiltinTools.value,
     serverBuiltinSkills: serverBuiltinSkills.value,
     capabilities: capabilities.value,
     extensions: extensions.value,
+    plugins: plugins.value,
     skills: skills.value,
     prompts: prompts.value,
   };
@@ -192,10 +206,10 @@ function currentTemplateTarget() {
 function applyTarget(next: ReturnType<typeof currentTemplateTarget>): void {
   builtinTools.value = next.builtinTools;
   mcp.value = next.mcp;
-  serverBuiltinTools.value = next.serverBuiltinTools;
   serverBuiltinSkills.value = next.serverBuiltinSkills;
   capabilities.value = next.capabilities;
   extensions.value = next.extensions;
+  plugins.value = next.plugins;
   skills.value = next.skills;
   prompts.value = next.prompts;
 }
@@ -258,7 +272,9 @@ onMounted(async () => {
     if (modelsRes.ok) allModels.value = (await modelsRes.json()) as ModelOption[];
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as { name: string }[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as { name: string }[];
-    if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (extensionsRes.ok) {
+      availableExtensions.value = (await extensionsRes.json()) as typeof availableExtensions.value;
+    }
     if (builtinSkillsRes.ok)
       availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<{ name: string; description?: string }>;
     if (capsRes.ok) {
@@ -288,9 +304,9 @@ onMounted(async () => {
       enabled: (pick('mcp') as { enabled?: boolean } | null)?.enabled === true,
       servers: [...(((pick('mcp') as { servers?: string[] } | null)?.servers) ?? [])],
     };
-    serverBuiltinTools.value = [...(pick('serverBuiltinTools') as string[])];
     serverBuiltinSkills.value = [...(pick('serverBuiltinSkills') as string[])];
     extensions.value = [...(pick('extensions') as string[])];
+    plugins.value = [...(pick('plugins') as string[])];
     skills.value = [...(pick('skills') as string[])];
     prompts.value = [...(pick('prompts') as string[])];
     // capabilities 保留 tri-state：session 有 key（数组/null）→ 用 session 的；
@@ -322,10 +338,10 @@ async function save(): Promise<void> {
       ...(session.value?.config ?? {}),
       builtinTools: [...builtinTools.value],
       mcp: { enabled: mcp.value.enabled, servers: [...mcp.value.servers] },
-      serverBuiltinTools: [...serverBuiltinTools.value],
       serverBuiltinSkills: [...serverBuiltinSkills.value],
       capabilities: capabilities.value,
       extensions: [...extensions.value],
+      plugins: [...plugins.value],
       skills: [...skills.value],
       prompts: [...prompts.value],
     };
@@ -360,15 +376,17 @@ function selectAllServerBuiltinSkills(): void {
 }
 
 function selectAllServerTools(): void {
-  serverBuiltinTools.value = [...SERVER_BUILTIN_TOOLS];
 }
-function pruneField(field: 'extensions' | 'skills' | 'prompts' | 'capabilities' | 'builtinTools'): void {
+function selectAllPlugins(): void {
+  plugins.value = availableExtensions.value.plugins.map((p) => p.id);
+}
+function pruneField(field: 'extensions' | 'plugins' | 'skills' | 'prompts' | 'capabilities' | 'builtinTools'): void {
   if (field === 'capabilities') {
     if (capabilities.value !== null) capabilities.value = issues.pruneInvalid('capabilities', capabilities.value);
     return;
   }
-  const refs = { extensions, skills, prompts, builtinTools } as const;
-  const target = refs[field as 'extensions' | 'skills' | 'prompts' | 'builtinTools'];
+  const refs = { extensions, plugins, skills, prompts, builtinTools } as const;
+  const target = refs[field as 'extensions' | 'plugins' | 'skills' | 'prompts' | 'builtinTools'];
   target.value = issues.pruneInvalid(field, target.value);
 }
 function toggleCapability(method: string, checked: boolean): void {
@@ -599,33 +617,31 @@ function workerUptime(ms: number): string {
               :disabled="isView"
             />
 
-            <!-- Server builtin tools -->
+
+            <!-- 平台插件（会话内能力来源） -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
-                <span class="sd-resource-title">Server Builtin Tools</span>
-                <InfoTip text="仅下次 spawn 生效（会话行是完整快照）。callServer 的可用方法由下方 Capabilities 授权。" :width="320" />
-                <span class="sd-resource-count">{{ serverBuiltinTools.length }} / {{ SERVER_BUILTIN_TOOLS.length }} 项</span>
+                <span class="sd-resource-title">Platform Plugins</span>
+                <InfoTip text="平台插件对**本会话**是否生效（仅下次 spawn 生效）。启用 → 它的 pi 扩展工具、worker 方法、自带 skill 一并注入；不启用 → 会话里拿不到这些工具。插件自己的路由/页面是全局资源，不受这里影响。" :width="380" />
+                <span class="sd-resource-count">{{ plugins.length }} / {{ availableExtensions.plugins.length }} 项</span>
                 <span v-if="!isView" class="resource-edit-actions">
-                  <button type="button" class="btn-link" @click="selectAllServerTools">全选</button>
-                  <button type="button" class="btn-link" @click="serverBuiltinTools = []">清空</button>
+                  <button type="button" class="btn-link" @click="selectAllPlugins">全选</button>
+                  <button type="button" class="btn-link" @click="plugins = []">清空</button>
+                  <button type="button" class="btn-link" @click="pruneField('plugins')">清理无效项</button>
                 </span>
               </div>
               <div v-if="isView" class="tag-list">
-                <span v-for="t in serverBuiltinTools" :key="t" class="tag">{{ t }}</span>
-                <span v-if="serverBuiltinTools.length === 0" class="sd-empty">无</span>
+                <span v-for="id in plugins" :key="id" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('plugins', id) }">{{ id }}</span>
+                <span v-if="plugins.length === 0" class="sd-empty">未启用任何平台插件</span>
               </div>
               <div v-else class="tag-list editable">
-                <label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check"
-                  :class="{ checked: serverBuiltinTools.includes(t) }">
-                  <input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}</span>
+                <label v-for="p in availableExtensions.plugins" :key="p.id" class="tag-check"
+                  :title="pluginProvides(p)"
+                  :class="{ checked: plugins.includes(p.id) }">
+                  <input type="checkbox" :value="p.id" v-model="plugins" /><span>{{ p.id }}</span>
                 </label>
-              </div>
-              <div v-if="!isView" class="tag-list editable">
-                <template v-for="t in serverBuiltinTools" :key="'bad-' + t">
-                  <label v-if="issueIndex('serverBuiltinTools', t)" class="tag-check checked tag-invalid" title="平台工具不存在">
-                    <input type="checkbox" :value="t" v-model="serverBuiltinTools" /><span>{{ t }}（无效）</span>
-                  </label>
-                </template>
+                <span v-if="availableExtensions.plugins.length === 0" class="sd-empty">没有可启用的平台插件</span>
               </div>
             </div>
 
@@ -1055,5 +1071,16 @@ function workerUptime(ms: number): string {
   .sd-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* 插件自带的 pi 扩展：不可勾选，只做可见性（虚线边 + 灰字标记与"能勾的"区分开） */
+.tag-auto-note {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
 }
 </style>

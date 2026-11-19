@@ -58,6 +58,67 @@ export interface HostSessionsApi {
   hasRow(sessionId: string): boolean;
   /** 订阅某个会话的原生事件流；返回幂等退订。 */
   subscribe(sessionId: string, listener: (event: WorkerEvent) => void, onDispose?: (reason: string) => void): () => void;
+  /**
+   * 取一个**可用**的会话（无人值守跑一轮的入口）。
+   *
+   * 三态，与旧版 `resolveSession()` 一致：
+   * - 不给 `sessionId`：新建会话（`createFromAgent` → 落行）→ `created: true`
+   * - 给 `sessionId`：必须已存在且属于该 agent → 懒恢复 → `created: false`
+   * - 给的 id 不存在 / 属于别的 agent：**抛错**（fail closed，绝不"照建一个"写错地方）
+   */
+  ensure(input: HostEnsureSessionInput): Promise<HostEnsureSessionResult>;
+  /**
+   * 把一条**非用户消息**（`<system-event>` 信封）交给会话。
+   *
+   * 信封文本由内核唯一构造，插件只给结构化字段 —— 不可信输入因此永远进不到
+   * 标签名 / 属性里。**返回即"送到"**：不等待 agent 跑完，也不判断它干得怎么样。
+   */
+  systemEvent(input: HostSystemEventInput): Promise<void>;
+}
+
+/** `sessions.ensure` 入参。 */
+export interface HostEnsureSessionInput {
+  agentId: string;
+  /** 复用目标。不给 = 新建。 */
+  sessionId?: string;
+  /** 只在新建时生效（会话标题，用于归因）。 */
+  title?: string;
+}
+
+/** `sessions.ensure` 结果。 */
+export interface HostEnsureSessionResult {
+  sessionId: string;
+  created: boolean;
+}
+
+/** `sessions.systemEvent` 入参。 */
+export interface HostSystemEventInput {
+  sessionId: string;
+  /** 信封判别字段（`trigger` / `reminder` / `system` / 自定义）。 */
+  kind: string;
+  /** 机器可读来源。 */
+  source?: string;
+  /** 人可读短名。 */
+  name?: string;
+  /** run / 事件 id，便于日志与台账交叉引用。 */
+  run?: string;
+  /** 正文（进 `<instruction>`）。 */
+  instruction?: string;
+  /** 附加上下文（进 `<data format="json">`）。 */
+  data?: unknown;
+}
+
+/**
+ * 进程内事件总线（插件之间的唯一协作通道）。
+ *
+ * 为什么不叫 `events`：`host.events` 已经被占用（worker → server → SSE 的事件出口）。
+ * 这一面是**给别的插件**的广播，名字必须能区分开。
+ */
+export interface HostBusApi {
+  /** 发布。无回执、同步派发、无订阅者时静默丢弃。 */
+  publish(topic: string, payload?: unknown): void;
+  /** 订阅。返回幂等退订（进插件 disposer 账本）。 */
+  subscribe(topic: string, listener: (payload: unknown) => void): () => void;
 }
 
 /** agent 配置能力面。 */
@@ -80,4 +141,11 @@ export interface HostApi {
   readonly sessions: HostSessionsApi;
   readonly agents: HostAgentsApi;
   readonly lifecycle: HostLifecycleApi;
+  /**
+   * 插件间协作（进程内事件总线）。
+   *
+   * 为什么是能力面而不是注册面：发布方与订阅方**互不认识**，内核只是那个交汇点；
+   * 没有"注册一个方法给别人调"这种方向性，所以它不归装载器。
+   */
+  readonly bus: HostBusApi;
 }

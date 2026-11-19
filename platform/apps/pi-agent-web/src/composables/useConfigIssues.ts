@@ -17,7 +17,6 @@ import { ref, type Ref } from 'vue';
 import {
   findConfigIssues,
   PLATFORM_BUILTIN_TOOLS,
-  PLATFORM_SERVER_TOOLS,
   type AgentConfig,
   type ConfigAvailability,
   type ConfigIssue,
@@ -54,8 +53,8 @@ const KNOWN_FIELD = (available: ConfigAvailability, field: IssueField): string[]
       return available.capabilities;
     case 'builtinTools':
       return available.tools;
-    case 'serverBuiltinTools':
-      return available.serverTools;
+    case 'plugins':
+      return available.plugins;
     case 'serverBuiltinSkills':
       return available.serverBuiltinSkills;
     case 'mcp.servers':
@@ -68,7 +67,6 @@ const KNOWN_FIELD = (available: ConfigAvailability, field: IssueField): string[]
 export function useConfigIssues(): ConfigIssuesApi {
   const available = ref<ConfigAvailability>({
     tools: [...PLATFORM_BUILTIN_TOOLS],
-    serverTools: [...PLATFORM_SERVER_TOOLS],
   });
 
   async function loadAvailability(): Promise<void> {
@@ -84,8 +82,12 @@ export function useConfigIssues(): ConfigIssuesApi {
       ]);
       const next: ConfigAvailability = { ...available.value };
       if (extRes.ok) {
-        const data = (await extRes.json()) as { names?: string[] };
+        const data = (await extRes.json()) as {
+          names?: string[];
+          plugins?: Array<{ id: string }>;
+        };
         next.extensions = data.names ?? [];
+        next.plugins = (data.plugins ?? []).map((p) => p.id);
       }
       if (skillsRes.ok) {
         next.skills = ((await skillsRes.json()) as Array<{ name: string }>).map((s) => s.name);

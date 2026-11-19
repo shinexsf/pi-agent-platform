@@ -499,6 +499,8 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       hasRow: (sessionId) => Promise.resolve(host.sessions.hasRow(sessionId)),
       subscribe: (sessionId, listener, onDispose) =>
         track(id, host.sessions.subscribe(sessionId, listener, onDispose)),
+      ensure: (input) => host.sessions.ensure(input),
+      systemEvent: (input) => host.sessions.systemEvent(input),
     },
     agents: {
       list: async () => host.agents.list().map((a) => ({ ...a })),
@@ -524,9 +526,14 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       onSessionDisposed: (hook) => track(id, host.lifecycle.onSessionDisposed(hook)),
     },
     events: {
-      // server 侧 events 本期不做（design Open Question 2）：worker 侧由 bridge 提供。
+      // `events` = 发给**浏览器**（worker → server → SSE），只有 worker 侧能发。
       // 明确告警而不是静默吞掉，否则插件作者会以为推送成功了。
-      emit: (_name, _data) => warnOnce(id, 'events.emit', 'host.events.emit 在 server 侧尚未接通（本期只支持 worker 侧 emit）'),
+      emit: (_name, _data) => warnOnce(id, 'events.emit', 'host.events.emit 只有 worker 侧可用（server 侧请用 host.bus 做插件间广播）'),
+    },
+    bus: {
+      // `bus` = 发给**别的插件**（进程内）。订阅进 disposer 账本，卸载即退订。
+      publish: (topic, payload) => host.bus.publish(topic, payload),
+      subscribe: (topic, listener) => track(id, host.bus.subscribe(topic, listener)),
     },
     // ── 注册面 ──
     ui,

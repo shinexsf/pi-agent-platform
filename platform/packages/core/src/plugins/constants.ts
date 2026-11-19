@@ -37,3 +37,35 @@ export const FACET_SUPPORT = {
   extension: 'loaded',
   web: 'loaded',
 } as const;
+
+/**
+ * 平台**承诺**给插件 web 面的 CSS 变量清单（`apps/pi-agent-web/src/style.css` 的
+ * `:root` / `html[data-theme="dark"]`）。
+ *
+ * 为什么要有这份清单：插件 UI 在暗色下翻车只有一种原因 —— 猜了个不存在的变量名，
+ * 于是 `var(--x, #fff)` 的 fallback 生效、白底写死在暗色里。真实案例：scheduler 插件的
+ * 第一版用了 `--bg-elevated` / `--text-muted` / `--bg-hover`，三个都不存在。
+ *
+ * 所以"约定"必须是**可枚举、可校验**的：`plugin check` 会扫插件 web 产物的
+ * `var(--name)`，不在清单里的给 warning。加新变量要同时改 style.css 与这份清单。
+ */
+export const PLATFORM_THEME_VARS = [
+  // 背景 / 表面
+  '--bg', '--surface', '--surface-raised', '--surface-subtle', '--surface-hover',
+  // 文字
+  '--text', '--text-secondary', '--text-tertiary',
+  // 描边
+  '--border', '--border-subtle', '--border-strong',
+  // 主色
+  '--accent', '--accent-hover', '--accent-ink', '--accent-soft',
+  // 语义色
+  '--success', '--success-soft', '--warning', '--warning-soft',
+  '--danger', '--danger-hover', '--danger-soft', '--on-error',
+  // 其它
+  '--focus', '--shadow-soft', '--shadow-raised',
+  '--radius-sm', '--radius-md', '--radius-lg',
+  '--font-sans', '--font-mono',
+  '--code-bg', '--code-inline-bg', '--code-border',
+  '--hl-key', '--hl-string', '--hl-number', '--hl-comment', '--hl-builtin', '--hl-attr', '--hl-meta',
+  '--app-header-h',
+] as const;

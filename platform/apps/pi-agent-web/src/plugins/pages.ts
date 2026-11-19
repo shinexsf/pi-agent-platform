@@ -73,8 +73,18 @@ export function syncPluginRoutes(router: Router): void {
 
   // 冷启动直接访问插件页（如刷新 /notifications）时，路由是**后加**的：
   // 首帧匹配不到任何路由 → `<main>` 空白。这里补一次重新解析。
+  //
+  // 坑（踩过一次）：不能拿 `currentRoute.fullPath` 当目标 —— 首次导航还没完成时
+  // 它仍是初始的 `/`（START_LOCATION），重解析就会把 `/chat/<id>` 覆盖成 `/` →
+  // 重定向到 `/agents`，表现得像"打开会话按钮回默认路由"。
+  // 目标只认**地址栏**（去掉 base），这样重解析永远是幂等的。
   const current = router.currentRoute.value;
   if (current.matched.length === 0) {
-    void router.replace(current.fullPath);
+    const base = import.meta.env.BASE_URL || '/';
+    const pathname = window.location.pathname;
+    const path = pathname.startsWith(base) ? `/${pathname.slice(base.length)}` : pathname;
+    // 即使和目标地址相同也要 replace 一次：插件路由是刚 addRoute 进来的，
+    // 同一路径此前是"未匹配"，不重解析就不会重新算 matched。
+    void router.replace(`${path}${window.location.search}`);
   }
 }

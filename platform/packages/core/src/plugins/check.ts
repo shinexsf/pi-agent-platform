@@ -17,7 +17,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { detectFacetEntry, listFacetDirs, readManifest } from './registry.js';
-import { PLUGIN_API_VERSION } from './constants.js';
+import { PLATFORM_THEME_VARS, PLUGIN_API_VERSION } from './constants.js';
 import type { PluginFacetName } from '@pi-agent-platform/plugin-types';
 
 export interface PluginCheckIssue {
@@ -169,6 +169,57 @@ export function checkPluginDir(dir: string): PluginCheckResult {
           `运行期 import 了 '${hit}' —— 该包只提供类型（不会出现在安装产物里）`,
           path.relative(absDir, entry.path),
         );
+      }
+    }
+  }
+
+  // ── web 产物的主题变量：只能用平台承诺的（否则暗色下白底 = fallback 生效）──
+  const webDir = path.join(absDir, 'web');
+  if (existsSync(webDir)) {
+    const known = new Set<string>(PLATFORM_THEME_VARS);
+    const unknown = new Map<string, string>();
+    for (const name of readdirSync(webDir)) {
+      if (!name.endsWith('.js')) continue;
+      const code = readFileSync(path.join(webDir, name), 'utf8');
+      for (const m of code.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {
+        const v = m[1]!.toLowerCase();
+        if (!known.has(v) && !unknown.has(v)) unknown.set(v, name);
+      }
+    }
+    for (const [v, file] of unknown) {
+      push(
+        'warning',
+        'theme-var-unknown',
+        `用了平台未承诺的 CSS 变量 ${v}（暗色下会走 fallback，通常是白底）`,
+        path.relative(absDir, path.join('web', file)),
+      );
+    }
+  }
+
+  // ── 插件自带 skill（数据目录，不是 facet）：有 skills/ 就必须满足 pi 的 skill 契约 ──
+  const skillsRoot = path.join(absDir, 'skills');
+  if (existsSync(skillsRoot)) {
+    const dirs = readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+    if (dirs.length === 0) {
+      push('warning', 'skills-empty', `skills/ 目录没有任何 skill 子目录`, 'skills');
+    }
+    for (const d of dirs) {
+      const skillFile = path.join(skillsRoot, d.name, 'SKILL.md');
+      if (!existsSync(skillFile)) {
+        push('error', 'skill-missing-file', `skill『${d.name}』缺少 SKILL.md（pi 的 skill 契约要求）`, path.relative(absDir, path.join('skills', d.name)));
+        continue;
+      }
+      // frontmatter 必须有 name / description —— 少了 pi 会静默不加载。
+      const head = readFileSync(skillFile, 'utf8').slice(0, 600);
+      const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head);
+      if (!fm) {
+        push('error', 'skill-no-frontmatter', `skill『${d.name}』的 SKILL.md 缺少 frontmatter（--- name/description ---）`, path.relative(absDir, skillFile));
+        continue;
+      }
+      for (const key of ['name', 'description']) {
+        if (!new RegExp(`^${key}\\s*:`, 'm').test(fm[1] ?? '')) {
+          push('error', 'skill-frontmatter-field', `skill『${d.name}』的 frontmatter 缺少 \`${key}\``, path.relative(absDir, skillFile));
+        }
       }
     }
   }

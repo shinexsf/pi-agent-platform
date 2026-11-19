@@ -43,6 +43,8 @@ export * from './capabilities/authorize.js';
 
 // ── 插件宿主 ──
 export * from './services/plugin-extensions.js';
+export * from './services/event-bus.js';
+export * from './services/system-envelope.js';
 
 // ── 宿主 API surface（插件与内核之间唯一的稳定缝）──
 export type {
@@ -52,6 +54,10 @@ export type {
   HostSessionSummary,
   HostAgentsApi,
   HostLifecycleApi,
+  HostBusApi,
+  HostEnsureSessionInput,
+  HostEnsureSessionResult,
+  HostSystemEventInput,
 } from './host-api.js';
 
 // ── 插件运行期：常量 + registry 读写（契约类型在 @pi-agent-platform/plugin-types）──

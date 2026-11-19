@@ -45,7 +45,9 @@ export function createCapabilityDebugRouter(agentRepo: AgentRepo, sessionRepo: S
         ? {
             id: agent.id,
             name: agent.name,
-            serverBuiltinTools: agent.config?.serverBuiltinTools ?? null,
+            // 工具开关退役后，callServer 是否注入只由"有没有授权方法"决定 —— 调试面
+            // 直接给出这个判定依据，别再暴露一个已经不存在的字段。
+            callServerInjected: (agent.config?.capabilities?.length ?? 0) > 0,
             capabilities: agent.config?.capabilities ?? null,
           }
         : null,

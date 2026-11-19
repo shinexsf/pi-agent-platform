@@ -17,6 +17,7 @@ import {
   readManifest,
   readRegistry,
   scanPluginDirs,
+  scanSkillPaths,
   detectFacetEntry,
   listFacetDirs,
 } from '../plugins/registry.js';
@@ -57,6 +58,8 @@ export interface LoadedPlugin {
   entries: Partial<Record<PluginFacetName, FacetEntryPoint>>;
   /** 平台实际会装载的 facet。 */
   loadedFacets: PluginFacetName[];
+  /** 插件自带的 skill 目录（`skills/*\/SKILL.md` 的父目录；不是 facet）。 */
+  skillPaths: string[];
   manifest: PluginManifest | null;
 }
 
@@ -118,6 +121,7 @@ export function loadPlugins(pluginsDir: string, bundledDir?: string): PluginSnap
       switches: state.switches,
       entries: state.entries,
       loadedFacets: state.loadedFacets,
+      skillPaths: state.skillPaths ?? [],
       manifest: state.manifest,
     };
   };
@@ -181,6 +185,7 @@ export function loadPlugins(pluginsDir: string, bundledDir?: string): PluginSnap
       switches: {},
       entries,
       loadedFacets: [],
+      skillPaths: scanSkillPaths(dir),
       manifest,
     });
     byId.set(id, plugins[plugins.length - 1]!);
@@ -322,27 +327,39 @@ export function facetSupportMap(): Record<PluginFacetName, 'loaded' | 'declared-
 /**
  * 会话级闸门解析。
  *
- * 通过条件：pack 已启用 + 全部 `requires.plugins` 既已装在 pi、又在该 agent 的
- * `extensions` 白名单里。**校验失败不代勾**。
+ * 通过条件（全部满足）：
+ * 1. 插件在 registry/bundled 里处于 active
+ * 2. **该 agent 的 `plugins` 启用列表里有它**（缺失即空 = 一个都不启用）
+ * 3. 全部 `requires.plugins`（pi 扩展名）既已装在 pi、又在该 agent 的 `extensions` 里
  *
+ * 校验失败不代勾：**声明 ≠ 启用**。
+ *
+ * @param enabledPlugins        该 agent 启用的平台插件 id（`config.plugins`）
  * @param installedPiExtensions pi 里已安装的 pi 插件名（settings.json 的 packages/extensions）
  * @param agentExtensions       该 agent 允许使用的 pi 插件名（`config.extensions`）
  */
 export function resolveSessionPlugins(options: {
   snapshot: PluginSnapshot;
+  enabledPlugins?: readonly string[];
   agentExtensions: readonly string[];
   installedPiExtensions: readonly string[];
 }): ResolvedPlugin[] {
-  const { snapshot, agentExtensions, installedPiExtensions } = options;
+  const { snapshot, enabledPlugins, agentExtensions, installedPiExtensions } = options;
   if (snapshot.disabledByFlag) return [];
 
   const installed = new Set(installedPiExtensions.map((n) => n.toLowerCase()));
   const enabledByAgent = new Set(agentExtensions.map((n) => n.toLowerCase()));
+  const chosen = new Set((enabledPlugins ?? []).map((id) => id.toLowerCase()));
 
   return snapshot.plugins.map((plugin) => {
     const base = { id: plugin.entry.id, dir: plugin.entry.dir };
     if (plugin.status !== 'active') {
       return { ...base, enabled: false, reason: plugin.reason ?? `status: ${plugin.status}` };
+    }
+    // 该 agent 没启用这个插件 → 会话内能力（工具/命令/钩子/skill）全部不注入。
+    // server / web facet 是进程级全局资源，不受这里影响。
+    if (!chosen.has(plugin.entry.id.toLowerCase())) {
+      return { ...base, enabled: false, reason: '该 agent 未启用此插件' };
     }
     const missing = Object.keys(plugin.manifest?.requiresPlugins ?? {}).filter((name) => {
       const key = name.toLowerCase();
@@ -354,7 +371,8 @@ export function resolveSessionPlugins(options: {
     }
     const extensionPath = plugin.facets.extension ? path.join(plugin.entry.dir, 'extension', 'index.js') : undefined;
     const workerPath = plugin.facets.worker ? path.join(plugin.entry.dir, 'worker', 'index.js') : undefined;
-    return { ...base, enabled: true, extensionPath, workerPath };
+    // skill 与工具**同源生效**：插件对会话生效 → 自动获得，不占 agent 配置项。
+    return { ...base, enabled: true, extensionPath, workerPath, skillPaths: plugin.skillPaths ?? [] };
   });
 }
 

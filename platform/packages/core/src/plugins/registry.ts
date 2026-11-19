@@ -266,6 +266,25 @@ export function scanPluginDirs(pluginsDir: string): string[] {
     .map((name) => path.join(pluginsDir, name));
 }
 
+/**
+ * 扫描插件自带的 skill 目录。
+ *
+ * 数据目录约定，不参与 facet 判定：没有入口代码、不过 `build:plugins`、
+ * 不进 `PLUGIN_FACET_NAMES`。只认有 `SKILL.md` 的子目录（pi 的 skill 契约）。
+ */
+export function scanSkillPaths(pluginDir: string): string[] {
+  const skillsRoot = path.join(pluginDir, 'skills');
+  if (!existsSync(skillsRoot)) return [];
+  try {
+    return readdirSync(skillsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(skillsRoot, d.name))
+      .filter((dir) => existsSync(path.join(dir, 'SKILL.md')));
+  } catch {
+    return [];
+  }
+}
+
 /** 目录存在性 + 是否目录（避免把文件当插件）。 */
 export function dirExists(dir: string): boolean {
   try {
@@ -282,6 +301,13 @@ export function deletePluginDir(pluginsDir: string, id: string): void {
 
 export interface PluginState {
   status: PluginStatus;
+  /**
+   * 插件自带的 skill 目录（**数据目录，不是 facet**）。
+   *
+   * 约定：`<plugin-dir>/skills/<name>/SKILL.md`。生效条件与工具同源——
+   * 插件对会话生效，agent 就自动获得这些 skill，不需要在 agent 配置里勾选。
+   */
+  skillPaths: string[];
   reason?: string;
   /** 开关 ∧ 声明（可加载）；保留旧语义，供既有消费方使用。 */
   facets: Partial<Record<PluginFacetName, boolean>>;
@@ -314,7 +340,14 @@ export function describePluginState(entry: PluginRegistryEntry): PluginState {
   const declaredFacets = listFacetDirs(entry.dir);
   for (const facet of PLUGIN_FACET_NAMES) entries[facet] = detectFacetEntry(entry.dir, facet);
 
-  const base = { facets, declaredFacets, switches, entries, loadedFacets: [] as PluginFacetName[] };
+  const base = {
+    facets,
+    declaredFacets,
+    switches,
+    entries,
+    loadedFacets: [] as PluginFacetName[],
+    skillPaths: scanSkillPaths(entry.dir),
+  };
 
   if (!entry.enabled) {
     // 停用 ≠ 不可见：只读 `package.json`（不执行代码）拿到版本与描述，界面照样能展示。

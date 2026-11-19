@@ -21,8 +21,6 @@ import {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
   withMcpDependencies,
-  SERVER_BUILTIN_TOOLS,
-  SERVER_BUILTIN_TOOL_HINTS,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
 import { useMcpCatalog } from '../../composables/useMcpCatalog';
@@ -86,7 +84,30 @@ const availableSkills = ref<NamedItem[]>([]);
 const availablePrompts = ref<NamedItem[]>([]);
 /** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
 const availableServerBuiltinSkills = ref<Array<NamedItem & { description?: string }>>([]);
-const availableExtensions = ref<{ names: string[] }>({ names: [] });
+interface PluginCandidate {
+  id: string;
+  dir: string;
+  piExtension: boolean;
+  workerFacet: boolean;
+  skills: string[];
+}
+const availableExtensions = ref<{ names: string[]; plugins: PluginCandidate[] }>({
+  names: [],
+  plugins: [],
+});
+/** 按 id 找插件的说明（模板里不用写箭头函数，避免 vue-tsc 隐式 any）。 */
+function pluginProvidesById(id: string): string {
+  const found = availableExtensions.value.plugins.find((p) => p.id === id);
+  return found ? pluginProvides(found) : '该插件在当前环境中不存在';
+}
+/** 某个平台插件往会话里塞了什么（勾选框旁的说明）。 */
+function pluginProvides(p: PluginCandidate): string {
+  const parts: string[] = [];
+  if (p.piExtension) parts.push('pi 扩展（工具/命令）');
+  if (p.workerFacet) parts.push('worker 方法');
+  if (p.skills.length) parts.push(`skill: ${p.skills.join(', ')}`);
+  return parts.join(' · ') || '无会话内能力';
+}
 
 function baseFormConfig() {
   return {
@@ -94,10 +115,10 @@ function baseFormConfig() {
     appendSystemPrompt: '',
     builtinTools: [...BASE_AGENT_CONFIG.builtinTools],
     mcp: { ...BASE_AGENT_CONFIG.mcp },
-    serverBuiltinTools: [...BASE_AGENT_CONFIG.serverBuiltinTools],
     serverBuiltinSkills: [...BASE_AGENT_CONFIG.serverBuiltinSkills],
     capabilities: null as string[] | null,
     extensions: [...BASE_AGENT_CONFIG.extensions],
+    plugins: [...BASE_AGENT_CONFIG.plugins],
     skills: [...BASE_AGENT_CONFIG.skills],
     prompts: [...BASE_AGENT_CONFIG.prompts],
   };
@@ -181,14 +202,8 @@ async function saveAsTemplate(): Promise<void> {
   }
 }
 
-/** callServer 是否启用（显式清单）——联动 Capabilities 区显隐 */
-const callServerEnabled = computed(() => form.value.config.serverBuiltinTools.includes('callServer'));
-
-// 关掉 callServer 时清空方法级授权：capabilities 只对 callServer 有意义，留着会在重新
-// 开启时悄悄复活旧授权（保存时 normalizeAgentConfig 也会兜底置 []）。
-watch(callServerEnabled, (on) => {
-  if (!on) form.value.config.capabilities = [];
-});
+// `capabilities` 是 callServer 的**方法级授权**（不是工具开关）。工具本身由 inline 插件
+// 在"有授权方法"时注入 —— 所以这一区永远可见，空 = callServer 工具不会出现。
 
 /** 非空模块（channel/config 占位空组不展示） */
 const capabilityGroups = computed(() => capabilityModules.value.filter((g) => g.capabilities.length > 0));
@@ -231,7 +246,14 @@ onMounted(async () => {
     if (modelsRes.ok) allModels.value = (await modelsRes.json()) as ModelOption[];
     if (skillsRes.ok) availableSkills.value = (await skillsRes.json()) as NamedItem[];
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as NamedItem[];
-    if (extensionsRes.ok) availableExtensions.value = (await extensionsRes.json()) as { names: string[] };
+    if (extensionsRes.ok) {
+      availableExtensions.value = (await extensionsRes.json()) as typeof availableExtensions.value;
+      // 新建表单默认启用当前所有可用插件（保存后即为显式清单）。
+      // 存量 agent 不自动补：它们的清单就是它们的清单。
+      if (isCreate.value && form.value.config.plugins.length === 0) {
+        form.value.config.plugins = availableExtensions.value.plugins.map((p) => p.id);
+      }
+    }
     if (builtinSkillsRes.ok)
       availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<
         NamedItem & { description?: string }
@@ -255,10 +277,10 @@ onMounted(async () => {
           appendSystemPrompt: resolved.appendSystemPrompt ?? '',
           builtinTools: [...resolved.builtinTools],
           mcp: { enabled: resolved.mcp.enabled, servers: [...resolved.mcp.servers] },
-          serverBuiltinTools: [...resolved.serverBuiltinTools],
           serverBuiltinSkills: [...resolved.serverBuiltinSkills],
           capabilities: resolved.capabilities,
           extensions: [...resolved.extensions],
+          plugins: [...resolved.plugins],
           skills: [...resolved.skills],
           prompts: [...resolved.prompts],
         },
@@ -314,8 +336,8 @@ function resourceSummary(items: readonly string[], total: number): string {
 function selectAllTools(): void {
   form.value.config.builtinTools = [...BUILTIN_TOOL_NAMES];
 }
-function selectAllServerTools(): void {
-  form.value.config.serverBuiltinTools = [...SERVER_BUILTIN_TOOLS];
+function selectAllPlugins(): void {
+  form.value.config.plugins = availableExtensions.value.plugins.map((p) => p.id);
 }
 function selectAllExtensions(): void {
   form.value.config.extensions = [...availableExtensions.value.names];
@@ -337,7 +359,6 @@ function pruneField(
     | 'prompts'
     | 'capabilities'
     | 'builtinTools'
-    | 'serverBuiltinTools'
     | 'serverBuiltinSkills',
 ): void {
   if (field === 'capabilities') {
@@ -467,7 +488,6 @@ watch(mcpEnabled, (on) => {
             <h3 class="section-title">Resources</h3>
             <span class="section-badge">
               {{ resourceSummary(form.config.builtinTools, BUILTIN_TOOL_NAMES.length) }},
-              {{ resourceSummary(form.config.serverBuiltinTools, SERVER_BUILTIN_TOOLS.length) }},
               MCP {{ mcpEnabled ? '开' : '关' }},
               {{ resourceSummary(form.config.extensions, availableExtensions.names.length) }},
               {{ resourceSummary(form.config.skills, availableSkills.length) }},
@@ -536,39 +556,34 @@ watch(mcpEnabled, (on) => {
               </div>
             </div>
 
-            <!-- Server builtin tools (serverBuiltinTools) -->
+
+            <!-- 平台插件（会话内能力来源，逐 agent 启用） -->
             <div class="resource-group">
               <div class="resource-group-header">
-                <span class="resource-group-title">Server Builtin Tools</span>
-                <InfoTip text="server 侧注入的工具。callServer = 调用 server 管理能力，具体可用方法需在下方 Capabilities 中授权。" />
-                <span class="resource-group-count">{{ resourceSummary(form.config.serverBuiltinTools, SERVER_BUILTIN_TOOLS.length) }}</span>
+                <span class="resource-group-title">Platform Plugins</span>
+                <InfoTip text="平台插件对**这个 agent 的会话**是否生效。启用 → 它的 pi 扩展（工具/命令）、worker 方法、自带 skill 一并注入；不启用 → 会话里拿不到这些工具与 skill。插件的 server 路由 / 页面是进程级全局资源，不受这里影响（要停整个插件请去「平台插件」页）。" :width="380" />
+                <span class="resource-group-count">{{ resourceSummary(form.config.plugins, availableExtensions.plugins.length) }}</span>
                 <span class="resource-edit-actions" v-if="!isView">
-                  <button type="button" class="btn-link" @click="selectAllServerTools">全选</button>
-                  <button type="button" class="btn-link" @click="form.config.serverBuiltinTools = []">清空</button>
+                  <button type="button" class="btn-link" @click="selectAllPlugins">全选</button>
+                  <button type="button" class="btn-link" @click="form.config.plugins = []">清空</button>
                 </span>
               </div>
               <div v-if="isView" class="tag-list">
-                <span v-for="tool in form.config.serverBuiltinTools" :key="tool" class="tag">{{ tool }}</span>
-                <span v-if="form.config.serverBuiltinTools.length === 0" class="resource-empty">无</span>
+                <span v-for="id in form.config.plugins" :key="id" class="tag"
+                  :class="{ 'tag-invalid': issueIndex('plugins', id) }"
+                  :title="pluginProvidesById(id)">{{ id }}</span>
+                <span v-if="form.config.plugins.length === 0" class="resource-empty">未启用任何平台插件</span>
               </div>
               <div v-else class="tag-list editable">
-                <label v-for="tool in SERVER_BUILTIN_TOOLS" :key="tool" class="tag-check"
-                  :title="SERVER_BUILTIN_TOOL_HINTS[tool] ?? ''"
-                  :class="{ checked: form.config.serverBuiltinTools.includes(tool) }">
-                  <input type="checkbox" :value="tool" v-model="form.config.serverBuiltinTools" />
-                  <span>{{ tool }}</span>
+                <label v-for="p in availableExtensions.plugins" :key="p.id" class="tag-check"
+                  :title="pluginProvides(p)"
+                  :class="{ checked: form.config.plugins.includes(p.id) }">
+                  <input type="checkbox" :value="p.id" v-model="form.config.plugins" />
+                  <span>{{ p.id }}</span>
                 </label>
-              </div>
-              <div v-if="!isView && form.config.serverBuiltinTools.length" class="tag-list editable">
-                <template v-for="tool in form.config.serverBuiltinTools" :key="'bad-' + tool">
-                  <label v-if="issueIndex('serverBuiltinTools', tool)" class="tag-check checked tag-invalid" title="平台工具不存在">
-                    <input type="checkbox" :value="tool" v-model="form.config.serverBuiltinTools" />
-                    <span>{{ tool }}（无效）</span>
-                  </label>
-                </template>
+                <span v-if="availableExtensions.plugins.length === 0" class="resource-empty">没有可启用的平台插件</span>
               </div>
             </div>
-
             <!-- Server builtin skills（平台随包发布，change: server-builtin-skills） -->
             <div class="resource-group">
               <div class="resource-group-header">
@@ -726,10 +741,10 @@ watch(mcpEnabled, (on) => {
         </div>
 
         <!-- Capabilities（callServer 方法级授权） -->
-        <div v-if="callServerEnabled" class="section">
+        <div class="section">
           <h3 class="section-title section-head">
             Capabilities
-            <InfoTip text="callServer 可调用的 server 方法授权（session 快照级）。未勾选任何方法 = 不授权，callServer 开着也只能用 list / detail；勾选即授权。" :width="340" />
+            <InfoTip text="callServer 可调用的 server 方法授权（session 快照级）。空 = 不授权，且 callServer 这个工具不会被注入；勾选任意方法后工具才出现。工具本身由 inline 插件提供，不是逐 agent 的工具开关。" :width="340" />
           </h3>
 
           <template v-if="isView">
@@ -1087,5 +1102,16 @@ watch(mcpEnabled, (on) => {
   border-color: #d97706 !important;
   color: #b45309 !important;
   background: rgba(245, 158, 11, 0.12) !important;
+}
+
+/* 插件自带的 pi 扩展：不可勾选，只做可见性（虚线边 + 灰字标记与"能勾的"区分开） */
+.tag-auto-note {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
 }
 </style>

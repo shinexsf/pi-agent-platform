@@ -496,6 +496,20 @@ export async function createSession(
     }
   }
 
+  // 插件自带的 skill（`<plugin-dir>/skills/<name>`）：**与工具同源生效** —— 插件对该
+  // 会话生效，agent 就自动获得，不需要在 agent 配置里勾 skill/tool。走同一条
+  // additionalSkillPaths（pi 判 temporary），因此用户 `skills` 白名单既不能杀它，
+  // 也不能当开关。
+  const pluginSkillPaths: string[] = [];
+  for (const plugin of config.plugins ?? []) {
+    if (!plugin.enabled) continue;
+    for (const dir of plugin.skillPaths ?? []) {
+      if (existsSync(join(dir, 'SKILL.md'))) pluginSkillPaths.push(dir);
+      else logger.warn({ sessionId, pluginId: plugin.id, dir }, 'plugin skill missing SKILL.md — skipped');
+    }
+  }
+  const additionalSkillPaths = [...serverBuiltinSkillPaths, ...pluginSkillPaths];
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspacePath,
     agentDir,
@@ -539,7 +553,7 @@ export async function createSession(
     // the user's `skills` whitelist must not be able to kill a platform skill, and it must
     // not be the switch for one either (that is `serverBuiltinSkills`). Do NOT add a special
     // case for builtin skills to resource-filters.ts.
-    additionalSkillPaths: serverBuiltinSkillPaths.length > 0 ? serverBuiltinSkillPaths : undefined,
+    additionalSkillPaths: additionalSkillPaths.length > 0 ? additionalSkillPaths : undefined,
     skillsOverride: agentConfig?.skills ? createSkillsFilter(agentConfig.skills) : undefined,
     promptsOverride: agentConfig?.prompts ? createPromptsFilter(agentConfig.prompts) : undefined,
   });
@@ -588,12 +602,10 @@ export async function createSession(
       })()
     : undefined;
 
-  // Build server-side tools (sendFileToUser / callServer) — gated by
-  // AgentConfig.serverBuiltinTools (default: sendFileToUser only; callServer opt-in).
-  // capabilityIndex (master-pushed) embeds the capability index into the
-  // callServer description for zero-round-trip first use.
+  // Server-side tools come from inline plugins (callServer / sendFileToUser) with no
+  // per-agent allowlist anymore — plugin effectiveness decides. capabilityIndex
+  // (master-pushed) both feeds the callServer description and gates its injection.
   const customTools = createServerTools(sessionId, callMaster, {
-    serverBuiltinTools: agentConfig?.serverBuiltinTools,
     capabilityIndex: config.capabilityIndex,
   });
 

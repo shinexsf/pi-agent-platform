@@ -18,7 +18,9 @@ function rowToDTO(row: typeof agents.$inferSelect): AgentDTO {
     workspacePath: row.workspacePath,
     model: row.model,
     thinkingLevel: row.thinkingLevel ?? undefined,
-    config: row.config ? (JSON.parse(row.config) as AgentConfig) : undefined,
+    // 读路径顺手丢掉退役字段（`serverBuiltinTools`）：老 row 里还留着它，
+    // 带出去会让人以为还有效。写路径不动（存的是用户提交的 config，已由 normalize 处理）。
+    config: row.config ? stripRetiredConfigKeys(JSON.parse(row.config) as AgentConfig) : undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -92,3 +94,9 @@ export function createAgentRepo(db: DB) {
 }
 
 export type AgentRepo = ReturnType<typeof createAgentRepo>;
+
+/** 从存量 config 里剔除已退役的键（只在读路径做，避免全库重写）。 */
+function stripRetiredConfigKeys(config: AgentConfig): AgentConfig {
+  const { serverBuiltinTools: _retired, ...rest } = config as AgentConfig & { serverBuiltinTools?: string[] };
+  return rest as AgentConfig;
+}

@@ -18,7 +18,7 @@ import type { ServerConfig } from '../config.js';
 import { uploadSingleExtension, extractExtensionNames, readSettings } from '@pi-agent-platform/core';
 import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
 import { childLogger } from '@pi-agent-platform/core';
-import { listServerBuiltinSkills } from '@pi-agent-platform/core';
+import { listServerBuiltinSkills, getPluginSnapshot } from '@pi-agent-platform/core';
 import {
   McpCatalogError,
   createMcpServer,
@@ -146,9 +146,46 @@ interface PromptInfo {
 
 interface ExtensionInfo {
   name: string;
-  source: 'npm' | 'git' | 'local' | 'builtin';
+  source: 'npm' | 'git' | 'local' | 'builtin' | 'plugin';
   path: string;
   enabled: boolean;
+  /** `source === 'plugin'` 时：哪个平台插件提供的（它随插件生效，不能单独卸载）。 */
+  pluginId?: string;
+  /** true = 由平台插件自动装载，不在 agent 的 extensions 白名单里控制。 */
+  auto?: boolean;
+}
+
+/**
+ * 平台插件带来的 pi 扩展清单（只读视图）。
+ *
+ * 判定依据是插件快照：`facets.extension === true` 且插件本身 active。
+ * 名字用 `plugin:<id>` —— 与装载时 inline factory 的命名一致，便于日志对照。
+ */
+function pluginSessionCandidates(pluginsDir: string): Array<{
+  id: string;
+  dir: string;
+  /** 是否带来 pi 扩展（工具 / 命令 / 钩子）。 */
+  piExtension: boolean;
+  /** worker facet（正向方法等）。 */
+  workerFacet: boolean;
+  /** 插件自带的 skill 名（`skills/<name>/SKILL.md`）。 */
+  skills: string[];
+}> {
+  try {
+    const snapshot = getPluginSnapshot(pluginsDir);
+    return snapshot.plugins
+      .filter((p) => p.status === 'active')
+      .filter((p) => p.facets.extension || p.facets.worker || (p.skillPaths?.length ?? 0) > 0)
+      .map((p) => ({
+        id: p.entry.id,
+        dir: p.entry.dir,
+        piExtension: Boolean(p.facets.extension),
+        workerFacet: Boolean(p.facets.worker),
+        skills: (p.skillPaths ?? []).map((dir) => path.basename(dir)),
+      }));
+  } catch {
+    return [];
+  }
 }
 
 function defaultAgentDir(): string {
@@ -707,9 +744,15 @@ export function createConfigRouter(config: ServerConfig) {
   router.get('/extensions', async (c) => {
     const settings = await readSettings(agentDir);
     const names = extractExtensionNames(settings);
-    
-    // Return as simple array of extension names for agent config
-    return c.json({ names, count: names.length });
+
+    // 平台插件（会话内能力来源）：`agent.config.plugins` 的候选集。
+    //
+    // 与 `names` 是**两套东西**：`names` 是 pi 原生安装的扩展（走 resource-loader 过滤），
+    // 这里是平台插件目录里"能往会话里塞东西"的插件（extension / worker facet 或 skills）。
+    // 只列这些：纯 server / web facet 的插件是进程级全局资源，没有"按 agent 启用"的意义。
+    const plugins = pluginSessionCandidates(config.pluginsDir);
+
+    return c.json({ names, count: names.length, plugins });
   });
 
   // GET /api/config/extensions/detail
@@ -743,6 +786,17 @@ export function createConfigRouter(config: ServerConfig) {
           enabled: true,
         });
       }
+    }
+
+    for (const item of pluginSessionCandidates(config.pluginsDir)) {
+      extensions.push({
+        name: `plugin:${item.id}`,
+        source: 'plugin',
+        path: item.dir,
+        enabled: true,
+        pluginId: item.id,
+        auto: true,
+      });
     }
 
     return c.json(extensions);

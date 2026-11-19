@@ -12,8 +12,6 @@ import InfoTip from '../ui/InfoTip.vue';
 import McpSelectionGroup from '../config/McpSelectionGroup.vue';
 import {
   BUILTIN_TOOL_NAMES,
-  SERVER_BUILTIN_TOOLS,
-  SERVER_BUILTIN_TOOL_HINTS,
   withMcpDependencies,
 } from '../../constants/builtin-tools';
 import { useConfigIssues } from '../../composables/useConfigIssues';
@@ -36,6 +34,8 @@ const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityIn
 const availableSkills = computed(() => issues.available.value.skills ?? []);
 const availablePrompts = computed(() => issues.available.value.prompts ?? []);
 const availableExtensions = computed(() => issues.available.value.extensions ?? []);
+/** 平台插件候选（有会话内能力的那些）。 */
+const availablePlugins = computed(() => issues.available.value.plugins ?? []);
 const availableServerBuiltinSkills = computed(() => issues.available.value.serverBuiltinSkills ?? []);
 const has = computed(() => issues.buildIssueIndex(props.modelValue, null));
 
@@ -49,13 +49,9 @@ const allCapabilityMethods = computed(() =>
   capabilityModules.value.flatMap((g) => g.capabilities.map((c) => c.method)),
 );
 
-/** callServer 是否启用——与 agent 编辑页一致：没开就不显示 Capabilities 区 */
-const callServerEnabled = computed(() => props.modelValue.serverBuiltinTools.includes('callServer'));
-
-// 关掉 callServer 时清空方法级授权，避免保存后 capabilities 还活着（服务端 normalize 也兜底置 []）
-watch(callServerEnabled, (on) => {
-  if (!on) props.modelValue.capabilities = [];
-});
+// capabilities 是 callServer 的方法级授权；工具本身由 inline 插件在有授权时注入，
+// 所以这一区永远可见（空 = 不会注入 callServer）。
+const callServerEnabled = computed(() => true);
 
 /** 平台 MCP 目录（server 定义只在 `~/.pi/server/mcp.json`）。 */
 const {
@@ -84,7 +80,7 @@ function toggleCapability(method: string, checked: boolean): void {
 
 /** 勾选/取消一个「字符串数组」字段里的值 */
 function toggleValue(
-  field: 'builtinTools' | 'serverBuiltinTools' | 'serverBuiltinSkills' | 'extensions' | 'skills' | 'prompts',
+  field: 'builtinTools' | 'serverBuiltinSkills' | 'extensions' | 'plugins' | 'skills' | 'prompts',
   value: string,
   checked: boolean,
 ): void {
@@ -95,7 +91,14 @@ function toggleValue(
 }
 
 function pruneField(
-  field: 'builtinTools' | 'serverBuiltinSkills' | 'extensions' | 'skills' | 'prompts' | 'capabilities',
+  field:
+    | 'builtinTools'
+    | 'serverBuiltinSkills'
+    | 'extensions'
+    | 'plugins'
+    | 'skills'
+    | 'prompts'
+    | 'capabilities',
 ): void {
   const current = props.modelValue[field] ?? [];
   props.modelValue[field] = issues.pruneInvalid(field, current);
@@ -168,30 +171,32 @@ onMounted(async () => {
       @update:servers="setMcpServers"
     />
 
-    <!-- Server builtin tools -->
+
+    <!-- 平台插件（会话内能力来源） -->
     <div class="resource-group">
       <div class="resource-group-header">
-        <span class="resource-group-title">Server Builtin Tools</span>
-        <InfoTip text="server 侧注入的工具。callServer = 调用 server 管理能力，具体可用方法在下方 Capabilities 区授权。" :width="320" />
-        <span class="resource-group-count">{{ props.modelValue.serverBuiltinTools.length }} / {{ SERVER_BUILTIN_TOOLS.length }}</span>
+        <span class="resource-group-title">Platform Plugins</span>
+        <InfoTip text="模板里记录的平台插件启用列表。启用 → 该 agent 的会话会装载插件的 pi 扩展工具、worker 方法与自带 skill。" :width="340" />
+        <span class="resource-group-count">{{ props.modelValue.plugins.length }} / {{ availablePlugins.length }}</span>
         <span class="resource-edit-actions">
-          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinTools = [...SERVER_BUILTIN_TOOLS]">全选</button>
-          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinTools = []">清空</button>
+          <button type="button" class="btn-link" @click="props.modelValue.plugins = [...availablePlugins]">全选</button>
+          <button type="button" class="btn-link" @click="props.modelValue.plugins = []">清空</button>
+          <button type="button" class="btn-link" @click="pruneField('plugins')">清理无效项</button>
         </span>
       </div>
       <div class="tag-list editable">
-        <label v-for="t in SERVER_BUILTIN_TOOLS" :key="t" class="tag-check"
-          :title="SERVER_BUILTIN_TOOL_HINTS[t] ?? ''"
-          :class="{ checked: props.modelValue.serverBuiltinTools.includes(t) }">
-          <input type="checkbox" :checked="props.modelValue.serverBuiltinTools.includes(t)"
-            @change="toggleValue('serverBuiltinTools', t, ($event.target as HTMLInputElement).checked)" />
-          <span>{{ t }}</span>
+        <label v-for="id in availablePlugins" :key="id" class="tag-check"
+          :class="{ checked: props.modelValue.plugins.includes(id), 'tag-invalid': has('plugins', id) }">
+          <input type="checkbox" :checked="props.modelValue.plugins.includes(id)"
+            @change="toggleValue('plugins', id, ($event.target as HTMLInputElement).checked)" />
+          <span>{{ id }}</span>
         </label>
-        <label v-for="t in props.modelValue.serverBuiltinTools.filter(x => !SERVER_BUILTIN_TOOLS.includes(x as never))" :key="'g-' + t"
-          class="tag-check checked tag-invalid" title="平台工具不存在">
-          <input type="checkbox" :checked="true" @change="toggleValue('serverBuiltinTools', t, false)" />
-          <span>{{ t }}（无效）</span>
+        <label v-for="id in props.modelValue.plugins.filter(x => has('plugins', x))" :key="'g-' + id"
+          class="tag-check checked tag-invalid" title="平台插件不存在或未安装">
+          <input type="checkbox" :checked="true" @change="toggleValue('plugins', id, false)" />
+          <span>{{ id }}（无效）</span>
         </label>
+        <span v-if="availablePlugins.length === 0" class="resource-empty">没有可启用的平台插件</span>
       </div>
     </div>
 

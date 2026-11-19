@@ -46,11 +46,6 @@ export interface AgentConfig {
   // missing/null = off with no selection. Server definitions never live in the DB — only names.
   mcp?: { enabled?: boolean; servers?: string[] };
 
-  // Server-side tool whitelist (sendFileToUser / callServer — the custom tools
-  // that talk to the master via reverse IPC). Semantics: missing/null = empty (none).
-  // Independent from `builtinTools` (which governs pi builtin tools + builtin extension tools).
-  serverBuiltinTools?: string[];
-
   // Server-shipped skill whitelist (change: server-builtin-skills). Names refer to the
   // skill dirs bundled with the server package (`skills/builtin/<name>/SKILL.md`), NOT to
   // the user's `~/.pi/agent/skills` — that is what `skills` above governs. Semantics:
@@ -58,11 +53,20 @@ export interface AgentConfig {
   // platform assets are read-only and versioned with the package, user assets are editable.
   serverBuiltinSkills?: string[];
 
+  // 平台插件启用列表（**只对"有会话内能力"的插件有意义**：extension / worker facet 或
+  // `skills/` 目录）。Semantics: missing/null = empty（一个都不启用）。
+  //
+  // 与 `extensions` 是**两套东西**：`extensions` 是 pi 原生安装的扩展（走 resource-loader
+  // 过滤），`plugins` 是平台插件目录里的插件（走装载器 + `resolveSessionPlugins`）。
+  // 未列出的插件：extension facet 不装载（工具/命令/钩子全无）、worker facet 不装载、
+  // `skills/` 不注入。server / web facet 是进程级全局资源，不受这里影响。
+  plugins?: string[];
+
   // callServer method-level allowlist. null/undefined = use the global default
   // policy (control-plane default: reads on, writes off); [] = deny all business
   // methods (list/detail stay available); array = explicit allowlist.
-  // Enforced by the master-side control plane at dispatch time — the tool
-  // switch (serverBuiltinTools) only controls prompt-layer injection.
+  // Enforced by the master-side control plane at dispatch time. `callServer` 这个工具
+  // 本身由 inline 插件在"有授权能力"时注入（没有单独的工具开关了）。
   capabilities?: string[] | null;
 }
 
@@ -79,7 +83,7 @@ export interface ResolvedAgentConfig extends AgentConfig {
   prompts: string[];
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
-  serverBuiltinTools: string[];
+  plugins: string[];
   serverBuiltinSkills: string[];
   capabilities: string[] | null;
 }
@@ -90,31 +94,31 @@ export interface ResolvedAgentConfig extends AgentConfig {
  * keeps its tri-state meaning (null = global default policy).
  *
  * `mcp.enabled === false` MUST keep `servers`: turning the switch off suspends the selection
- * instead of discarding it (the opposite of `capabilities`, where removing `callServer`
- * forces `[]` because that IS an authorization).
+ * instead of discarding it.
  *
- * Invariant: `capabilities` is the method-level authorization for `callServer`, so when
- * `callServer` is not in `serverBuiltinTools` the authorization is meaningless and is
- * forced to `[]` (全禁). Without this, a template/agent saved after unchecking
- * `callServer` would keep stale authorizations that silently reactivate when the tool
- * is switched back on.
+ * `capabilities` 不再与"工具开关"联动：工具由插件注入，授权只由这一项表达
+ * （null = 全局默认策略，[] = 全禁）。
  *
  * This is the single place where "missing means empty" is applied (change:
  * explicit-agent-config). There is deliberately no global-default merge layer.
  */
 export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgentConfig {
   const c = config ?? {};
-  const serverBuiltinTools = c.serverBuiltinTools ?? [];
+  // 存量 row 里的 `serverBuiltinTools`（逐 agent 的工具白名单）已退役：这里丢掉它，
+  // 免得旧值继续在 DTO / UI 里漂着，让人以为它还有效。
+  const { serverBuiltinTools: _retired, ...rest } = c as AgentConfig & { serverBuiltinTools?: string[] };
   return {
-    ...c,
+    ...rest,
     extensions: c.extensions ?? [],
     skills: c.skills ?? [],
     prompts: c.prompts ?? [],
     builtinTools: c.builtinTools ?? [],
     mcp: { enabled: c.mcp?.enabled === true, servers: c.mcp?.servers ?? [] },
-    serverBuiltinTools,
+    plugins: c.plugins ?? [],
     serverBuiltinSkills: c.serverBuiltinSkills ?? [],
-    capabilities: serverBuiltinTools.includes('callServer') ? (c.capabilities ?? null) : [],
+    // `capabilities` 是 callServer 的**方法级授权**，与"工具注入"解耦了：
+    // 工具由 inline 插件在"有授权能力"时注入，这里只管授权本身。
+    capabilities: c.capabilities ?? null,
   };
 }
 
@@ -135,8 +139,6 @@ export const PLATFORM_BUILTIN_TOOLS = [
   'tool_search',
 ] as const;
 
-/** Worker-registered platform tools (`AgentConfig.serverBuiltinTools`). */
-export const PLATFORM_SERVER_TOOLS = ['sendFileToUser', 'callServer', 'postNotification'] as const;
 
 /** A stored config value that no longer resolves (renamed tool, uninstalled extension, …). */
 export interface ConfigIssue {
@@ -146,7 +148,7 @@ export interface ConfigIssue {
     | 'skills'
     | 'prompts'
     | 'builtinTools'
-    | 'serverBuiltinTools'
+    | 'plugins'
     | 'serverBuiltinSkills'
     | 'capabilities'
     | 'model'
@@ -166,7 +168,8 @@ export interface ConfigAvailability {
   /** `provider/model` strings. */
   models?: string[];
   tools?: string[];
-  serverTools?: string[];
+  /** 环境里可用的平台插件 id（有会话内能力的那些）。 */
+  plugins?: string[];
   /** Names bundled with the server package (`GET /api/config/server-builtin-skills`). */
   serverBuiltinSkills?: string[];
   /** Server names from the platform catalog (`GET /api/config/mcp-servers`). */
@@ -206,17 +209,12 @@ export function findConfigIssues(
     available.tools ?? [...PLATFORM_BUILTIN_TOOLS],
     '工具不存在',
   );
+  check('plugins', config?.plugins, available.plugins, '平台插件不存在或未安装');
   check(
     'serverBuiltinSkills',
     config?.serverBuiltinSkills,
     available.serverBuiltinSkills,
     '平台 Skill 不存在或未随此版本发布',
-  );
-  check(
-    'serverBuiltinTools',
-    config?.serverBuiltinTools,
-    available.serverTools ?? [...PLATFORM_SERVER_TOOLS],
-    '平台工具不存在',
   );
   check('capabilities', config?.capabilities ?? undefined, available.capabilities, '授权方法不存在');
   // Dormant selections are not defects: a server name that vanished from the catalog only
@@ -471,6 +469,14 @@ export interface RuntimePluginSpec {
   reason?: string;
   extensionPath?: string;
   workerPath?: string;
+  /**
+   * 插件自带的 skill 目录（`<plugin-dir>/skills/<name>`，每个含 `SKILL.md`）。
+   *
+   * 生效条件与工具同源：**插件对会话生效 → agent 自动获得工具和 skill**。
+   * worker 把它们并入 `additionalSkillPaths`，因此走的是 pi 的 temporary 豁免
+   * （用户 `skills` 白名单既不能杀它，也不能当开关）。
+   */
+  skillPaths?: string[];
 }
 
 /**

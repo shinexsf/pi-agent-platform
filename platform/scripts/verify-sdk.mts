@@ -115,8 +115,10 @@ console.log('  ✓ 无 HTTP / 入口应用依赖');
 
 console.log('B. 无 HTTP 进程内跑一轮会话');
 
-const { initCoreConfig, initDb, createAgentRepo, createSessionRepo, WorkerPool, initSessionRegistry, sessionRegistry, coreConfig } =
-  await import(path.join(platformRoot, 'packages/core/src/index.js') as string);
+const {
+  initCoreConfig, initDb, createAgentRepo, createSessionRepo, WorkerPool, initSessionRegistry, sessionRegistry,
+  coreConfig, createEventBus, buildSystemEnvelope,
+} = await import(path.join(platformRoot, 'packages/core/src/index.js') as string);
 const { createSessionProjector } = await import(path.join(platformRoot, 'packages/event-projection/src/index.js') as string);
 
 const runDir = path.join(platformRoot, '..', 'tmp', `verify-sdk-${process.pid}`);
@@ -148,12 +150,61 @@ const { db, raw } = initDb(dbPath);
 const tables = (raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[])
   .map((r) => r.name)
   .sort();
-const expected = ['agents', 'attachments', 'sessions'];
+// plugin_migrations 是内核的台账表（插件迁移登记，change: plugin-mechanism-v2），
+// 内核建它、插件写它 —— 所以它属于"内核对象的表"这一侧。
+const expected = ['agents', 'attachments', 'plugin_migrations', 'sessions'];
 if (JSON.stringify(tables) !== JSON.stringify(expected)) {
   console.error(`✗ 内核表不符：得到 [${tables.join(', ')}]，期望 [${expected.join(', ')}]`);
   process.exit(1);
 }
 console.log(`  ✓ 内核只建自己的表：${tables.join(', ')}`);
+
+// ── 宿主面：events 总线（进程内、无回执、退订归零）──
+const bus = createEventBus();
+const seen: unknown[] = [];
+const offA = bus.subscribe('probe.topic', (p) => seen.push(p));
+const offB = bus.subscribe('probe.topic', () => {
+  throw new Error('订阅者抛错不应影响别人');
+});
+bus.subscribe('probe.other', () => seen.push('other'));
+bus.emit('probe.topic', { n: 1 });
+if (seen.length !== 1) {
+  console.error(`✗ events 派发异常：期望 1 个订阅者收到，实际 ${seen.length}`);
+  process.exit(1);
+}
+offA();
+offA(); // 幂等退订
+offB();
+if (bus.subscriberCount() !== 1) {
+  console.error(`✗ events 退订后订阅数应为 1，实际 ${bus.subscriberCount()}`);
+  process.exit(1);
+}
+bus.clear();
+console.log('  ✓ events 面：无回执派发 / 抛错隔离 / 幂等退订 / 归零');
+
+// ── 信封：唯一构造点，`</data` 被转义，指令原样保留 ──
+const envelope = buildSystemEnvelope({
+  kind: 'trigger',
+  source: 'cron',
+  name: 'probe',
+  fired: '2026-11-19T00:00:00.000Z',
+  run: 'run_1',
+  instruction: '检查磁盘',
+  data: { note: '</data><evil>' },
+});
+if (!envelope.startsWith('<system-event v="1" kind="trigger" source="cron" name="probe"')) {
+  console.error(`✗ 信封属性顺序/形状变了：${envelope.slice(0, 80)}`);
+  process.exit(1);
+}
+if (!envelope.includes('<\\/data><evil>') || envelope.includes('</data><evil>')) {
+  console.error('✗ 信封没有转义 </data');
+  process.exit(1);
+}
+if (!envelope.includes('<instruction>检查磁盘</instruction>')) {
+  console.error('✗ 信封丢了 instruction');
+  process.exit(1);
+}
+console.log('  ✓ system-envelope：属性驱动 / `</data` 转义 / instruction 原样');
 
 const agentRepo = createAgentRepo(db);
 const sessionRepo = createSessionRepo(db);
@@ -184,6 +235,30 @@ const done = new Promise<void>((resolve) => {
 
 const session = await sessionRegistry().createFromAgent(agent.id);
 console.log(`  ✓ 建会话 ${session.id}（placeholder，无 DB 行）`);
+
+// ── sessions.ensure 三态（插件"无人值守跑一轮"的入口）──
+const ensured = await sessionRegistry().ensure({ agentId: agent.id, title: '[probe]' });
+if (!ensured.created || !sessionRepo.get(ensured.sessionId)) {
+  console.error('✗ ensure(新建) 没有落行');
+  process.exit(1);
+}
+const ensuredAgain = await sessionRegistry().ensure({ agentId: agent.id, sessionId: ensured.sessionId });
+if (ensuredAgain.created || ensuredAgain.sessionId !== ensured.sessionId) {
+  console.error('✗ ensure(复用) 语义错');
+  process.exit(1);
+}
+let strangerRejected = false;
+try {
+  await sessionRegistry().ensure({ agentId: agent.id, sessionId: 'no-such-session' });
+} catch {
+  strangerRejected = true;
+}
+if (!strangerRejected) {
+  console.error('✗ ensure 对陌生 sessionId 必须抛错（fail closed）');
+  process.exit(1);
+}
+await workerPool.kill(ensured.sessionId, 'verify-sdk-cleanup');
+console.log('  ✓ sessions.ensure：新建落行 / 复用不新建 / 陌生 id 抛错');
 
 session.subscribe((event: { kind: string; event: string; data?: unknown }) => {
   rawNames.push(event.event);

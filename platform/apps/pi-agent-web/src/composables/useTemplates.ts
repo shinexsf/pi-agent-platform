@@ -14,11 +14,12 @@ export interface TemplateTargetConfig {
   appendSystemPrompt?: string;
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
-  serverBuiltinTools: string[];
   /** 平台随包 skill（change: server-builtin-skills）——与 skills 分开的名字空间。 */
   serverBuiltinSkills: string[];
   capabilities: string[] | null;
   extensions: string[];
+  /** 平台插件启用列表（会话内能力来源）。 */
+  plugins: string[];
   skills: string[];
   prompts: string[];
 }
@@ -30,10 +31,10 @@ export function templateSnapshot(config: TemplateTargetConfig): AgentConfig {
     // 快照与「填充后的结果」保持一致：mcp 开着就一定带上 codemode/tool_search。
     builtinTools: mcpOn ? withMcpDependencies([...config.builtinTools]) : [...config.builtinTools],
     mcp: { enabled: mcpOn, servers: [...config.mcp.servers] },
-    serverBuiltinTools: [...config.serverBuiltinTools],
     serverBuiltinSkills: [...config.serverBuiltinSkills],
     capabilities: config.capabilities === null ? null : [...config.capabilities],
     extensions: [...config.extensions],
+    plugins: [...config.plugins],
     skills: [...config.skills],
     prompts: [...config.prompts],
   };
@@ -52,10 +53,10 @@ export function applyTemplate<T extends TemplateTargetConfig>(config: T, templat
       ? withMcpDependencies([...(c.builtinTools ?? [])])
       : [...(c.builtinTools ?? [])],
     mcp: { enabled: c.mcp?.enabled === true, servers: [...(c.mcp?.servers ?? [])] },
-    serverBuiltinTools: [...(c.serverBuiltinTools ?? [])],
     serverBuiltinSkills: [...(c.serverBuiltinSkills ?? [])],
     capabilities: c.capabilities === null || c.capabilities === undefined ? null : [...c.capabilities],
     extensions: [...(c.extensions ?? [])],
+    plugins: [...(c.plugins ?? [])],
     skills: [...(c.skills ?? [])],
     prompts: [...(c.prompts ?? [])],
   };

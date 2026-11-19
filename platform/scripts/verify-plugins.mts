@@ -388,31 +388,80 @@ check(extCalls.includes('bridge:emit'), 'extension 拿到 bridge（ctx 注入）
 // ── 6b. inline 插件：工具归属与白名单 ────────────────────────────────────
 // inline 插件编译进平台、不可卸载，但必须走同一条"声明 → 白名单过滤 → 注入"路径。
 
-section('6) inline 插件（工具归属）');
+section('5b) 会话级插件启用列表（agent.config.plugins）');
+{
+  const { resolveSessionPlugins } = (await import(
+    path.join(platformRoot, 'packages/core/src/services/plugins.js') as string
+  )) as {
+    resolveSessionPlugins(o: {
+      snapshot: { plugins: Array<Record<string, unknown>>; disabledByFlag: boolean };
+      enabledPlugins?: string[];
+      agentExtensions: string[];
+      installedPiExtensions: string[];
+    }): Array<{ id: string; enabled: boolean; reason?: string; extensionPath?: string; skillPaths?: string[] }>;
+  };
+  const snapshot = {
+    disabledByFlag: false,
+    plugins: [
+      {
+        entry: { id: 'alpha', dir: '/tmp/alpha', enabled: true },
+        status: 'active',
+        facets: { extension: true, worker: false, web: false, server: true },
+        skillPaths: ['/tmp/alpha/skills/x'],
+        manifest: null,
+      },
+    ],
+  } as never;
+  const off = resolveSessionPlugins({
+    snapshot,
+    enabledPlugins: [],
+    agentExtensions: [],
+    installedPiExtensions: [],
+  });
+  check(
+    off.length === 1 && !off[0]!.enabled && !off[0]!.extensionPath && (off[0]!.skillPaths ?? []).length === 0,
+    '未在 agent.config.plugins 里启用 → 插件对本会话不生效（无 pi 扩展 / 无 skill）',
+  );
+  const on = resolveSessionPlugins({
+    snapshot,
+    enabledPlugins: ['alpha'],
+    agentExtensions: [],
+    installedPiExtensions: [],
+  });
+  check(
+    on[0]!.enabled && Boolean(on[0]!.extensionPath),
+    '在启用列表里 → 插件对会话生效（extensionPath 下发，worker 才会装载工具）',
+  );
+}
+
+section('6) inline 插件（工具归属与自动注入）');
 const { createServerTools } = (await import(
   path.join(platformRoot, 'workers/session-worker/src/tools.js') as string
 )) as {
   createServerTools(
     sessionId: string,
     callMaster: (m: string, a: unknown[]) => Promise<unknown>,
-    opts?: { serverBuiltinTools?: string[]; capabilityIndex?: unknown[] },
+    opts?: { capabilityIndex?: unknown[] },
   ): Array<{ name: string }>;
 };
 const noopCall = async () => ({});
 
-const withWhitelist = createServerTools('s1', noopCall, { serverBuiltinTools: ['callServer'], capabilityIndex: [] });
-check(withWhitelist.some((t) => t.name === 'callServer'), 'inline 插件提供的 callServer 在白名单内时注入');
-
-const withoutWhitelist = createServerTools('s1', noopCall, { serverBuiltinTools: [] });
+// `serverBuiltinTools` 退役后：工具是否注入只看提供方（插件自己的判断）。
+const noCaps = createServerTools('s1', noopCall, { capabilityIndex: [] });
+check(noCaps.some((t) => t.name === 'sendFileToUser'), 'inline 插件 sendFileToUser 自动注入（无逐 agent 白名单）');
 check(
-  !withoutWhitelist.some((t) => t.name === 'callServer'),
-  '白名单为空 → inline 工具不注入（声明 ≠ 对该 agent 开放）',
+  !noCaps.some((t) => t.name === 'callServer'),
+  '没有任何授权能力 → callServer 不注入（插件自我收窄，不是平台开关）',
 );
 
-const mixed = createServerTools('s1', noopCall, { serverBuiltinTools: ['sendFileToUser', 'callServer'] });
+const withCaps = createServerTools('s1', noopCall, {
+  capabilityIndex: [{ method: 'server.status', module: 'server', access: 'read', scoped: false, summary: 'x' }],
+});
+check(withCaps.some((t) => t.name === 'callServer'), '有授权能力 → callServer 自动注入');
+
 check(
-  mixed.some((t) => t.name === 'sendFileToUser') && mixed.some((t) => t.name === 'callServer'),
-  '过渡期两类来源并存（硬编码壳 + inline 声明）互不干扰',
+  !createServerTools('s1', noopCall, {}).some((t) => t.name === 'postNotification'),
+  'postNotification 不再由 worker 硬编码（归 notifications 插件的 extension facet）',
 );
 
 // ── 7. 收尾 ───────────────────────────────────────────────────────────────
