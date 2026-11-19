@@ -106,6 +106,15 @@ export interface HostSystemEventInput {
   instruction?: string;
   /** 附加上下文（进 `<data format="json">`）。 */
   data?: unknown;
+  /**
+   * agent 正在跑（流式输出中）时怎么办 —— 原样交给 pi 的 `prompt`：
+   * - `followUp`：排队，等当前轮结束再送（不丢事件）
+   * - `steer`：当前轮工具调用结束后插入（会打断 agent 正在做的事）
+   * - 不传：pi 直接报错（"already streaming"），调用方自己负责拦
+   *
+   * 语义由调用方（插件）按业务定：定时任务的 `busy_policy`、webhook 的同名字段。
+   */
+  streamingBehavior?: 'steer' | 'followUp';
 }
 
 /**

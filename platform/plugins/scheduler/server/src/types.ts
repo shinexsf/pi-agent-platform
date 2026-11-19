@@ -9,6 +9,14 @@ export type ScheduleKind = 'cron' | 'once';
 export type SessionMode = 'new' | 'reuse';
 export type RunStatus = 'delivered' | 'skipped' | 'missed' | 'failed';
 export type RunTrigger = 'schedule' | 'manual' | 'plugin';
+/**
+ * 到点时目标会话正忙（agent 还在流式输出）怎么办。
+ *
+ * - `followUp`：排队，等当前轮结束再送（默认 —— 不丢这一轮）
+ * - `steer`：当前轮工具调用结束后插入（会打断 agent 正在做的事）
+ * - `skip`：这一次不投，记 `skipped/busy`
+ */
+export type BusyPolicy = 'followUp' | 'steer' | 'skip';
 
 export interface TaskDTO {
   id: string;
@@ -25,6 +33,7 @@ export interface TaskDTO {
   sessionMode: SessionMode;
   /** `reuse` 的绑定目标；`null` = 首次触发时创建并回填。 */
   sessionId: string | null;
+  busyPolicy: BusyPolicy;
   enabled: boolean;
   /** 下一个计划时刻；`null` = 不再触发。 */
   nextAt: number | null;
@@ -58,6 +67,7 @@ export interface TaskRow {
   at: number | null;
   session_mode: SessionMode;
   session_id: string | null;
+  busy_policy: BusyPolicy;
   enabled: number;
   next_at: number | null;
   max_runs: number | null;

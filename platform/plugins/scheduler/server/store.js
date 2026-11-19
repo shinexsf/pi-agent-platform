@@ -11,6 +11,7 @@ const DDL = `
     at INTEGER,
     session_mode TEXT NOT NULL CHECK (session_mode IN ('new','reuse')),
     session_id TEXT,
+    busy_policy TEXT NOT NULL DEFAULT 'followUp' CHECK (busy_policy IN ('followUp','steer','skip')),
     enabled INTEGER NOT NULL DEFAULT 1,
     next_at INTEGER,
     max_runs INTEGER,
@@ -49,6 +50,7 @@ function toTaskDTO(row) {
     at: row.at,
     sessionMode: row.session_mode,
     sessionId: row.session_id,
+    busyPolicy: row.busy_policy,
     enabled: row.enabled === 1,
     nextAt: row.next_at,
     maxRuns: row.max_runs,
@@ -103,8 +105,8 @@ function createStore(db) {
       db.query(
         `INSERT INTO scheduled_tasks
          (id, agent_id, name, prompt, schedule_kind, cron_expr, timezone, at, session_mode, session_id,
-          enabled, next_at, max_runs, runs_count, last_fired_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+          busy_policy, enabled, next_at, max_runs, runs_count, last_fired_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
         [
           id,
           input.agentId,
@@ -116,6 +118,7 @@ function createStore(db) {
           input.at,
           input.sessionMode,
           input.sessionId,
+          input.busyPolicy,
           input.enabled ? 1 : 0,
           input.nextAt,
           input.maxRuns,

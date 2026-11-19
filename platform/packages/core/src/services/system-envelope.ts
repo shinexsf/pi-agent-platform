@@ -72,3 +72,19 @@ export function buildSystemEnvelope(input: SystemEnvelopeInput): string {
 
   return `<system-event ${attrs.join(' ')}>\n${body.join('\n')}\n</system-event>`;
 }
+
+/**
+ * `sessions.systemEvent` 转成 worker `prompt` 的选项（第二个参数）。
+ *
+ * 为什么单独成函数而不是在入口里内联三元：pi 的 `prompt` 在 agent 正在流式输出时
+ * **必须**给 `streamingBehavior`，否则直接报错。这条契约（`'steer' | 'followUp'`）
+ * 属于内核，不属于某个插件 —— 放在这里才能被 `verify:sdk` 断言，
+ * 而不是靠"每个入口各写一次、漏一个就静默失败"。
+ *
+ * 不传 → `{}`（既有调用方行为完全不变）。
+ */
+export function systemEventPromptOptions(
+  streamingBehavior?: 'steer' | 'followUp',
+): { streamingBehavior?: 'steer' | 'followUp' } {
+  return streamingBehavior ? { streamingBehavior } : {};
+}

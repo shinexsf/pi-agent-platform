@@ -109,6 +109,14 @@ export function mount(el: HTMLElement, host: PluginWebHost): () => void {
       sessionMode,
     );
     const sessionSelect = select([], current?.sessionId ?? '');
+    const busyPolicySelect = select(
+      [
+        { value: 'followUp', label: 'followUp — 排队，等当前轮结束再送（默认）' },
+        { value: 'steer', label: 'steer — 插队到当前轮之后的下一次模型调用' },
+        { value: 'skip', label: 'skip — 这一次不投，记一条 skipped' },
+      ],
+      current?.busyPolicy ?? 'followUp',
+    );
     const maxRunsInput = input('number', current?.maxRuns ? String(current.maxRuns) : '', '不限');
     maxRunsInput.type = 'number';
 
@@ -186,6 +194,7 @@ export function mount(el: HTMLElement, host: PluginWebHost): () => void {
         name: nameInput.value.trim(),
         prompt: promptInput.value.trim(),
         sessionMode: sessionModeSelect.value,
+        busyPolicy: busyPolicySelect.value,
       };
       if (!task) body.agentId = agentSelect.value;
       if (kind === 'cron') {
@@ -235,6 +244,7 @@ export function mount(el: HTMLElement, host: PluginWebHost): () => void {
       fieldWrap('指令（到点进入会话的 prompt）', promptInput),
       h('div', { class: 'sched-row' }, fieldWrap('会话模式', sessionModeSelect), fieldWrap('最大运行次数（留空=不限）', maxRunsInput)),
       fieldWrap('目标会话（reuse）', sessionSelect),
+      fieldWrap('到点时 agent 正忙怎么办', busyPolicySelect, '默认排队（不丢这一轮）；高频任务建议 skip'),
       h(
         'div',
         { class: 'sched-actions' },

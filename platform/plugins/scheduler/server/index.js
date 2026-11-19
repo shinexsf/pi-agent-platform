@@ -151,6 +151,7 @@ async function createTask(host, store, input) {
   if (!prompt) throw new Error("prompt \u4E0D\u80FD\u4E3A\u7A7A");
   const scheduleKind = input.scheduleKind ?? "cron";
   const sessionMode = input.sessionMode ?? "new";
+  const busyPolicy = normalizeBusyPolicy(input.busyPolicy);
   const sessionId = await normalizeSessionBinding(host, agentId, sessionMode, input.sessionId);
   const nextAt = computeNextAt(
     { scheduleKind, cronExpr: input.cronExpr, timezone: input.timezone, at: input.at },
@@ -166,6 +167,7 @@ async function createTask(host, store, input) {
     at: scheduleKind === "once" ? Number(input.at) : null,
     sessionMode,
     sessionId,
+    busyPolicy,
     enabled: true,
     nextAt,
     // 一次性任务跑一次就停（旧版同款：创建时把 max_runs 钉成 1）。
@@ -189,6 +191,7 @@ async function updateTask(host, store, taskId, input) {
     patch.session_mode = nextMode;
     patch.session_id = await normalizeSessionBinding(host, task.agentId, nextMode, input.sessionId, task.sessionId);
   }
+  if (input.busyPolicy !== void 0) patch.busy_policy = normalizeBusyPolicy(input.busyPolicy);
   if (input.maxRuns !== void 0 && task.scheduleKind !== "once") patch.max_runs = input.maxRuns;
   if (input.enabled !== void 0 && input.enabled !== task.enabled) {
     if (input.enabled) {
@@ -219,6 +222,11 @@ async function updateTask(host, store, taskId, input) {
   }
   store.update(taskId, patch);
   return store.get(taskId);
+}
+function normalizeBusyPolicy(value) {
+  if (value === void 0 || value === null || value === "") return "followUp";
+  if (value === "followUp" || value === "steer" || value === "skip") return value;
+  throw new Error(`busyPolicy \u53EA\u80FD\u662F followUp / steer / skip\uFF0C\u6536\u5230\uFF1A${String(value)}`);
 }
 async function normalizeSessionBinding(host, agentId, mode, sessionId, current) {
   if (mode === "new") {
@@ -257,13 +265,20 @@ async function dispatch(host, store, taskId, triggeredBy) {
       ...task.sessionMode === "reuse" && task.sessionId ? { sessionId: task.sessionId } : {},
       ...task.sessionMode === "reuse" && !task.sessionId ? { title: `[${task.name}]` } : {}
     });
+    if (task.busyPolicy === "skip" && await host.sessions.status(session.sessionId) === "running") {
+      store.finishRun(runId, { status: "skipped", reason: "busy" });
+      host.log("info", `task ${taskId} skipped: busy (session ${session.sessionId} running)`);
+      return { status: "skipped", runId, sessionId: session.sessionId, reason: "busy" };
+    }
     await host.sessions.systemEvent({
       sessionId: session.sessionId,
       kind: "trigger",
       source: task.scheduleKind,
       name: task.name,
       run: runId,
-      instruction: task.prompt
+      instruction: task.prompt,
+      // 空闲时传了也无害（pi 只在流式中看它），所以不必先查状态 —— 少一次 TOCTOU。
+      ...task.busyPolicy === "skip" ? {} : { streamingBehavior: task.busyPolicy }
     });
     store.finishRun(runId, { status: "delivered", sessionId: session.sessionId });
     const runsCount = task.runsCount + 1;

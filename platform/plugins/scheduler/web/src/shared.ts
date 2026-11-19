@@ -19,6 +19,7 @@ export interface TaskDTO {
   at: number | null;
   sessionMode: 'new' | 'reuse';
   sessionId: string | null;
+  busyPolicy: 'followUp' | 'steer' | 'skip';
   enabled: boolean;
   nextAt: number | null;
   maxRuns: number | null;

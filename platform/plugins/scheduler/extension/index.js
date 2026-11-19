@@ -39,6 +39,11 @@ var src_default = {
             description: "new = \u6BCF\u6B21\u89E6\u53D1\u65B0\u5EFA\u4F1A\u8BDD\uFF08\u9ED8\u8BA4\uFF09\uFF1Breuse = \u56FA\u5B9A\u590D\u7528\u4E00\u4E2A\u4F1A\u8BDD\uFF08\u4E0D\u4F20 sessionId \u65F6\u9996\u6B21\u89E6\u53D1\u81EA\u52A8\u521B\u5EFA\uFF09"
           },
           sessionId: { type: "string", description: "reuse \u6A21\u5F0F\u4E0B\u7684\u76EE\u6807\u4F1A\u8BDD id\uFF1B\u53EA\u5EFA\u8BAE\u590D\u7528\u5F53\u524D\u4F1A\u8BDD\u65F6\u4F20" },
+          busyPolicy: {
+            type: "string",
+            enum: ["followUp", "steer", "skip"],
+            description: "\u5230\u70B9\u65F6 agent \u6B63\u5728\u8DD1\u600E\u4E48\u529E\uFF1AfollowUp \u6392\u961F\uFF08\u9ED8\u8BA4\uFF0C\u4E0D\u4E22\u8FD9\u4E00\u8F6E\uFF09/ steer \u63D2\u961F / skip \u8FD9\u4E00\u6B21\u4E0D\u6295\u3002\u9AD8\u9891\u4EFB\u52A1\uFF08\u95F4\u9694\u5C0F\u4E8E\u5355\u8F6E\u8017\u65F6\uFF09\u5EFA\u8BAE skip"
+          },
           // ── cancel ──
           taskId: { type: "string", description: "cancel \u65F6\u7684\u4EFB\u52A1 id" }
         },
@@ -78,7 +83,8 @@ ${JSON.stringify(res.items ?? [], null, 2)}`);
               timezone: params.timezone,
               at,
               sessionMode: params.sessionMode,
-              sessionId: params.sessionMode === "reuse" ? params.sessionId : void 0
+              sessionId: params.sessionMode === "reuse" ? params.sessionId : void 0,
+              busyPolicy: params.busyPolicy
             }
           ]);
           const when = task.nextAt ? new Date(task.nextAt).toLocaleString("zh-CN", { timeZone: String(params.timezone ?? "UTC") }) : "\u672A\u77E5";

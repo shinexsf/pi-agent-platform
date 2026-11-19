@@ -79,6 +79,13 @@ export default {
             description: 'new = 每次触发新建会话（默认）；reuse = 固定复用一个会话（不传 sessionId 时首次触发自动创建）',
           },
           sessionId: { type: 'string', description: 'reuse 模式下的目标会话 id；只建议复用当前会话时传' },
+          busyPolicy: {
+            type: 'string',
+            enum: ['followUp', 'steer', 'skip'],
+            description:
+              '到点时 agent 正在跑怎么办：followUp 排队（默认，不丢这一轮）/ steer 插队 / skip 这一次不投。' +
+              '高频任务（间隔小于单轮耗时）建议 skip',
+          },
           // ── cancel ──
           taskId: { type: 'string', description: 'cancel 时的任务 id' },
         },
@@ -123,6 +130,7 @@ export default {
               at,
               sessionMode: params.sessionMode,
               sessionId: params.sessionMode === 'reuse' ? params.sessionId : undefined,
+              busyPolicy: params.busyPolicy,
             },
           ])) as { id?: string; name?: string; nextAt?: number };
 

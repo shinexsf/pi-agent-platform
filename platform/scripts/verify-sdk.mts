@@ -117,7 +117,7 @@ console.log('B. 无 HTTP 进程内跑一轮会话');
 
 const {
   initCoreConfig, initDb, createAgentRepo, createSessionRepo, WorkerPool, initSessionRegistry, sessionRegistry,
-  coreConfig, createEventBus, buildSystemEnvelope,
+  coreConfig, createEventBus, buildSystemEnvelope, systemEventPromptOptions,
 } = await import(path.join(platformRoot, 'packages/core/src/index.js') as string);
 const { createSessionProjector } = await import(path.join(platformRoot, 'packages/event-projection/src/index.js') as string);
 
@@ -205,6 +205,21 @@ if (!envelope.includes('<instruction>检查磁盘</instruction>')) {
   process.exit(1);
 }
 console.log('  ✓ system-envelope：属性驱动 / `</data` 转义 / instruction 原样');
+
+// ── prompt 选项：`streamingBehavior` 是 pi 的硬契约（忙时不给就报错）──
+if (JSON.stringify(systemEventPromptOptions()) !== '{}') {
+  console.error('✗ 不传 streamingBehavior 时选项必须是 {}（既有调用方零影响）');
+  process.exit(1);
+}
+if (systemEventPromptOptions('followUp').streamingBehavior !== 'followUp') {
+  console.error('✗ streamingBehavior=followUp 没有透传');
+  process.exit(1);
+}
+if (systemEventPromptOptions('steer').streamingBehavior !== 'steer') {
+  console.error('✗ streamingBehavior=steer 没有透传');
+  process.exit(1);
+}
+console.log('  ✓ systemEventPromptOptions：不传 → {} / followUp / steer 原样透传');
 
 const agentRepo = createAgentRepo(db);
 const sessionRepo = createSessionRepo(db);

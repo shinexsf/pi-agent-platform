@@ -78,9 +78,9 @@ export function mount(el: HTMLElement, host: HostWithUi): () => void {
     .ntf { display: flex; flex-direction: column; gap: 12px; }
     .ntf-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .ntf-title { margin: 0; font-size: 16px; font-weight: 600; }
-    .ntf-badge { font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--danger-bg, #fee2e2); color: var(--danger, #b91c1c); }
+    .ntf-badge { font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--danger-soft); color: var(--danger, #b91c1c); }
     .ntf-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-    .ntf-check { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-dim, #6b7280); }
+    .ntf-check { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-secondary); }
     .ntf-select, .ntf-btn { font-size: 13px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border, #e5e7eb); background: var(--surface, #fff); color: inherit; }
     .ntf-btn { cursor: pointer; }
     .ntf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -90,10 +90,10 @@ export function mount(el: HTMLElement, host: HostWithUi): () => void {
     .ntf-item[data-severity="warning"] { border-left-color: var(--warning, #d97706); }
     .ntf-body { flex: 1; min-width: 0; }
     .ntf-item-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
-    .ntf-item-text { font-size: 13px; color: var(--text-dim, #6b7280); white-space: pre-wrap; word-break: break-word; }
-    .ntf-meta { display: flex; gap: 8px; font-size: 12px; color: var(--text-dim, #6b7280); margin-top: 6px; }
-    .ntf-sev { padding: 0 6px; border-radius: 4px; background: var(--surface-alt, #f3f4f6); }
-    .ntf-empty { color: var(--text-dim, #6b7280); font-size: 13px; }
+    .ntf-item-text { font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+    .ntf-meta { display: flex; gap: 8px; font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+    .ntf-sev { padding: 0 6px; border-radius: 4px; background: var(--surface-subtle); }
+    .ntf-empty { color: var(--text-secondary); font-size: 13px; }
     .ntf-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--border, #e5e7eb); padding-top: 8px; }
     .ntf-link { border: 0; background: transparent; color: var(--accent, #2563eb); font-size: 13px; cursor: pointer; padding: 2px 4px; }
     .ntf-link:hover { text-decoration: underline; }

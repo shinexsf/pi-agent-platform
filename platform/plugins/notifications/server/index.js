@@ -86,28 +86,56 @@ var src_default = {
         return { json: { ok: true, changed: before, unreadCount: unreadCount() } };
       }
     });
-    host.methods.handle("post", (params, ctx) => {
-      const p = params ?? {};
-      const title = (p.title ?? "").trim();
-      const body = (p.body ?? "").trim();
-      if (!title && !body) throw new Error("postNotification: title/body required");
+    function insert(input) {
       const id = `ntf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
       host.db.query(
         "INSERT INTO notifications (id, severity, title, body, source, source_id, action_url, read_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
         [
           id,
-          p.severity ?? "info",
-          title.slice(0, 200),
-          body.slice(0, 4e3),
-          "agent",
-          ctx.sessionId || null,
-          // 深链由平台拼，调用方（模型）给不了
-          ctx.sessionId ? `/chat/${ctx.sessionId}` : null,
+          input.severity ?? "info",
+          input.title.slice(0, 200),
+          (input.body ?? "").slice(0, 4e3),
+          input.source,
+          input.sourceId ?? null,
+          input.actionUrl ?? null,
           Date.now()
         ]
       );
+      return id;
+    }
+    host.methods.handle("post", (params, ctx) => {
+      const p = params ?? {};
+      const title = (p.title ?? "").trim();
+      const body = (p.body ?? "").trim();
+      if (!title && !body) throw new Error("postNotification: title/body required");
+      const id = insert({
+        title,
+        body,
+        severity: p.severity ?? "info",
+        source: "agent",
+        sourceId: ctx.sessionId || null,
+        // 深链由平台拼，调用方（模型）给不了
+        actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null
+      });
       return { id, unreadCount: unreadCount() };
     });
+    const FAILURE_TOPICS = [
+      { topic: "scheduler.run.failed", label: (p) => `\u5B9A\u65F6\u4EFB\u52A1\u300C${p.name}\u300D\u6295\u9012\u5931\u8D25` },
+      { topic: "webhook.delivery.failed", label: (p) => `Webhook\u300C${p.name}\u300D\u6295\u9012\u5931\u8D25` }
+    ];
+    for (const { topic, label } of FAILURE_TOPICS) {
+      const off = host.bus.subscribe(topic, (raw) => {
+        const p = raw ?? {};
+        insert({
+          title: label(p),
+          body: p.reason ?? "",
+          severity: "error",
+          source: p.source ?? topic.split(".")[0] ?? "plugin",
+          sourceId: p.taskId ?? p.hookId ?? null,
+          actionUrl: p.actionUrl ?? null
+        });
+      });
+    }
     host.log("info", "notifications plugin ready");
   }
 };

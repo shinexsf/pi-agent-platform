@@ -57,6 +57,20 @@ function toDTO(row: NotificationRow): NotificationDTO {
   };
 }
 
+/** 失败事件的统一形状（发布方约定见 `failure-notifications` 规格）。 */
+interface FailurePayload {
+  /** 发布方插件 id（= topic 的前缀）。 */
+  source?: string;
+  taskId?: string;
+  runId?: string;
+  hookId?: string;
+  deliveryId?: string;
+  name?: string;
+  agentId?: string;
+  reason?: string;
+  actionUrl?: string;
+}
+
 export default {
   init(host: PluginServerHost) {
     // R4：自己的表自己建（幂等；平台记台账，卸载时提示"留下的表"）
@@ -148,29 +162,75 @@ export default {
       },
     });
 
+    /** 落一行通知（反向方法 / 总线订阅共用；深链由平台或发布方给）。 */
+    function insert(input: {
+      title: string;
+      body?: string;
+      severity?: 'info' | 'warning' | 'error';
+      source: string;
+      sourceId?: string | null;
+      actionUrl?: string | null;
+    }): string {
+      const id = `ntf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      host.db.query(
+        'INSERT INTO notifications (id, severity, title, body, source, source_id, action_url, read_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)',
+        [
+          id,
+          input.severity ?? 'info',
+          input.title.slice(0, 200),
+          (input.body ?? '').slice(0, 4000),
+          input.source,
+          input.sourceId ?? null,
+          input.actionUrl ?? null,
+          Date.now(),
+        ],
+      );
+      return id;
+    }
+
     // R3：反向方法（worker 的 `postNotification` 工具调 `plugin.notifications.post`）
     host.methods.handle('post', (params, ctx) => {
       const p = (params ?? {}) as { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' };
       const title = (p.title ?? '').trim();
       const body = (p.body ?? '').trim();
       if (!title && !body) throw new Error('postNotification: title/body required');
-      const id = `ntf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      host.db.query(
-        'INSERT INTO notifications (id, severity, title, body, source, source_id, action_url, read_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)',
-        [
-          id,
-          p.severity ?? 'info',
-          title.slice(0, 200),
-          body.slice(0, 4000),
-          'agent',
-          ctx.sessionId || null,
-          // 深链由平台拼，调用方（模型）给不了
-          ctx.sessionId ? `/chat/${ctx.sessionId}` : null,
-          Date.now(),
-        ],
-      );
+      const id = insert({
+        title,
+        body,
+        severity: p.severity ?? 'info',
+        source: 'agent',
+        sourceId: ctx.sessionId || null,
+        // 深链由平台拼，调用方（模型）给不了
+        actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null,
+      });
       return { id, unreadCount: unreadCount() };
     });
+
+    // ── 总线订阅：别的插件的失败事件 → 收件箱 ──
+    //
+    // 发布方（scheduler / webhook）**不认识通知插件**，它们只 publish；
+    // 这里订不订阅是自由的 —— 没装通知插件时那些 publish 静默消失，
+    // 失败信息仍然在各自的台账里（`scheduled_task_runs` / `webhook_deliveries`）。
+    const FAILURE_TOPICS: Array<{ topic: string; label: (p: FailurePayload) => string }> = [
+      { topic: 'scheduler.run.failed', label: (p) => `定时任务「${p.name}」投递失败` },
+      { topic: 'webhook.delivery.failed', label: (p) => `Webhook「${p.name}」投递失败` },
+    ];
+
+    for (const { topic, label } of FAILURE_TOPICS) {
+      const off = host.bus.subscribe(topic, (raw) => {
+        const p = (raw ?? {}) as FailurePayload;
+        insert({
+          title: label(p),
+          body: p.reason ?? '',
+          severity: 'error',
+          source: p.source ?? topic.split('.')[0] ?? 'plugin',
+          sourceId: p.taskId ?? p.hookId ?? null,
+          actionUrl: p.actionUrl ?? null,
+        });
+      });
+      // disposer 进插件账本（卸载归零由装载器保证），这里只是显式声明意图。
+      void off;
+    }
 
     host.log('info', 'notifications plugin ready');
   },

@@ -399,6 +399,8 @@ export interface PluginSessionsApi {
     run?: string;
     instruction?: string;
     data?: unknown;
+    /** agent 正忙时的处理：`followUp` 排队 / `steer` 插队 / 不传 = pi 报错。 */
+    streamingBehavior?: 'steer' | 'followUp';
   }): Promise<void>;
 }
 

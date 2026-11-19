@@ -15,7 +15,7 @@
 import type { PluginRouteHandler, PluginServerHost } from '@pi-agent-platform/plugin-types';
 import { isValidTimeZone, MIN_CRON_INTERVAL_MINUTES, nextCronTime, parseCronExpr } from './cron.js';
 import { createStore, DDL, OVERLAP_WINDOW_MS, type SchedulerStore } from './store.js';
-import type { RunTrigger, ScheduleKind, SessionMode, TaskDTO } from './types.js';
+import type { BusyPolicy, RunTrigger, ScheduleKind, SessionMode, TaskDTO } from './types.js';
 
 /** 一次性任务允许的"刚好过去"宽限（秒级抖动不该被拒）。 */
 const ONCE_GRACE_MS = 30_000;
@@ -34,6 +34,7 @@ interface CreateTaskInput {
   at?: number;
   sessionMode?: SessionMode;
   sessionId?: string;
+  busyPolicy?: BusyPolicy;
   maxRuns?: number | null;
 }
 
@@ -236,6 +237,7 @@ async function createTask(
 
   const scheduleKind: ScheduleKind = input.scheduleKind ?? 'cron';
   const sessionMode: SessionMode = input.sessionMode ?? 'new';
+  const busyPolicy = normalizeBusyPolicy(input.busyPolicy);
   const sessionId = await normalizeSessionBinding(host, agentId, sessionMode, input.sessionId);
 
   const nextAt = computeNextAt(
@@ -253,6 +255,7 @@ async function createTask(
     at: scheduleKind === 'once' ? Number(input.at) : null,
     sessionMode,
     sessionId,
+    busyPolicy,
     enabled: true,
     nextAt,
     // 一次性任务跑一次就停（旧版同款：创建时把 max_runs 钉成 1）。
@@ -287,6 +290,8 @@ async function updateTask(
     patch.session_id = await normalizeSessionBinding(host, task.agentId, nextMode, input.sessionId, task.sessionId);
   }
 
+  if (input.busyPolicy !== undefined) patch.busy_policy = normalizeBusyPolicy(input.busyPolicy);
+
   if (input.maxRuns !== undefined && task.scheduleKind !== 'once') patch.max_runs = input.maxRuns;
 
   if (input.enabled !== undefined && input.enabled !== task.enabled) {
@@ -320,6 +325,13 @@ async function updateTask(
 
   store.update(taskId, patch);
   return store.get(taskId)!;
+}
+
+/** 忙时策略：缺省 `followUp`（排队，不丢这一轮）。非法值直接报错，不静默降级。 */
+function normalizeBusyPolicy(value: unknown): BusyPolicy {
+  if (value === undefined || value === null || value === '') return 'followUp';
+  if (value === 'followUp' || value === 'steer' || value === 'skip') return value;
+  throw new Error(`busyPolicy 只能是 followUp / steer / skip，收到：${String(value)}`);
 }
 
 async function normalizeSessionBinding(
@@ -389,7 +401,15 @@ async function dispatch(
       ...(task.sessionMode === 'reuse' && !task.sessionId ? { title: `[${task.name}]` } : {}),
     });
 
-    // ② 投递信封（文本由内核构造）。返回即"送到"，不等 agent 跑完。
+    // ② 忙时策略：`skip` 在这里就退出（会话正跑着 → 这一次不投）；
+    //    `followUp` / `steer` 交给 pi 自己排队/插队（内核对策略零知识，只搬运）。
+    if (task.busyPolicy === 'skip' && (await host.sessions.status(session.sessionId)) === 'running') {
+      store.finishRun(runId, { status: 'skipped', reason: 'busy' });
+      host.log('info', `task ${taskId} skipped: busy (session ${session.sessionId} running)`);
+      return { status: 'skipped', runId, sessionId: session.sessionId, reason: 'busy' };
+    }
+
+    // ③ 投递信封（文本由内核构造）。返回即"送到"，不等 agent 跑完。
     await host.sessions.systemEvent({
       sessionId: session.sessionId,
       kind: 'trigger',
@@ -397,6 +417,8 @@ async function dispatch(
       name: task.name,
       run: runId,
       instruction: task.prompt,
+      // 空闲时传了也无害（pi 只在流式中看它），所以不必先查状态 —— 少一次 TOCTOU。
+      ...(task.busyPolicy === 'skip' ? {} : { streamingBehavior: task.busyPolicy }),
     });
 
     store.finishRun(runId, { status: 'delivered', sessionId: session.sessionId });

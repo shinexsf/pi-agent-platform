@@ -242,6 +242,28 @@ function checkBundledPlugins() {
         });
       }
     }
+    // `skills/` 是数据目录（不是 facet）：漏了不会 degraded，只会让工具"在但说明不在"，
+    // 所以只能在打包自检这一层抓。
+    const skillsDir = path.join(dir, 'skills');
+    if (existsSync(skillsDir)) {
+      for (const name of readdirSync(skillsDir)) {
+        const skillFile = path.join(skillsDir, name, 'SKILL.md');
+        if (!existsSync(skillFile)) {
+          fail('B2.plugin', {
+            file: `server/plugins/${id}/skills/${name}`,
+            detail: '缺 SKILL.md（插件 skill 的目录约定是 skills/<name>/SKILL.md）',
+          });
+          continue;
+        }
+        const head = readFileSync(skillFile, 'utf8').slice(0, 400);
+        if (!/^---\r?\n[\s\S]*?name:\s*\S/.test(head) || !/description:\s*\S/.test(head)) {
+          fail('B2.plugin', {
+            file: `server/plugins/${id}/skills/${name}/SKILL.md`,
+            detail: 'frontmatter 缺 name / description（pi 不会把它当 skill）',
+          });
+        }
+      }
+    }
   }
   return count;
 }

@@ -10,7 +10,7 @@
  */
 
 import type { HostApi, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
-import { buildSystemEnvelope, childLogger, createEventBus, sessionRegistry } from '@pi-agent-platform/core';
+import { buildSystemEnvelope, childLogger, createEventBus, sessionRegistry, systemEventPromptOptions } from '@pi-agent-platform/core';
 import type Database from 'better-sqlite3';
 
 const logger = childLogger('host-api');
@@ -124,7 +124,11 @@ export function createHostApi(deps: HostApiDeps): HostApi {
           ...(input.instruction !== undefined ? { instruction: input.instruction } : {}),
           ...(input.data !== undefined ? { data: input.data } : {}),
         });
-        await deps.workerPool.call(input.sessionId, 'prompt', [envelope, {}]);
+        // `streamingBehavior` 原样转给 pi：agent 正忙时由调用方决定排队/插队/报错。
+        await deps.workerPool.call(input.sessionId, 'prompt', [
+          envelope,
+          systemEventPromptOptions(input.streamingBehavior),
+        ]);
       },
     },
 

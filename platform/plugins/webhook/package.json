@@ -1,0 +1,8 @@
+{
+  "name": "webhook",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Webhook：外部系统 POST 事件 → agent 会话（Bearer 鉴权 + 幂等 + 投递台账）",
+  "piServer": { "apiVersion": "1" }
+}
