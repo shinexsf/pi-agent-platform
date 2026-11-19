@@ -205,6 +205,8 @@ interface SessionContextDTO {
 |---|---|---|
 | `/api/p/notifications/` | GET | `?unread&severity&limit` → `{ items, unreadCount }`（通知插件端点，原 `/api/notifications` 已删） |
 | `/api/p/notifications/:id/read` · `/read-all` · `/unread-count` | POST/GET | 标已读 / 未读数（顶栏角标）。**没有创建端点**，也没有 `since` 游标 |
+| `/api/p/webhook/hooks/:id` | POST | **外部入口**（Bearer secret + 可选 `Idempotency-Key`）。202 delivered / 200 duplicate / 409 skipped\|failed / 401 / 404。见 [webhooks](pi-agent-server_webhooks.md) |
+| `/api/p/webhook/hooks` · `/hooks/:id` · `/hooks/:id/deliveries` · `/hooks/:id/run` · `/hooks/:id/rotate-secret` · `/meta` · `/sessions` | GET/POST/PUT/PATCH/DELETE | webhook 管理端点（`PUT` 与 `PATCH` 同处理器，原因同 scheduler） |
 | `/api/p/scheduler/tasks` · `/tasks/:id` · `/tasks/:id/run` · `/tasks/:id/runs` · `/preview` · `/meta` · `/sessions` | GET/POST/PUT/PATCH/DELETE | 定时任务插件端点（见 [scheduled-tasks](pi-agent-server_scheduled-tasks.md)）。`PUT` 与 `PATCH` 同处理器：插件 web 面的 `api` 只有 get/post/put/del |
 
 ## Worker（调试）

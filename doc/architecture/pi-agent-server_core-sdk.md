@@ -141,10 +141,12 @@ ensure({ agentId, sessionId?, title? }): Promise<{ sessionId, created }>
 ### `sessions.systemEvent` —— 信封的唯一投递口
 
 ```ts
-systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data? }): Promise<void>
+systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data?, streamingBehavior? }): Promise<void>
 ```
 
 内核把结构化字段拼成 `<system-event>` 信封（`services/system-envelope.ts` 的 `buildSystemEnvelope()` 是**唯一**构造点），再 `prompt` 进去。**返回即"送到"**：不等 agent 跑完，也不判断它干得怎么样。
+
+`streamingBehavior`（`'steer' | 'followUp'`）原样转给 pi 的 `prompt`：pi 在 agent 正在流式输出时**必须**拿到它，否则直接报错。内核**不解释**这个字段的业务含义 —— 排队 / 插队 / 干脆别投，是调用方插件按自己的业务决定的（定时任务与 webhook 各有 `busy_policy`，取值还多一个 `skip` 由插件自己判 `sessions.status`）。不传 = 现状，既有调用方零影响。构造在 `systemEventPromptOptions()`，`verify:sdk` 断言三个分支。
 
 为什么信封归内核：它是**平台契约**（模型看到的文本必须统一，`SYSTEM_EVENT_PROMPT_NOTICE` 也在 shared-types 里统一注入）。让每个插件各拼一份，等于让"外部文本能否注入标签名/属性"取决于各插件的自觉。
 

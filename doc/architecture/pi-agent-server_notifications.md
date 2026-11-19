@@ -114,9 +114,23 @@ POST /api/p/notifications/read-all                            → { ok, changed,
 `nav: false` 就是为了避免"导航里一个「通知」+ 顶栏一个铃铛"两个同名入口。角标走
 `badge: { endpoint: '/unread-count' }`：宿主每 60s 拉一次，面板关闭时也会刷一次。
 
-## 7. 历史（为什么长这样）
+## 7. 总线订阅（失败事件 → 收件箱）
+
+除了 agent 主动调的 `postNotification`，收件箱还接两类**插件失败事件**（`host.bus`）：
+
+| topic | 发布方 | 落库来源 |
+|---|---|---|
+| `scheduler.run.failed` | scheduler | `source='scheduler'`，`actionUrl=/scheduler/<taskId>` |
+| `webhook.delivery.failed` | webhook | `source='webhook'`，`actionUrl=/webhooks/<hookId>` |
+
+- 订阅在 `init()` 里注册，disposer 进插件账本（卸载/reload 自动撤销）
+- **发布方不认识通知插件**：没装通知插件时 `publish` 静默成功，失败信息仍留在各自台账（`scheduled_task_runs` / `webhook_deliveries`）
+- 这是 `host.bus` 存在的全部理由 —— 插件之间不能互相 `import`
+
+## 8. 历史（为什么长这样）
 
 1. **v1 在入口里**：`services/notifier.ts` + `repos/notification.repo.ts` + `routes/notifications.ts` + app.ts 里一段 `registerService`，共 214 行；web 侧还有 353 行 Vue。
 2. **v1 曾有投递层**：`notifications.json` 渠道文件、`deliveries` 列、重试/合并/静音，前端一次没渲染过 —— 整层删除（见通知退化为系统通知表那次变更）。
 3. **v2 下沉为 bundled 插件**：表、端点、反向方法、UI 全搬进 `platform/plugins/notifications/`；入口侧零残留。迁移后 `grep useNotifications|createNotifier|/api/notifications` 全仓为 0。
 4. **v3 工具也归插件**（`scheduler-plugin`）：`postNotification` 从 worker 硬编码壳迁到 `extension` facet；`serverBuiltinTools` 退役，工具是否出现只看插件是否对该会话生效。
+5. **v4 接上总线订阅**（`webhook-plugin`）：此前只有发布侧（scheduler 在 `publish('scheduler.run.failed')`），收件箱从未订阅 —— 链路是断的。现在两个 topic 都接上，并顺手修了三处 `theme-var-unknown`（`--danger-bg` / `--text-dim` / `--surface-alt` 都不存在，暗色下是白底）。

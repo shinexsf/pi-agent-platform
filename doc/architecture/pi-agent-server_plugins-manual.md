@@ -282,6 +282,7 @@ REST：
 | 注册项进了 `rejected` | 重名 / 未定义槽位 / `*` 位置不合法 / web 入口文件不存在 —— 原因字段写清了 |
 | 改了代码没生效 | 插件**代码**变化不会被文件监听捕获，跑 `pi-server plugin reload`；worker/pi 扩展还要等下次 spawn |
 | 页面白屏、导航有项 | web 产物 404：检查 `web/<component>.js` 是否真的存在（`plugin check` 会红） |
+| 详情页白屏，报 `undefined … 'params'` | **平台不给 `mount()` 传路由参数**：签名只有 `(el, host)`。页面注册成 `/x/:id` 后，id 要自己从 `location.pathname` 取最后一段（`new` 之类特殊值自己约定）。typecheck 拦不住（模块导出边界是 `any`） |
 | 顶层注册导致整个插件被拒 | `import()` 后平台断言"注册增量为 0"，注册只能发生在 `init()` 里 |
 | 暗色下输入框/按钮还是白底 | 用了不存在的 CSS 变量名（fallback 生效）。改用「3.1 主题」表里的变量，`plugin check` 会告警 |
 | 工具/skill 在该 agent 上不出现 | `agent.config.plugins` 里没有这个插件（逐 agent 开关）；`server`/`web` facet 不受它影响，所以页面还在、工具没了 |

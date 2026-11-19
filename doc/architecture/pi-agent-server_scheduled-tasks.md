@@ -87,6 +87,7 @@ scheduled_tasks(
   cron_expr, timezone,        -- cron 时必填
   at,                         -- once 时必填（ms）
   session_mode CHECK IN ('new','reuse'), session_id,
+  busy_policy CHECK IN ('followUp','steer','skip') DEFAULT 'followUp',
   enabled, next_at, max_runs, runs_count, last_fired_at,
   created_at, updated_at
 )
@@ -112,6 +113,20 @@ scheduled_task_runs(
 `reuse` 下 `session_id` 三态：有值 = 已绑定；空 = 未绑定（首次触发创建并回填）；`new` 模式下提交 `sessionId` **直接 400**（不静默丢弃）。
 
 投递前会**再校验一次**绑定目标 —— `sessions.ensure` 对陌生 id 会抛错，所以"会话被删 / 换了 agent"会变成一条 `failed` run，而不是静默写到别处。
+
+## 4.5 忙时策略（`busy_policy`）
+
+到点时目标会话正忙（agent 还在流式输出）怎么办 —— 任务行上的字段，默认 `followUp`：
+
+| 取值 | 行为 |
+|---|---|
+| `followUp`（默认） | 排队，当前轮结束后处理（不丢这一轮，代价是可能积压） |
+| `steer` | 插队到当前轮之后的下一次模型调用（会打断 agent 手头的事，只用于告警类任务） |
+| `skip` | `sessions.status() === 'running'` → 记 `skipped/busy`，不投递（下一次照常） |
+
+选型口径：**任务间隔 < 单轮大概耗时** 就该用 `skip`（每 5 分钟看一眼 CI，而一轮要跑 20 分钟）。`skip` 不是失败，与既有 overlap 守卫同一语义：这一次不投。
+
+`steer` / `followUp` 由 pi 处理，平台只把值透传成 `systemEvent` 的 `streamingBehavior`；`skip` 是插件自己判状态（有 TOCTOU，语义上"忙就算了"可接受）。会话语义与 [Webhook](pi-agent-server_webhooks.md) 的同名字段完全一致。
 
 ## 5. 不变量
 

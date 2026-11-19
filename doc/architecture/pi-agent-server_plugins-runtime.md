@@ -78,7 +78,7 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 | `agents` | `list` / `get` / `update` | 插件维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放；每次 query 进审计日志 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 会话生命周期钩子 |
-| `bus` | `publish` / `subscribe` | **插件之间的唯一协作通道**（进程内、无回执、同步派发、慢订阅者丢弃）。例如 scheduler 发 `scheduler.run.failed`，通知插件订阅后落一行 |
+| `bus` | `publish` / `subscribe` | **插件之间的唯一协作通道**（进程内、无回执、同步派发、慢订阅者丢弃）。当前唯一生产链路：scheduler / webhook 发 `*.failed`，通知插件订阅后落一行（见下「发布方与订阅方互不相识」） |
 | `events`（出口，非能力面） | `emit` | 发给**浏览器**（worker → server → SSE）；server 侧调用会 warn，明确告警而不是静默吞掉 |
 
 内核侧（`packages/core/src/host-api.ts`）声明五个面：`db` / `sessions` / `agents` / `lifecycle` / `bus`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
@@ -86,6 +86,24 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 **`bus` 与 `events` 不要混**：`bus` 是"发给别的插件"，`events` 是"发给浏览器"。命名冲突过一次（原先想直接复用 `events`），最后按方向拆开。
 
 会话面与 agent 面一律返回 `Promise`（宿主机将来可能跨进程），`db` 面保持同步（DB 本来就是本进程的资源）。**除 `db.migrate`（内核 `initDb` 只建内核对象的表）之外，插件自己的表都要自己建。**
+
+## 发布方与订阅方互不相识
+
+`host.bus` 存在的全部理由。当前唯一的生产链路：
+
+```ts
+// scheduler / webhook 侧 —— 发布方不认识通知插件
+host.bus.publish('webhook.delivery.failed', {
+  hookId, deliveryId, name, agentId, reason, actionUrl: `/webhooks/${hookId}`,
+});
+
+// notifications 侧 —— 订阅方不认识 webhook
+host.bus.subscribe('webhook.delivery.failed', (p) =>
+  insert({ title: `Webhook「${p.name}」投递失败`, severity: 'error', source: 'webhook', actionUrl: p.actionUrl }),
+);
+```
+
+订阅方缺失时 `publish` **静默成功** —— 失败信息仍在发布方自己的台账里（`scheduled_task_runs` / `webhook_deliveries`）。这是设计而不是缺陷：**插件不能假设别的插件存在**。topic 命名 `<pluginId>.<noun>.<event>`。
 
 ## 工具与 skill：谁提供，谁决定
 
@@ -95,9 +113,9 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 
 | 提供方 | 例子 | 注入条件 |
 |---|---|---|
-| 插件的 `extension/` facet（R6） | `postNotification`（notifications）、`schedule_task`（scheduler） | 插件在 `agent.config.plugins` 里 |
+| 插件的 `extension/` facet（R6） | `postNotification`（notifications）、`schedule_task`（scheduler）、`manage_webhook`（webhook） | 插件在 `agent.config.plugins` 里 |
 | 插件的 `worker/` facet | 正向方法（agent 工具 → `bridge.call`） | 同上 |
-| 插件的 `skills/<name>/SKILL.md` | `scheduler` 的用法说明 | 同上 |
+| 插件的 `skills/<name>/SKILL.md` | `scheduler` / `webhook` 的用法说明 | 同上 |
 | **inline 插件**（编译进平台） | `callServer`、`sendFileToUser` | 恒注入；插件自己可以收窄（`callServer` 在没有授权能力时返回空） |
 
 `inline` 与目录插件的判定分界是**实现方在不在平台代码里**：在（`callServer` 的能力控制面、`sendFileToUser` 的网关侧）→ inline；不在（通知收件箱、定时任务）→ 随那个插件走。
