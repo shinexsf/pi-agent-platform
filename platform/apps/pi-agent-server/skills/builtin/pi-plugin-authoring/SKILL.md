@@ -94,6 +94,7 @@ export default {
 | 面 | 用途 | 要点 |
 |---|---|---|
 | `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` / `ensure` / `systemEvent` | `call` 是裸 worker 方法调用；`sessionId` 永远由你给（平台不提供"选会话"）。`ensure` = 无人值守跑一轮的唯一入口（新建或复用，陌生 id **抛错**而不是照建）；`systemEvent` 把 `<system-event>` 信封交给会话，**信封文本由内核构造**，你只给结构化字段 |
+| `sessions`/`agents` 的**返回值是 Promise** | `get` / `list` / `status` / `hasRow` / `agents.list` / `agents.get` / `agents.update` / `call` 全部 async | 插件拿到的是**适配层**（为了将来跨进程），同步写不会报错，只会静默拿到 `undefined` —— 这是最常见的"插件返回空"原因 |
 | `agents` | `list` / `get` / `update` | 维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放，走审计日志；只建自己的表 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 返回退订函数 |

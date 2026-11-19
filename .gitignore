@@ -44,7 +44,8 @@ node_modules/
 /nul
 /pi-agent-idea/.kotlin/
 
-# 本地插件（插件机制验证用，不入库；只忽略仓库根的 plugins/）
+# 本机自用插件开发目录（非 bundled，只对本机 pi-server 生效；不进代码库、不进 tgz）
+# 布局与命令见 plugins/README.md；脚手架复制自 _template/
 /plugins/
 
 # dev 专用数据目录（插件 registry / 隔离配置），与已安装实例分开
