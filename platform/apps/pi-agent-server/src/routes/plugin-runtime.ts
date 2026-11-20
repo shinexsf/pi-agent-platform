@@ -18,7 +18,7 @@ import {
   listGlobalPageItems,
   listPluginIds,
 } from '@pi-agent-platform/core';
-import { killSwitchActive, getPluginSnapshot } from '@pi-agent-platform/core';
+import { killSwitchActive, getPluginSnapshot, pluginWebRevisions } from '@pi-agent-platform/core';
 
 const logger = childLogger('plugin-runtime');
 
@@ -50,6 +50,7 @@ export function createExtensionsRouter(deps: PluginRuntimeRouterDeps): Hono {
       headerActions: headerActions.map(({ pluginId, def }) => ({ pluginId, ...def })),
       menus: menus.map(({ pluginId, def }) => ({ pluginId, ...def })),
       disabledByFlag: false,
+      revs: pluginWebRevisions(deps.pluginsDir),
     };
     return c.json(body);
   });

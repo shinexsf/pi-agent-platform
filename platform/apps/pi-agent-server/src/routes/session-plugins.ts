@@ -18,7 +18,7 @@ import { config } from '../config.js';
 import { sessionRegistry } from '@pi-agent-platform/core';
 import { extractExtensionNames, readSettings } from '@pi-agent-platform/core';
 import { getPluginSnapshot, resolveSessionPlugins, toPluginEntryDTO } from '@pi-agent-platform/core';
-import { listSessionExtensions } from '@pi-agent-platform/core';
+import { listSessionExtensions, pluginWebRevisions } from '@pi-agent-platform/core';
 import type { AgentRepo } from '@pi-agent-platform/core';
 import type { SessionRepo } from '@pi-agent-platform/core';
 
@@ -114,6 +114,7 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
         disabled: {},
         disabledByFlag: false,
         placeholder: true,
+        revs: pluginWebRevisions(config.pluginsDir),
       });
     }
 
@@ -143,6 +144,7 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
         disabled,
         disabledByFlag: false,
         placeholder: false,
+        revs: pluginWebRevisions(config.pluginsDir),
       });
     } catch (err) {
       logger.warn({ sessionId, err: String(err) }, 'session extension resolution failed');

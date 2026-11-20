@@ -10,7 +10,7 @@
  * 由 worker 侧按 spawn 参数装载）。
  */
 
-import { existsSync, readFileSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import {
   describePluginState,
@@ -434,6 +434,68 @@ export function getPluginSnapshot(pluginsDir: string): PluginSnapshot {
 /** 强制失效（注册表变化时调用）。 */
 export function invalidatePluginSnapshot(): void {
   cached = null;
+}
+
+// ---------- web facet 资源版本（前端动态 import 的 cache-busting） ----------
+
+/**
+ * 插件 `web/` 目录内容的版本串（最大 mtime + 总字节数）。
+ *
+ * 存在理由：浏览器按 **URL** 缓存 ES module，HTTP 的 `no-cache` 只能让网络层重取 ——
+ * 同一个 URL 再 `import()` 拿到的仍是内存里那个模块。所以改完插件代码必须让 URL 变。
+ * 用文件 mtime 而不是自增计数器：改文件/重装/reload 都会变，不依赖谁记得去递增。
+ */
+function webDirRevision(dir: string): string {
+  let maxMtime = 0;
+  let bytes = 0;
+  const walk = (d: string, depth: number): void => {
+    if (depth > 3) return;
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const abs = path.join(d, name);
+      let st;
+      try {
+        st = statSync(abs);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) walk(abs, depth + 1);
+      else {
+        if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
+        bytes += st.size;
+      }
+    }
+  };
+  walk(path.join(dir, 'web'), 0);
+  if (!maxMtime) return '0';
+  return `${Math.round(maxMtime).toString(36)}-${bytes.toString(36)}`;
+}
+
+let revisionCache: { at: number; value: Record<string, string> } | null = null;
+const REVISION_TTL_MS = 1_000;
+
+/**
+ * 全部可装载插件的 web 资源版本（插件 id → 版本串）。
+ *
+ * 前端把它拼成 `/plugins/<id>/web/<entry>.js?v=<rev>`，于是 `plugin reload` / 重装 /
+ * 直接改文件之后，下一次挂载拿到的必定是新模块（不需要手动清浏览器缓存）。
+ */
+export function pluginWebRevisions(pluginsDir: string): Record<string, string> {
+  const now = Date.now();
+  if (revisionCache && now - revisionCache.at < REVISION_TTL_MS) return revisionCache.value;
+  const value: Record<string, string> = {};
+  for (const plugin of getPluginSnapshot(pluginsDir).plugins) {
+    const dir = plugin.entry.dir;
+    if (!dir) continue;
+    value[plugin.entry.id] = webDirRevision(dir);
+  }
+  revisionCache = { at: now, value };
+  return value;
 }
 
 /**

@@ -65,6 +65,19 @@ const EMPTY_SESSION: SessionExtensionsResponse = {
 let cachedGlobal: GlobalExtensionsResponse | null = null
 const cachedSession = new Map<string, SessionExtensionsResponse>()
 
+/**
+ * 插件 web 资源版本（插件 id → 版本串）。
+ *
+ * 浏览器按 **URL** 缓存 ES module：`?v=` 不变时，`plugin reload` 后 `import()` 仍然
+ * 拿到内存里那个旧模块（HTTP 的 `no-cache` 只管网络层）。版本变了 URL 就变了，
+ * 于是不需要手动清缓存/改代码后强制刷新。
+ */
+let pluginRevs: Record<string, string> = {}
+
+function absorbRevs(body: { revs?: Record<string, string> }): void {
+  if (body.revs) pluginRevs = { ...pluginRevs, ...body.revs }
+}
+
 export async function loadGlobalExtensions(force = false): Promise<GlobalExtensionsResponse> {
   if (cachedGlobal && !force) return cachedGlobal
   try {
@@ -72,6 +85,7 @@ export async function loadGlobalExtensions(force = false): Promise<GlobalExtensi
     if (!res.ok) throw new Error(`GET /api/extensions ${res.status}`)
     const body = (await res.json()) as GlobalExtensionsResponse
     cachedGlobal = { ...EMPTY_GLOBAL, ...body }
+    absorbRevs(body)
   } catch (err) {
     console.warn('[plugin] global extensions failed', err)
     cachedGlobal = EMPTY_GLOBAL
@@ -94,6 +108,7 @@ export async function loadSessionExtensions(
     const body = (await res.json()) as SessionExtensionsResponse
     const value = { ...EMPTY_SESSION, ...body }
     cachedSession.set(sessionId, value)
+    absorbRevs(body)
     return value
   } catch (err) {
     console.warn('[plugin] session extensions failed', err)
@@ -105,6 +120,7 @@ export async function loadSessionExtensions(
 export function invalidatePluginCaches(): void {
   cachedGlobal = null
   cachedSession.clear()
+  pluginRevs = {}
 }
 
 /** 全局菜单（导航用）。 */
@@ -121,7 +137,9 @@ export async function listPluginPages(): Promise<Array<WithPlugin<PageRegistrati
 
 /** 拼出插件 web 入口的 URL（server 静态托管）。 */
 export function webEntryUrl(pluginId: string, entry: string): string {
-  return `/plugins/${encodeURIComponent(pluginId)}/web/${encodeURIComponent(entry)}.js`
+  const base = `/plugins/${encodeURIComponent(pluginId)}/web/${encodeURIComponent(entry)}.js`
+  const rev = pluginRevs[pluginId]
+  return rev ? `${base}?v=${encodeURIComponent(rev)}` : base
 }
 
 // ---------- 宿主上下文 ----------

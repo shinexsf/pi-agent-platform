@@ -422,6 +422,11 @@ export interface GlobalExtensionsResponse {
    */
   menus: WithPlugin<MenuRegistration>[];
   disabledByFlag: boolean;
+  /**
+   * 插件 web 资源版本（插件 id → 版本串）。前端拼成 `.../<entry>.js?v=<rev>`，
+   * 让改完代码后能拿到新模块（浏览器按 URL 缓存 ES module，HTTP 缓存头不够用）。
+   */
+  revs?: Record<string, string>;
 }
 
 /** `GET /api/plugins/:id/extensions`：单插件全集（含被拒项）。 */
@@ -439,6 +444,8 @@ export interface SessionExtensionsResponse {
   disabledByFlag: boolean;
   /** 占位会话（库里还没有行）：此时不做闸门过滤。 */
   placeholder?: boolean;
+  /** 同 `GlobalExtensionsResponse.revs`。 */
+  revs?: Record<string, string>;
 }
 
 // ---------- Error ----------
