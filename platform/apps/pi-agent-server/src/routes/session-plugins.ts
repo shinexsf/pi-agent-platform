@@ -68,6 +68,9 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
         ? live.plugins
         : resolveSessionPlugins({
             snapshot,
+            // 启用列表与会话 worker 同源：会话行是 spawn 时的快照，没有该字段才回落到 agent。
+            // 漏传的后果是 **全部插件被判"该 agent 未启用"**（见 `/extensions` 同款注释）。
+            enabledPlugins: row.config?.plugins ?? agent?.config?.plugins ?? [],
             agentExtensions: row.config?.extensions ?? agent?.config?.extensions ?? [],
             installedPiExtensions: installed,
           });
@@ -116,11 +119,20 @@ export function createSessionPluginsRouter(deps: SessionPluginsRouterDeps): Hono
 
     try {
       const settings = await readSettings(config.agentDir);
-      const resolved = resolveSessionPlugins({
-        snapshot,
-        agentExtensions: agent?.config?.extensions ?? [],
-        installedPiExtensions: extractExtensionNames(settings),
-      });
+      // 优先用存活会话对象里那份 spawn 时下发的快照（与 worker 实际装载同源）；
+      // 回落时才按会话行（没有该字段再用 agent）重新推导。
+      const live = sessionRegistry().get(sessionId);
+      const resolved = live
+        ? live.plugins
+        : resolveSessionPlugins({
+            snapshot,
+            // ⚠️ 别漏这个参数：`resolveSessionPlugins` 的 `enabledPlugins` 缺省是空集合，
+            // 漏传会让**所有**插件都被判成"该 agent 未启用此插件"，
+            // 于是会话作用域的 rail 槽位 / 工具卡片永远渲染不出来（2026-11-20 实测踩到）。
+            enabledPlugins: session.config?.plugins ?? agent?.config?.plugins ?? [],
+            agentExtensions: session.config?.extensions ?? agent?.config?.extensions ?? [],
+            installedPiExtensions: extractExtensionNames(settings),
+          });
       const enabled = new Set(resolved.filter((r) => r.enabled).map((r) => r.id));
       const disabled: Record<string, string> = {};
       for (const r of resolved) if (!r.enabled) disabled[r.id] = r.reason ?? '未启用';
