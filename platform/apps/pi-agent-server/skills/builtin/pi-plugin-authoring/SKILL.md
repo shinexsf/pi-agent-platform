@@ -5,15 +5,16 @@ description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约：目�
 
 # 给平台写插件
 
-> 契约的权威描述在仓库文档：`doc/architecture/pi-agent-server_plugins-manual.md`（作者契约）
-> 与 `pi-agent-server_plugins-runtime.md`（运行期机制）。本 skill 是**动手版**，示例代码可直接跑。
+> 本 skill 是**动手版**：契约以本文 + 随包示例 + `plugin check` 为准，示例代码可直接跑。
 
-## 0. 先读能跑的示例（比本文档更可信）
+## 0. 先读能跑的示例
 
-| 示例 | 覆盖 | 位置（相对仓库根） |
+| 示例 | 覆盖 | 位置 |
 |---|---|---|
-| `hello-plugin` | 最小集：server facet + 一个页面 | `platform/apps/pi-agent-server/skills/builtin/pi-plugin-authoring/examples/hello-plugin/` |
-| `kitchen-sink` | 四个装载点全景（server/worker/extension/web），工具 / 命令 / 钩子 / 槽位 / 工具卡 / 反向方法 | `.../examples/kitchen-sink/` |
+| `hello-plugin` | 最小集：server facet + 一个页面 | 本 skill 同目录的 `examples/hello-plugin/` |
+| `kitchen-sink` | 四个装载点全景（server/worker/extension/web），工具 / 命令 / 钩子 / 槽位 / 工具卡 / 反向方法 | `examples/kitchen-sink/` |
+
+把示例复制到一个**你自己的目录**再改（插件 id 就是 `package.json` 的 `name`，别在示例目录里直接改）。
 
 装进运行中的实例试：
 
@@ -23,16 +24,12 @@ pi-server plugin add <示例目录>       # 登记 + 装载
 pi-server plugin reload               # 已装过、改了代码时用这个（不重启 server）
 ```
 
-> ⚠️ **两套注册表，`plugin add` 默认写"打包实例"那份**：
-> `~/.pi/server/plugins/registry.json`（`pi-server start` 起的实例）vs
-> `platform/.dev-data/plugins/registry.json`（`pnpm dev:server` 的 dev 实例）。
-> 给 **dev** 装插件必须先 `export PI_SERVER_PLUGINS_DIR=$PWD/platform/.dev-data/plugins`，
-> 否则症状是"dev 没装上、本机打包实例却多出一个插件"。
->
-> 目录归属：**要发布的** → `platform/plugins/`（bundled，进 tgz）；
-> **只在本机打包实例生效** → 仓库根 `plugins/`；**只在 dev 生效** → `platform/.dev-data/plugins/`；
-> **验证"坏插件会被拒"** → `test-workspace/demo-plugins/`。
-> 注册表存的是**绝对路径**，`mv` 插件目录之后必须重新 `plugin add`。
+关于注册表与生效（踩过才知道的四条）：
+
+- 插件装在数据根下的 `plugins/`，登记台账是同目录的 `registry.json`；bundled 插件**不登记**（按目录发现）
+- 台账存的是**绝对路径** → `mv` 插件目录之后必须重新 `plugin add`，否则插件会变成 `degraded` / 消失
+- `plugin remove` 只注销登记与目录，**不清插件建的表**（CLI 会列出留下的表，自己决定 DROP）
+- 装完对 agent 生效还需要一步：把插件 id 加进该 agent 的 `config.plugins`（空数组 = 一个都不注入）
 
 ## 1. 先选形态：你要加的是哪种东西
 
@@ -100,6 +97,17 @@ export default {
 };
 ```
 
+### 槽位与浮层（写面板前先知道这三件事）
+
+- **会话作用域**：rail 槽位与工具卡片只在**插件对该会话生效**时才渲染（即插件 id 在该会话/agent 的
+  `config.plugins` 里）。页面、顶栏动作是全局的，不受这一层影响 —— 所以"面板有时有有时没有"
+  先查启用列表，别怀疑 CSS。
+- **rail 按钮的图标**：宿主渲染的是 `title` 的**首字符**（`icon` 字段当前不生效），
+  所以 `title` 取短词（"展示" → 按钮显示「展」）。想要真图标得平台侧改进，插件做不到。
+- **抽屉是滚动容器**：`chat.rail.right` 的面板默认挂在宿主抽屉里，而抽屉是 `overflow-y:auto` ——
+  在里面放 `position:absolute` 的浮层会被裁掉/跟着滚。要浮窗就自己 `position:fixed` 并
+  `appendChild(document.body)`，卸载时移除。
+
 ## 4. 宿主能力面（`host`）
 
 | 面 | 用途 | 要点 |
@@ -129,8 +137,8 @@ description: 一句话说清什么时候该读这份（模型按它决定要不�
 ```
 
 `plugin check` 会校验文件存在与 frontmatter 字段（`skill-no-frontmatter` / `skill-frontmatter-field` /
-`skill-missing-file` / `skills-empty`）；打包自检额外要求 `skills/<name>/SKILL.md` 真的进了 tgz ——
-**漏了不会让插件 degraded，只会静默少一个技能**，所以这一步只能靠自检。
+`skill-missing-file` / `skills-empty`）。注意 `skills/` 是**数据目录**，构建/打包时容易被忽略：
+**漏了不会让插件 degraded，只会静默少一个技能**，分发前自己确认 `skills/<name>/SKILL.md` 在产物里。
 
 写 skill 的两条经验（来自 marketplace 级的踩坑）：
 
@@ -140,9 +148,9 @@ description: 一句话说清什么时候该读这份（模型按它决定要不�
 
 ## 6. web 产物的两条硬规矩
 
-1. **主题变量只能用平台清单里的**：`packages/core/src/plugins/constants.ts` 的 `PLATFORM_THEME_VARS`
-   （颜色、间距、圆角…）。写错变量名**不会报错**，只是渲染成透明/继承 —— `plugin check` 会以
-   `theme-var-unknown` 告警，所以写完跑一次 check，别靠肉眼。
+1. **主题变量只能用平台清单里的**（`PLATFORM_THEME_VARS`：背景 / 文字 / 描边 / 主色 / 语义色 /
+   圆角 / 字体 / 代码高亮）。写错变量名**不会报错**，只是渲染成透明或继承父级 —— 所以写完跑一次
+   `plugin check`，它会以 `theme-var-unknown` 把清单外变量点出来，别靠肉眼。
 2. **拿不到路由参数**：`mountPluginPage(el, host)` 只给 `(el, host)`，没有 router / params。
    需要 id（例如编辑页 `/my-plugin/:id`）就从 `window.location.pathname` 自己解析。
 
@@ -183,5 +191,6 @@ pi-server plugin reload              # 不重启 server 重装（server facet �
 | 用 `piServer.facets` 声明装载点 | 该字段已删除（第二套真相） | 放目录，让目录存在性说话 |
 | 直接把平台包写进 `dependencies` | private 包，`npm i` 必失败 | 类型用 `plugin check` 写入的 `types/plugin-types/` |
 | 插件读 registry 想自己判断启停 | registry 只是台账，bundled 插件根本不在里面 | 用 `/api/plugins` 或 `host` |
+| 把浮层（tooltip / 预览窗）画在槽位容器里 | 容器的祖先可能是 `overflow:auto` → 被裁成一条白边 | `position:fixed` + 挂到 `document.body`，卸载时移除 |
 | 在 web 里自己写颜色（`#333`、`rgba(...)`） | 跟平台主题脱节，暗色下直接不可读 | 用 `PLATFORM_THEME_VARS` 里的变量 |
 | 用 emoji 当按钮图标 | 容器/headless 环境缺字体 → 豆腐块 | inline SVG 或文字 |
