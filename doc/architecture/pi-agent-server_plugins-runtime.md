@@ -174,6 +174,17 @@ pi-server plugin reload     # POST /api/extensions/reload
 
 生效边界写在表里（见「四个装载点」）：server facet 立即、worker/pi 扩展等下次 spawn、浏览器刷新。
 
+**浏览器侧是同一件事的另一半**：ES module 按 **URL** 缓存，HTTP 的 `cache-control: no-cache`
+只管网络层 —— 同一个 URL 再 `import()` 拿到的仍是内存里那个旧模块。所以两个扩展点查询接口
+（`GET /api/extensions`、`GET /api/sessions/:id/extensions`）都附 `revs`：
+
+```jsonc
+{ "revs": { "html-showcase": "mwp78590-dim" } }   // = web/ 目录内容的最大 mtime + 总字节数（1s 缓存）
+```
+
+前端把它拼成 `/plugins/<id>/web/<entry>.js?v=<rev>`。于是 `plugin reload`、重装、甚至直接改
+`web/` 下的文件之后，下一次挂载拿到的必定是新模块 —— 不需要手动清缓存，**插件作者零操作**。
+
 **不做目录监听**：插件**代码**变化不会被 registry 的文件监听捕获，用上面的命令手动触发。
 
 ## 两个目录：bundled 与用户插件
