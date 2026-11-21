@@ -9,8 +9,9 @@
  *  - `core` methods registered by `index.ts` at module load (the 14 forward methods)
  *  - plugin methods registered at session-creation time via `registerPluginMethod`
  *
- * Plugin methods are ALWAYS `plugin.<pluginId>.<name>` (enforced by the registry's
- * prefix check). Ownership is the `source` field — never parsed out of the string.
+ * Plugin methods are ALWAYS `<pluginId>.<name>`, kernel methods `__core__.<name>`
+ * (both enforced by the registry's prefix check). Ownership is the `source` field —
+ * never parsed out of the string.
  */
 
 import { IpcMethodRegistry, type IpcHandler } from '@pi-agent-platform/ipc-protocol';
@@ -20,7 +21,7 @@ export const forwardRegistry = new IpcMethodRegistry();
 
 /** Full method name for a plugin-contributed forward method. */
 export function pluginMethodName(pluginId: string, name: string): string {
-  return `plugin.${pluginId}.${name}`;
+  return `${pluginId}.${name}`;
 }
 
 /**

@@ -18,40 +18,19 @@ import { useConfigIssues } from '../../composables/useConfigIssues';
 import { useMcpCatalog } from '../../composables/useMcpCatalog';
 import type { TemplateTargetConfig } from '../../composables/useTemplates';
 
-interface CapabilityInfo {
-  method: string;
-  module: string;
-  access: 'read' | 'write';
-  scoped: boolean;
-  summary: string;
-}
-
 const props = defineProps<{ modelValue: TemplateTargetConfig }>();
 
 const issues = useConfigIssues();
-const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
 
 const availableSkills = computed(() => issues.available.value.skills ?? []);
 const availablePrompts = computed(() => issues.available.value.prompts ?? []);
 const availableExtensions = computed(() => issues.available.value.extensions ?? []);
 /** 平台插件候选（有会话内能力的那些）。 */
 const availablePlugins = computed(() => issues.available.value.plugins ?? []);
-const availableServerBuiltinSkills = computed(() => issues.available.value.serverBuiltinSkills ?? []);
 const has = computed(() => issues.buildIssueIndex(props.modelValue, null));
 
-/** 模板里引用了但环境里不存在的项（含 capabilities）。 */
+/** 模板里引用了但环境里不存在的项。 */
 const staleIssues = computed(() => issues.issuesFor(props.modelValue, null));
-
-const capabilityGroups = computed(() =>
-  capabilityModules.value.filter((g) => g.capabilities.length > 0),
-);
-const allCapabilityMethods = computed(() =>
-  capabilityModules.value.flatMap((g) => g.capabilities.map((c) => c.method)),
-);
-
-// capabilities 是 callServer 的方法级授权；工具本身由 inline 插件在有授权时注入，
-// 所以这一区永远可见（空 = 不会注入 callServer）。
-const callServerEnabled = computed(() => true);
 
 /** 平台 MCP 目录（server 定义只在 `~/.pi/server/mcp.json`）。 */
 const {
@@ -71,16 +50,9 @@ function setMcpServers(next: string[]): void {
   props.modelValue.mcp = { enabled: props.modelValue.mcp.enabled, servers: [...next] };
 }
 
-function toggleCapability(method: string, checked: boolean): void {
-  const current = props.modelValue.capabilities ?? [];
-  props.modelValue.capabilities = checked
-    ? [...current, method]
-    : current.filter((m) => m !== method);
-}
-
 /** 勾选/取消一个「字符串数组」字段里的值 */
 function toggleValue(
-  field: 'builtinTools' | 'serverBuiltinSkills' | 'extensions' | 'plugins' | 'skills' | 'prompts',
+  field: 'builtinTools' | 'extensions' | 'plugins' | 'skills' | 'prompts',
   value: string,
   checked: boolean,
 ): void {
@@ -93,12 +65,10 @@ function toggleValue(
 function pruneField(
   field:
     | 'builtinTools'
-    | 'serverBuiltinSkills'
     | 'extensions'
     | 'plugins'
     | 'skills'
-    | 'prompts'
-    | 'capabilities',
+    | 'prompts',
 ): void {
   const current = props.modelValue[field] ?? [];
   props.modelValue[field] = issues.pruneInvalid(field, current);
@@ -107,17 +77,6 @@ function pruneField(
 onMounted(async () => {
   void loadMcpCatalog();
   await issues.loadAvailability();
-  try {
-    const res = await fetch('/api/capabilities');
-    if (res.ok) {
-      const data = (await res.json()) as {
-        modules: Array<{ module: string; capabilities: CapabilityInfo[] }>;
-      };
-      capabilityModules.value = data.modules ?? [];
-    }
-  } catch {
-    capabilityModules.value = [];
-  }
 });
 </script>
 
@@ -197,32 +156,6 @@ onMounted(async () => {
           <span>{{ id }}（无效）</span>
         </label>
         <span v-if="availablePlugins.length === 0" class="resource-empty">没有可启用的平台插件</span>
-      </div>
-    </div>
-
-    <!-- Server builtin skills（平台随包，只读） -->
-    <div class="resource-group">
-      <div class="resource-group-header">
-        <span class="resource-group-title">Server Builtin Skills</span>
-        <InfoTip text="随平台包发布的只读 skill（与 Skills 里的用户 skill 是两套名字空间）。" :width="300" />
-        <span class="resource-group-count">{{ props.modelValue.serverBuiltinSkills.length }} / {{ availableServerBuiltinSkills.length }}</span>
-        <span class="resource-edit-actions">
-          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinSkills = [...availableServerBuiltinSkills]">全选</button>
-          <button type="button" class="btn-link" @click="props.modelValue.serverBuiltinSkills = []">清空</button>
-        </span>
-      </div>
-      <div class="tag-list editable">
-        <label v-for="s in availableServerBuiltinSkills" :key="s" class="tag-check"
-          :class="{ checked: props.modelValue.serverBuiltinSkills.includes(s) }">
-          <input type="checkbox" :checked="props.modelValue.serverBuiltinSkills.includes(s)"
-            @change="toggleValue('serverBuiltinSkills', s, ($event.target as HTMLInputElement).checked)" />
-          <span>{{ s }}</span>
-        </label>
-        <label v-for="s in props.modelValue.serverBuiltinSkills.filter(x => !availableServerBuiltinSkills.includes(x))" :key="'g-' + s"
-          class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
-          <input type="checkbox" :checked="true" @change="toggleValue('serverBuiltinSkills', s, false)" />
-          <span>{{ s }}（无效）</span>
-        </label>
       </div>
     </div>
 
@@ -307,35 +240,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Capabilities：仅当勾了 callServer 才出现（与 agent 编辑页一致） -->
-    <div v-if="callServerEnabled" class="resource-group">
-      <div class="resource-group-header">
-        <span class="resource-group-title">Capabilities</span>
-        <InfoTip
-          text="callServer 可调用的 server 方法授权。未勾选任何方法 = 不授权；scoped 写方法仅能操作本 agent / 本 session 自己的行（固定安全网，不可配置）。"
-          :width="340"
-        />
-        <span class="resource-group-count">
-          {{ props.modelValue.capabilities === null ? '未配置' : `${props.modelValue.capabilities.length} / ${allCapabilityMethods.length} 项` }}
-        </span>
-        <span class="resource-edit-actions">
-          <button type="button" class="btn-link" @click="props.modelValue.capabilities = [...allCapabilityMethods]">全选</button>
-          <button type="button" class="btn-link" @click="props.modelValue.capabilities = []">清空（全禁）</button>
-          <button type="button" class="btn-link" @click="pruneField('capabilities')">清理无效项</button>
-        </span>
-      </div>
-      <div v-for="group in capabilityGroups" :key="group.module">
-        <div class="resource-module">{{ group.module }}</div>
-        <div class="tag-list editable">
-          <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
-            :class="{ checked: (props.modelValue.capabilities ?? []).includes(cap.method) }">
-            <input type="checkbox" :checked="(props.modelValue.capabilities ?? []).includes(cap.method)"
-              @change="toggleCapability(cap.method, ($event.target as HTMLInputElement).checked)" />
-            <span :title="cap.summary">{{ cap.method }}<em>{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
-          </label>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 

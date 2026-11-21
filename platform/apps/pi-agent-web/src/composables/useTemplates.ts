@@ -1,8 +1,8 @@
 /**
  * 配置模板（agent-templates change）：三处编辑面共用的读取 / 快照 / 填充逻辑。
  *
- * 模板 = 七个 AgentConfig 字段的快照（systemPrompt 不在其中）。填充是**显式覆盖**
- * 六个资源字段 + capabilities，不动名称 / 模型 / 工作区 / systemPrompt；
+ * 模板 = 六个 AgentConfig 字段的快照（systemPrompt 不在其中）。填充是**显式覆盖**
+ * 这六个资源字段，不动名称 / 模型 / 工作区 / systemPrompt；
  * 填充只改表单本地状态，不保存退出即恢复。
  */
 import type { AgentConfig, AgentTemplateDTO } from '@pi-agent-platform/shared-types';
@@ -14,9 +14,6 @@ export interface TemplateTargetConfig {
   appendSystemPrompt?: string;
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
-  /** 平台随包 skill（change: server-builtin-skills）——与 skills 分开的名字空间。 */
-  serverBuiltinSkills: string[];
-  capabilities: string[] | null;
   extensions: string[];
   /** 平台插件启用列表（会话内能力来源）。 */
   plugins: string[];
@@ -31,8 +28,6 @@ export function templateSnapshot(config: TemplateTargetConfig): AgentConfig {
     // 快照与「填充后的结果」保持一致：mcp 开着就一定带上 codemode/tool_search。
     builtinTools: mcpOn ? withMcpDependencies([...config.builtinTools]) : [...config.builtinTools],
     mcp: { enabled: mcpOn, servers: [...config.mcp.servers] },
-    serverBuiltinSkills: [...config.serverBuiltinSkills],
-    capabilities: config.capabilities === null ? null : [...config.capabilities],
     extensions: [...config.extensions],
     plugins: [...config.plugins],
     skills: [...config.skills],
@@ -40,7 +35,7 @@ export function templateSnapshot(config: TemplateTargetConfig): AgentConfig {
   };
 }
 
-/** 模板 → 表单（整体覆盖六个资源字段 + capabilities；systemPrompt 清空）。 */
+/** 模板 → 表单（整体覆盖六个资源字段；systemPrompt 清空）。 */
 export function applyTemplate<T extends TemplateTargetConfig>(config: T, template: AgentTemplateDTO): T {
   const c = template.config;
   return {
@@ -53,8 +48,6 @@ export function applyTemplate<T extends TemplateTargetConfig>(config: T, templat
       ? withMcpDependencies([...(c.builtinTools ?? [])])
       : [...(c.builtinTools ?? [])],
     mcp: { enabled: c.mcp?.enabled === true, servers: [...(c.mcp?.servers ?? [])] },
-    serverBuiltinSkills: [...(c.serverBuiltinSkills ?? [])],
-    capabilities: c.capabilities === null || c.capabilities === undefined ? null : [...c.capabilities],
     extensions: [...(c.extensions ?? [])],
     plugins: [...(c.plugins ?? [])],
     skills: [...(c.skills ?? [])],
@@ -77,7 +70,6 @@ export function templateFacets(config: AgentConfig): TemplateFacet[] {
   const extensions = config.extensions?.length ?? 0;
   const skills = config.skills?.length ?? 0;
   const prompts = config.prompts?.length ?? 0;
-  const caps = config.capabilities?.length ?? 0;
   return [
     {
       key: 'tools',
@@ -109,26 +101,17 @@ export function templateFacets(config: AgentConfig): TemplateFacet[] {
       value: `Prompt ${prompts}`,
       tone: prompts ? 'on' : 'off',
     },
-    {
-      key: 'capabilities',
-      label: '能力',
-      value: config.capabilities === null || config.capabilities === undefined ? '能力 未授权' : `能力 ${caps}`,
-      tone: caps ? 'on' : 'off',
-    },
   ];
 }
 
 export function summarizeTemplate(config: AgentConfig): string {
-  const caps = config.capabilities === null || config.capabilities === undefined
-    ? '未授权'
-    : `${config.capabilities.length} 项`;
   return [
     `工具 ${config.builtinTools?.length ?? 0}`,
     `MCP ${config.mcp?.enabled ? '开' : '关'}`,
     `插件 ${config.extensions?.length ?? 0}`,
     `Skill ${config.skills?.length ?? 0}`,
     `Prompt ${config.prompts?.length ?? 0}`,
-    `能力 ${caps}`,
+    `平台插件 ${config.plugins?.length ?? 0}`,
   ].join(' · ');
 }
 

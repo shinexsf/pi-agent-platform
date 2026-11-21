@@ -23,8 +23,6 @@ export interface CoreConfig {
    * 为空表示这个进程没有 bundled 插件（例如内嵌场景只跑内核）。
    */
   bundledPluginsDir: string | undefined;
-  /** 平台随包 skill 的根目录（为空表示不注入）。 */
-  serverBuiltinSkillsDir: string | undefined;
   /** 平台 MCP 目录（`mcp.json` 路径），注入给 worker。 */
   mcpConfigPath: string;
   /** worker 启动就绪等待上限（毫秒）。 */

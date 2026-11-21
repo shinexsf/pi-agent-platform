@@ -17,6 +17,7 @@
 
 import { spawn, exec } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import {
@@ -30,6 +31,15 @@ import {
   workerEntry,
 } from './paths.js';
 import { getUserConfig } from './env.js';
+
+/** 本 CLI 的 npm 包版本（打包态 server 的"运行版本"就是它）。 */
+const CLI_VERSION: string = (() => {
+  try {
+    return (createRequire(import.meta.url)('../package.json') as { version?: string }).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** Default port for the packaged daemon. Dev mode is unrelated (dev.mjs pins 3000). */
 export const DEFAULT_PORT = 9006;
@@ -117,6 +127,9 @@ export function startServer(): StartResult {
     PORT: String(resolveServerPort()),
     NODE_ENV: 'production',
     PI_SERVER_CLI: '1',
+    // 运行版本（`admin_server_status` / 状态页用）：打包态由 npm 包版本决定，
+    // 不靠读 package.json 的相对层级（dist 布局与 dev 布局不同层）。
+    PI_SERVER_VERSION: CLI_VERSION,
     PI_LOG_FILE: logFile(),
     WORKER_DIST_DIR: path.dirname(workerEntry()),
     PI_DATA_DIR: path.join(dataRoot(), 'data'),

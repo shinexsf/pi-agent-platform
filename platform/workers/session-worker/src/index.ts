@@ -32,6 +32,7 @@ import { logger } from './logger.js';
 // `processImage` in @earendil-works/pi-coding-agent/dist/utils/image-process.ts.
 import { resizeImage, formatDimensionNote } from '@earendil-works/pi-coding-agent';
 import { createSession, PiSessionAdapter } from './session.js';
+import { coreMethodName } from '@pi-agent-platform/ipc-protocol';
 import type { CallMasterFn } from './tools.js';
 import { forwardRegistry } from './methods.js';
 
@@ -44,14 +45,15 @@ const reversePending = new Map<number, { resolve: (v: unknown) => void; reject: 
 let reverseCallId = 0;
 
 /** Reverse-call timeout. Larger than the forward side's needs because a reverse call
- *  can upload a file through an IM channel (`plugin.im.sendFile`); 30s used to time out. */
+ *  can upload a file through an IM channel (`im.sendFile`); 30s used to time out. */
 const REVERSE_CALL_TIMEOUT_MS = 60_000;
 
-const callMaster: CallMasterFn = (method: string, args: unknown[]): Promise<unknown> => {
+const callMaster: CallMasterFn = (method: string, args: unknown[], source = 'inline'): Promise<unknown> => {
   const id = ++reverseCallId;
   return new Promise((resolve, reject) => {
     reversePending.set(id, { resolve, reject });
-    const req: ReverseCallRequest = { kind: 'reverse-call', id, method, args };
+    // `source` 由调用方的桥注入（插件 id / `inline`），插件代码拿不到这个字段。
+    const req: ReverseCallRequest = { kind: 'reverse-call', id, method, args, source };
     process.send!(req);
     setTimeout(() => {
       if (reversePending.has(id)) {
@@ -312,7 +314,7 @@ const FORWARD_METHOD_DESCRIPTIONS: Partial<Record<WorkerMethod, string>> = {
 /** Worker-side forward registry is shared with the plugin layer (see methods.ts). */
 for (const name of Object.keys(forwardHandlers) as WorkerMethod[]) {
   forwardRegistry.register(
-    name,
+    coreMethodName(name),
     {
       direction: 'forward',
       source: 'core',

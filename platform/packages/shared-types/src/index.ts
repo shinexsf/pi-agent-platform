@@ -46,13 +46,6 @@ export interface AgentConfig {
   // missing/null = off with no selection. Server definitions never live in the DB — only names.
   mcp?: { enabled?: boolean; servers?: string[] };
 
-  // Server-shipped skill whitelist (change: server-builtin-skills). Names refer to the
-  // skill dirs bundled with the server package (`skills/builtin/<name>/SKILL.md`), NOT to
-  // the user's `~/.pi/agent/skills` — that is what `skills` above governs. Semantics:
-  // missing/null = empty (all off). The two lists are separate name spaces on purpose:
-  // platform assets are read-only and versioned with the package, user assets are editable.
-  serverBuiltinSkills?: string[];
-
   // 平台插件启用列表（**只对"有会话内能力"的插件有意义**：extension / worker facet 或
   // `skills/` 目录）。Semantics: missing/null = empty（一个都不启用）。
   //
@@ -62,12 +55,9 @@ export interface AgentConfig {
   // `skills/` 不注入。server / web facet 是进程级全局资源，不受这里影响。
   plugins?: string[];
 
-  // callServer method-level allowlist. null/undefined = use the global default
-  // policy (control-plane default: reads on, writes off); [] = deny all business
-  // methods (list/detail stay available); array = explicit allowlist.
-  // Enforced by the master-side control plane at dispatch time. `callServer` 这个工具
-  // 本身由 inline 插件在"有授权能力"时注入（没有单独的工具开关了）。
-  capabilities?: string[] | null;
+  // 已删除：`capabilities`（callServer 的方法级 allowlist）。它是**假的分层**——
+  // L1 与 `plugins` 重复、L2（write=own）可被任何插件的 `host.agents.update` /
+  // `host.db.query` 绕过。现在管理动作由 `admin` 插件提供，开关只剩 `config.plugins`。
 }
 
 /**
@@ -84,29 +74,38 @@ export interface ResolvedAgentConfig extends AgentConfig {
   builtinTools: string[];
   mcp: { enabled: boolean; servers: string[] };
   plugins: string[];
-  serverBuiltinSkills: string[];
-  capabilities: string[] | null;
 }
 
 /**
  * Normalize a stored config into {@link ResolvedAgentConfig}: missing/null resource
- * fields become empty; `mcp` becomes `{ enabled: false, servers: [] }`; `capabilities`
- * keeps its tri-state meaning (null = global default policy).
+ * fields become empty; `mcp` becomes `{ enabled: false, servers: [] }`.
  *
  * `mcp.enabled === false` MUST keep `servers`: turning the switch off suspends the selection
  * instead of discarding it.
  *
- * `capabilities` 不再与"工具开关"联动：工具由插件注入，授权只由这一项表达
- * （null = 全局默认策略，[] = 全禁）。
+ * 退役字段（存量 row 里可能还在）在这里**丢掉**：`serverBuiltinTools` /
+ * `serverBuiltinSkills` / `capabilities`。留着只会让旧值在 DTO / UI 里继续漂，
+ * 让人以为它还有效。
  *
  * This is the single place where "missing means empty" is applied (change:
  * explicit-agent-config). There is deliberately no global-default merge layer.
  */
 export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgentConfig {
   const c = config ?? {};
-  // 存量 row 里的 `serverBuiltinTools`（逐 agent 的工具白名单）已退役：这里丢掉它，
-  // 免得旧值继续在 DTO / UI 里漂着，让人以为它还有效。
-  const { serverBuiltinTools: _retired, ...rest } = c as AgentConfig & { serverBuiltinTools?: string[] };
+  // 三个退役字段一起丢：
+  // - `serverBuiltinTools`（逐 agent 工具白名单）→ 工具归属改为"插件是否生效"
+  // - `serverBuiltinSkills`（平台内置 skill 轴）→ 随包 skill 改由 bundled 插件自带
+  // - `capabilities`（方法级授权）→ 假闸门，删掉后只剩 `plugins` 一个开关
+  const {
+    serverBuiltinTools: _retiredTools,
+    serverBuiltinSkills: _retiredSkills,
+    capabilities: _retiredCaps,
+    ...rest
+  } = c as AgentConfig & {
+    serverBuiltinTools?: string[];
+    serverBuiltinSkills?: string[];
+    capabilities?: string[] | null;
+  };
   return {
     ...rest,
     extensions: c.extensions ?? [],
@@ -115,10 +114,6 @@ export function normalizeAgentConfig(config?: AgentConfig | null): ResolvedAgent
     builtinTools: c.builtinTools ?? [],
     mcp: { enabled: c.mcp?.enabled === true, servers: c.mcp?.servers ?? [] },
     plugins: c.plugins ?? [],
-    serverBuiltinSkills: c.serverBuiltinSkills ?? [],
-    // `capabilities` 是 callServer 的**方法级授权**，与"工具注入"解耦了：
-    // 工具由 inline 插件在"有授权能力"时注入，这里只管授权本身。
-    capabilities: c.capabilities ?? null,
   };
 }
 
@@ -149,8 +144,6 @@ export interface ConfigIssue {
     | 'prompts'
     | 'builtinTools'
     | 'plugins'
-    | 'serverBuiltinSkills'
-    | 'capabilities'
     | 'model'
     | 'mcp.servers';
   /** The offending value. */
@@ -164,14 +157,11 @@ export interface ConfigAvailability {
   extensions?: string[];
   skills?: string[];
   prompts?: string[];
-  capabilities?: string[];
   /** `provider/model` strings. */
   models?: string[];
   tools?: string[];
   /** 环境里可用的平台插件 id（有会话内能力的那些）。 */
   plugins?: string[];
-  /** Names bundled with the server package (`GET /api/config/server-builtin-skills`). */
-  serverBuiltinSkills?: string[];
   /** Server names from the platform catalog (`GET /api/config/mcp-servers`). */
   mcpServers?: string[];
 }
@@ -210,13 +200,6 @@ export function findConfigIssues(
     '工具不存在',
   );
   check('plugins', config?.plugins, available.plugins, '平台插件不存在或未安装');
-  check(
-    'serverBuiltinSkills',
-    config?.serverBuiltinSkills,
-    available.serverBuiltinSkills,
-    '平台 Skill 不存在或未随此版本发布',
-  );
-  check('capabilities', config?.capabilities ?? undefined, available.capabilities, '授权方法不存在');
   // Dormant selections are not defects: a server name that vanished from the catalog only
   // matters while MCP is switched on (change: platform-mcp-catalog).
   if (config?.mcp?.enabled === true) {
@@ -484,8 +467,9 @@ export interface RuntimePluginSpec {
  * few things master injects. Three deliberately separate segments (design D6):
  *
  *  ① row-aligned: `sessionId` / `model` / `thinkingLevel` / `config` / `existingSessionPath`
- *  ② injected by master (never persisted): `workspacePath` / `capabilityIndex`
- *  ③ derived: `plugins` (MUST come from segment ①'s `config.extensions`)
+ *  ② injected by master (never persisted): `workspacePath`
+ *  ③ derived: `plugins` (MUST come from segment ①'s `config.extensions`；每个插件的
+ *     动作工具描述符也挂在这一段上，随 `plugins[i].actions` 下发)
  *
  * `workspacePath` is the ONLY field that comes from the `agents` row — the workspace
  * follows the agent, everything else is the session snapshot.
@@ -501,57 +485,8 @@ export interface RuntimeConfig {
   existingSessionPath?: string;
   /** ③ Resolved plugin set. Derived from `config.extensions` — never passed independently. */
   plugins?: RuntimePluginSpec[];
-  /** ② Control-plane capability index (compact), pushed by master at createSession so
-   *  the callServer tool description can embed it (zero-round-trip first use).
-   *  Plain data — no handlers; the single source of truth stays on master. */
-  capabilityIndex?: CapabilityIndexEntry[];
 }
 
-// ---------- Server capability control plane (callServer) ----------
-
-/** Functional module a capability belongs to (list/detail grouping dimension). */
-export type CapabilityModule = 'server' | 'agent' | 'session' | 'channel' | 'config' | 'trigger';
-
-/** Authorization class (orthogonal to module): read vs write, gated by the
- *  global read/write × all/own policy in the control plane. */
-export type CapabilityAccess = 'read' | 'write';
-
-/** Compact per-capability entry pushed to workers (RuntimeConfig.capabilityIndex). */
-export interface CapabilityIndexEntry {
-  method: string;       // e.g. 'session.update'
-  module: CapabilityModule;
-  access: CapabilityAccess;
-  scoped: boolean;       // own-mode restricts to caller's own agent/session rows
-  summary: string;      // one-liner shown in the tool description
-}
-
-/** Who is invoking a capability — resolved by the control plane from the
- *  reverse-call's sessionId (trust boundary: master, never the worker). */
-export interface InvokeContext {
-  sessionId: string;
-  /** Agent the calling session belongs to (from sessions row); undefined for
-   *  placeholder sessions (no row yet) — own-mode checks must handle this. */
-  agentId?: string;
-}
-
-/** Full capability definition — registered master-side only (handler never
- *  crosses IPC). `list`/`detail` are built-in and exempt from allowlist checks. */
-export interface CapabilityDef<Params = unknown, Result = unknown> {
-  method: string;                       // unique, dotted: '<module>.<action>'
-  module: CapabilityModule;
-  access: CapabilityAccess;
-  /** true = own-mode restricts to the caller's own agent/session rows. */
-  scoped: boolean;
-  summary: string;                      // one-liner for list/description
-  paramsSchema: Record<string, unknown>; // JSON Schema (for detail)
-  returns: string;                      // incl. effect-timing notes (for detail)
-  handler: (ctx: InvokeContext, params: Params) => Promise<Result> | Result;
-}
-
-/** Storage/return type for heterogeneous capability collections (handler param
- *  is contravariant — specific Params defs won't assign to CapabilityDef<unknown>). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyCapabilityDef = CapabilityDef<any, any>;
 // ---------- MCP catalog (change: platform-mcp-catalog) ----------
 
 /**

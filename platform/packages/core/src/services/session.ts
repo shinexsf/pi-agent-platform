@@ -23,13 +23,13 @@ import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
 import type { WorkerPool } from '../worker-pool.js';
 import type { AgentRepo } from '../repos/agent.repo.js';
 import type { SessionRepo } from '../repos/session.repo.js';
-import { buildCapabilityIndex, resolveEffectiveCapabilities } from '../capabilities/registry.js';
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
 import type { SessionRunState } from '@pi-agent-platform/shared-types';
 import type { WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
 import { coreConfig } from '../config.js';
 import { extractExtensionNames, readSettings } from './extension-utils.js';
+import { pluginActions } from './plugin-actions.js';
 import { getPluginSnapshot, resolveSessionPlugins } from './plugins.js';
 
 /**
@@ -81,15 +81,21 @@ async function resolvePluginsFromConfig(agentConfig: AgentConfig | undefined): P
     }
     // 下发完整集合（含 disabled + reason）：worker 侧过滤并记日志，
     // 使单会话日志能解释"为什么没装载"。
-    return resolved.map((p) => ({
-      id: p.id,
-      dir: p.dir,
-      enabled: p.enabled,
-      ...(p.reason ? { reason: p.reason } : {}),
-      ...(p.extensionPath ? { extensionPath: p.extensionPath } : {}),
-      ...(p.workerPath ? { workerPath: p.workerPath } : {}),
-      ...((p.skillPaths?.length ?? 0) > 0 ? { skillPaths: p.skillPaths } : {}),
-    }));
+    return resolved.map((p) => {
+      // 动作工具描述符：只有**启用**的插件才下发（禁用插件的工具不存在）。
+      // 描述符是纯数据，worker 据此自动 registerTool；执行一律经反向方法回到 handler。
+      const actions = p.enabled ? pluginActions().descriptorsOf(p.id) : [];
+      return {
+        id: p.id,
+        dir: p.dir,
+        enabled: p.enabled,
+        ...(p.reason ? { reason: p.reason } : {}),
+        ...(p.extensionPath ? { extensionPath: p.extensionPath } : {}),
+        ...(p.workerPath ? { workerPath: p.workerPath } : {}),
+        ...((p.skillPaths?.length ?? 0) > 0 ? { skillPaths: p.skillPaths } : {}),
+        ...(actions.length > 0 ? { actions } : {}),
+      };
+    });
   } catch (err) {
     logger.error({ err: String(err) }, 'plugin resolution failed — session continues without plugins');
     return [];
@@ -288,15 +294,6 @@ async function buildRuntimeConfig(
     ...(existingSessionPath ? { existingSessionPath } : {}),
     // ② Platform-injected segment (never persisted)
     workspacePath: agent.workspacePath,
-    // Capability index (callserver-control-plane D2): compact method+summary list
-    // pushed at spawn so the callServer tool description can embed it (registry
-    // on master is the single source of truth; next spawn picks up changes).
-    // Filtered by the EFFECTIVE authorization (session row key > agent fallback —
-    // the exact resolver dispatch uses), so the description lists only methods
-    // this session may actually call.
-    capabilityIndex: buildCapabilityIndex(
-      resolveEffectiveCapabilities(sessionOverrides?.config, agent.config),
-    ),
     // ③ Derived segment
     plugins,
   };

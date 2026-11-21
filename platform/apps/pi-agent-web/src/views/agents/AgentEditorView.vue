@@ -44,17 +44,6 @@ interface NamedItem {
   name: string;
 }
 
-// callServer 方法级授权（AgentConfig.capabilities）：
-// null=未配置（opt-in：无任何方法权限）、[]=显式全禁、数组=授权白名单
-// 方法列表从 GET /api/capabilities 拉（注册表唯一事实源，前端不硬编码）
-interface CapabilityInfo {
-  method: string;
-  module: string;
-  access: 'read' | 'write';
-  scoped: boolean;
-  summary: string;
-}
-const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
 const route = useRoute();
 const router = useRouter();
 
@@ -82,8 +71,6 @@ const loadError = ref<string | null>(null);
 const allModels = ref<ModelOption[]>([]);
 const availableSkills = ref<NamedItem[]>([]);
 const availablePrompts = ref<NamedItem[]>([]);
-/** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
-const availableServerBuiltinSkills = ref<Array<NamedItem & { description?: string }>>([]);
 interface PluginCandidate {
   id: string;
   dir: string;
@@ -115,10 +102,8 @@ function baseFormConfig() {
     appendSystemPrompt: '',
     builtinTools: [...BASE_AGENT_CONFIG.builtinTools],
     mcp: { ...BASE_AGENT_CONFIG.mcp },
-    serverBuiltinSkills: [...BASE_AGENT_CONFIG.serverBuiltinSkills],
-    capabilities: null as string[] | null,
-    extensions: [...BASE_AGENT_CONFIG.extensions],
     plugins: [...BASE_AGENT_CONFIG.plugins],
+    extensions: [...BASE_AGENT_CONFIG.extensions],
     skills: [...BASE_AGENT_CONFIG.skills],
     prompts: [...BASE_AGENT_CONFIG.prompts],
   };
@@ -143,7 +128,6 @@ const canSave = computed(
 );
 
 const skillNames = computed(() => availableSkills.value.map((item) => item.name));
-const serverBuiltinSkillNames = computed(() => availableServerBuiltinSkills.value.map((item) => item.name));
 const promptNames = computed(() => availablePrompts.value.map((item) => item.name));
 
 // ---- 配置模板（agent-templates）：填充是显式覆盖，只改表单本地状态 ----
@@ -202,45 +186,25 @@ async function saveAsTemplate(): Promise<void> {
   }
 }
 
-// `capabilities` 是 callServer 的**方法级授权**（不是工具开关）。工具本身由 inline 插件
-// 在"有授权方法"时注入 —— 所以这一区永远可见，空 = callServer 工具不会出现。
-
-/** 非空模块（channel/config 占位空组不展示） */
-const capabilityGroups = computed(() => capabilityModules.value.filter((g) => g.capabilities.length > 0));
-const allCapabilityMethods = computed(() => capabilityModules.value.flatMap((g) => g.capabilities.map((c) => c.method)));
-
-/** 已授权的方法名集合（用于"能力开了但用法说明没勾"的软提示）。 */
-const authorizedCapabilities = computed(() => new Set(form.value.config.capabilities ?? []));
-/** 软提示：能力开了、平台用法说明没开（不阻止保存）。 */
-const capabilitySkillHints = computed(() => {
-  const picked = form.value.config.serverBuiltinSkills;
+/** 软提示：平台 Skill 需要 read 工具才能被模型读取（不阻止保存）。 */
+const platformSkillHints = computed(() => {
+  const picked = form.value.config.plugins;
   const hints: string[] = [];
-  if (authorizedCapabilities.value.size > 0 && !picked.includes('pi-capabilities-usage')) {
-    hints.push('已授权 server 能力，但没勾「pi-capabilities-usage」——agent 会用错参数、也不懂被拒的原因。');
-  }
-  if (picked.length > 0 && !form.value.config.builtinTools.includes('read')) {
-    hints.push('平台 Skill 需要 read 工具才能被模型读取（当前 builtinTools 未勾 read），勾了也不会生效。');
+  if (picked.includes('plugin-authoring') && !form.value.config.builtinTools.includes('read')) {
+    hints.push('插件正在启用「plugin-authoring」的 skill，但 builtinTools 未勾 read —— skill 文件读不到，勾了也不生效。');
   }
   return hints;
 });
 
-function capabilitiesSummary(items: string[] | null): string {
-  if (items === null) return '未授权';
-  if (items.length === 0) return '0 项';
-  return `${items.length} / ${allCapabilityMethods.value.length} 项`;
-}
-
 onMounted(async () => {
   void loadMcpCatalog();
   try {
-    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes, capsRes, builtinSkillsRes] = await Promise.all([
+    const [modelsRes, skillsRes, promptsRes, extensionsRes, agentRes] = await Promise.all([
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
       routeId.value ? fetch(`/api/agents/${routeId.value}`) : Promise.resolve(null),
-      fetch('/api/capabilities'),
-      fetch('/api/config/server-builtin-skills'),
     ]);
 
     if (modelsRes.ok) allModels.value = (await modelsRes.json()) as ModelOption[];
@@ -253,14 +217,6 @@ onMounted(async () => {
       if (isCreate.value && form.value.config.plugins.length === 0) {
         form.value.config.plugins = availableExtensions.value.plugins.map((p) => p.id);
       }
-    }
-    if (builtinSkillsRes.ok)
-      availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<
-        NamedItem & { description?: string }
-      >;
-    if (capsRes.ok) {
-      const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
-      capabilityModules.value = data.modules ?? [];
     }
     if (agentRes) {
       if (!agentRes.ok) throw new Error(`HTTP ${agentRes.status}`);
@@ -277,8 +233,6 @@ onMounted(async () => {
           appendSystemPrompt: resolved.appendSystemPrompt ?? '',
           builtinTools: [...resolved.builtinTools],
           mcp: { enabled: resolved.mcp.enabled, servers: [...resolved.mcp.servers] },
-          serverBuiltinSkills: [...resolved.serverBuiltinSkills],
-          capabilities: resolved.capabilities,
           extensions: [...resolved.extensions],
           plugins: [...resolved.plugins],
           skills: [...resolved.skills],
@@ -345,38 +299,14 @@ function selectAllExtensions(): void {
 function selectAllSkills(): void {
   form.value.config.skills = [...skillNames.value];
 }
-function selectAllServerBuiltinSkills(): void {
-  form.value.config.serverBuiltinSkills = [...serverBuiltinSkillNames.value];
-}
 function selectAllPrompts(): void {
   form.value.config.prompts = [...promptNames.value];
 }
 /** 清理某字段里当前环境中不存在的项。 */
-function pruneField(
-  field:
-    | 'extensions'
-    | 'skills'
-    | 'prompts'
-    | 'capabilities'
-    | 'builtinTools'
-    | 'serverBuiltinSkills',
-): void {
-  if (field === 'capabilities') {
-    const caps = form.value.config.capabilities;
-    if (caps !== null) form.value.config.capabilities = issues.pruneInvalid('capabilities', caps);
-    return;
-  }
+function pruneField(field: 'extensions' | 'skills' | 'prompts' | 'builtinTools'): void {
   const cfg = form.value.config as unknown as Record<string, string[] | undefined>;
   const current = cfg[field] ?? [];
   cfg[field] = issues.pruneInvalid(field, current);
-}
-
-/** 授权是显式集合：勾选/取消都落成数组（null = 走全局策略，勾一下就变成显式清单）。 */
-function toggleCapability(method: string, checked: boolean): void {
-  const next = new Set(form.value.config.capabilities ?? []);
-  if (checked) next.add(method);
-  else next.delete(method);
-  form.value.config.capabilities = [...next];
 }
 
 /** MCP 能力开关（显式布尔，无继承）。 */
@@ -584,46 +514,6 @@ watch(mcpEnabled, (on) => {
                 <span v-if="availableExtensions.plugins.length === 0" class="resource-empty">没有可启用的平台插件</span>
               </div>
             </div>
-            <!-- Server builtin skills（平台随包发布，change: server-builtin-skills） -->
-            <div class="resource-group">
-              <div class="resource-group-header">
-                <span class="resource-group-title">Server Builtin Skills</span>
-                <InfoTip text="随平台包发布的只读 skill（与上面「Skills」里的用户 skill 是两套名字空间）。勾上后该 agent 的会话会加载对应 SKILL.md，模型按需读取。" />
-                <span class="resource-group-count">{{ resourceSummary(form.config.serverBuiltinSkills, availableServerBuiltinSkills.length) }}</span>
-                <span class="resource-edit-actions" v-if="!isView">
-                  <button type="button" class="btn-link" @click="selectAllServerBuiltinSkills">全选</button>
-                  <button type="button" class="btn-link" @click="form.config.serverBuiltinSkills = []">清空</button>
-                  <button type="button" class="btn-link" @click="pruneField('serverBuiltinSkills')">清理无效项</button>
-                </span>
-              </div>
-              <div v-if="isView" class="tag-list">
-                <span v-for="s in form.config.serverBuiltinSkills" :key="s" class="tag"
-                  :class="{ 'tag-invalid': issueIndex('serverBuiltinSkills', s) }">{{ s }}</span>
-                <span v-if="form.config.serverBuiltinSkills.length === 0" class="resource-empty">无</span>
-              </div>
-              <div v-else class="tag-list editable">
-                <label v-for="s in availableServerBuiltinSkills" :key="s.name" class="tag-check"
-                  :class="{ checked: form.config.serverBuiltinSkills.includes(s.name) }"
-                  :title="s.description || s.name">
-                  <input type="checkbox" :value="s.name" v-model="form.config.serverBuiltinSkills" />
-                  <span>{{ s.name }}</span>
-                  <span class="resource-badge">平台</span>
-                </label>
-                <span v-if="availableServerBuiltinSkills.length === 0" class="resource-empty">本版本未随包发布 Skill</span>
-              </div>
-              <div v-if="!isView && form.config.serverBuiltinSkills.length" class="tag-list editable">
-                <template v-for="s in form.config.serverBuiltinSkills" :key="'bad-' + s">
-                  <label v-if="issueIndex('serverBuiltinSkills', s)" class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
-                    <input type="checkbox" :value="s" v-model="form.config.serverBuiltinSkills" />
-                    <span>{{ s }}（无效）</span>
-                  </label>
-                </template>
-              </div>
-              <div v-if="!isView && capabilitySkillHints.length" class="hint-list">
-                <span v-for="h in capabilitySkillHints" :key="h" class="hint-warn">⚠ {{ h }}</span>
-              </div>
-            </div>
-
             <!-- MCP：总开关 + 平台目录 server 勾选 -->
             <McpSelectionGroup
               v-model:enabled="form.config.mcp.enabled"
@@ -740,44 +630,6 @@ watch(mcpEnabled, (on) => {
           </div>
         </div>
 
-        <!-- Capabilities（callServer 方法级授权） -->
-        <div class="section">
-          <h3 class="section-title section-head">
-            Capabilities
-            <InfoTip text="callServer 可调用的 server 方法授权（session 快照级）。空 = 不授权，且 callServer 这个工具不会被注入；勾选任意方法后工具才出现。工具本身由 inline 插件提供，不是逐 agent 的工具开关。" :width="340" />
-          </h3>
-
-          <template v-if="isView">
-            <div v-if="form.config.capabilities === null" class="resource-default">未配置（走全局 callServer 策略）</div>
-            <div v-else-if="form.config.capabilities.length === 0" class="resource-empty">已配置 0 项（未授权任何方法）</div>
-            <div v-else class="tag-list">
-              <span v-for="m in form.config.capabilities" :key="m" class="tag"
-                :class="{ 'tag-invalid': issueIndex('capabilities', m) }">{{ m }}</span>
-            </div>
-          </template>
-          <template v-else>
-            <div class="resource-edit-actions">
-              <button type="button" class="btn-link" @click="form.config.capabilities = [...allCapabilityMethods]">全选</button>
-              <button type="button" class="btn-link" @click="form.config.capabilities = []">清空（全禁）</button>
-              <button type="button" class="btn-link" @click="pruneField('capabilities')">清理无效项</button>
-            </div>
-            <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
-              <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
-              <div class="tag-list editable">
-                <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
-                  :class="{ checked: (form.config.capabilities ?? []).includes(cap.method) }">
-                  <input type="checkbox" :value="cap.method"
-                    :checked="(form.config.capabilities ?? []).includes(cap.method)"
-                    @change="toggleCapability(cap.method, ($event.target as HTMLInputElement).checked)" />
-                  <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
-                </label>
-              </div>
-            </div>
-            <div style="font-size:12px;opacity:.7;line-height:1.6">
-              scoped 写方法仅能操作本 agent / 本 session 自己的行（固定安全网，不可配置）。
-            </div>
-          </template>
-        </div>
       </div>
     </EditorPage>
   </div>

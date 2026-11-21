@@ -32,17 +32,6 @@ import { confirmDialog } from '../../composables/useFeedback';
 
 interface ModelOption { provider: string; modelId: string; displayName: string }
 
-// callServer 方法级授权（AgentConfig.capabilities，快照在 sessions.config 上）：
-// null=未配置（opt-in：无任何方法权限；缺 key 的存量会话继承 agent）、[]=显式全禁、数组=授权白名单
-// 控制面读取：session 行有 key 用 session 的，缺 key（存量）fallback agent
-interface CapabilityInfo {
-  method: string;
-  module: string;
-  access: 'read' | 'write';
-  scoped: boolean;
-  summary: string;
-}
-const capabilityModules = ref<Array<{ module: string; capabilities: CapabilityInfo[] }>>([]);
 
 const route = useRoute();
 const router = useRouter();
@@ -74,10 +63,6 @@ const thinkingLevel = ref('');
 // （session 有 key 用 session 的，否则用 agent 的归一结果），保存即把七项固化到 session 行。
 const builtinTools = ref<string[]>([...BASE_AGENT_CONFIG.builtinTools]);
 const mcp = ref<{ enabled: boolean; servers: string[] }>({ enabled: false, servers: [] });
-/** 平台随包 skill（只读；来源 GET /api/config/server-builtin-skills）。 */
-const serverBuiltinSkills = ref<string[]>([...BASE_AGENT_CONFIG.serverBuiltinSkills]);
-// callServer 方法级授权：null = 走全局策略（唯一保留的 tri-state）、[] = 全禁、数组 = 白名单
-const capabilities = ref<string[] | null>(null);
 const extensions = ref<string[]>([]);
 /** 平台插件启用列表（会话内能力来源；server/web facet 不受它影响）。 */
 const plugins = ref<string[]>([]);
@@ -88,12 +73,10 @@ const issues = useConfigIssues();
 const issueIndex = computed(() => issues.buildIssueIndex(
   {
     builtinTools: builtinTools.value,
-    serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
     plugins: plugins.value,
     skills: skills.value,
     prompts: prompts.value,
-    capabilities: capabilities.value,
     mcp: mcp.value,
   },
   model.value || null,
@@ -101,12 +84,10 @@ const issueIndex = computed(() => issues.buildIssueIndex(
 const configIssues = computed(() => issues.issuesFor(
   {
     builtinTools: builtinTools.value,
-    serverBuiltinSkills: serverBuiltinSkills.value,
     extensions: extensions.value,
     plugins: plugins.value,
     skills: skills.value,
     prompts: prompts.value,
-    capabilities: capabilities.value,
     mcp: mcp.value,
   },
   model.value || null,
@@ -159,22 +140,11 @@ function pluginProvides(p: PluginCandidate): string {
   if (p.skills.length) parts.push(`skill: ${p.skills.join(', ')}`);
   return parts.join(' · ') || '无会话内能力';
 }
-const availableServerBuiltinSkills = ref<Array<{ name: string; description?: string }>>([]);
 const skillNames = computed(() => availableSkills.value.map(i => i.name));
 const promptNames = computed(() => availablePrompts.value.map(i => i.name));
 
-// capabilities 是 callServer 的方法级授权；工具本身由 inline 插件在有授权时注入，
-// 所以这一区永远可见（空 = 不会注入 callServer）。
-const callServerEnabled = computed(() => true);
-const capabilityGroups = computed(() => capabilityModules.value.filter(g => g.capabilities.length > 0));
-const allCapabilityMethods = computed(() => capabilityModules.value.flatMap(g => g.capabilities.map(c => c.method)));
-function capabilitiesSummary(items: string[] | null): string {
-  if (items === null) return '未授权';
-  if (items.length === 0) return '0 项';
-  return `${items.length} / ${allCapabilityMethods.value.length} 项`;
-}
 
-// ---- 配置模板（agent-templates）：填充覆盖资源七字段，只改表单本地状态 ----
+// ---- 配置模板（agent-templates）：填充覆盖资源六字段，只改表单本地状态 ----
 const templates = ref<AgentTemplateDTO[]>([]);
 const templatePick = ref('');
 const templateSaving = ref(false);
@@ -194,8 +164,6 @@ function currentTemplateTarget() {
   return {
     builtinTools: builtinTools.value,
     mcp: { enabled: mcp.value.enabled === true, servers: [...mcp.value.servers] },
-    serverBuiltinSkills: serverBuiltinSkills.value,
-    capabilities: capabilities.value,
     extensions: extensions.value,
     plugins: plugins.value,
     skills: skills.value,
@@ -206,8 +174,6 @@ function currentTemplateTarget() {
 function applyTarget(next: ReturnType<typeof currentTemplateTarget>): void {
   builtinTools.value = next.builtinTools;
   mcp.value = next.mcp;
-  serverBuiltinSkills.value = next.serverBuiltinSkills;
-  capabilities.value = next.capabilities;
   extensions.value = next.extensions;
   plugins.value = next.plugins;
   skills.value = next.skills;
@@ -257,14 +223,12 @@ async function saveAsTemplate(): Promise<void> {
 
 onMounted(async () => {
   try {
-    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes, capsRes, builtinSkillsRes] = await Promise.all([
+    const [sessionRes, modelsRes, skillsRes, promptsRes, extensionsRes] = await Promise.all([
       fetch(`/api/sessions/${sessionId.value}`),
       fetch('/api/models'),
       fetch('/api/config/skills'),
       fetch('/api/config/prompts'),
       fetch('/api/config/extensions'),
-      fetch('/api/capabilities'),
-      fetch('/api/config/server-builtin-skills'),
     ]);
 
     if (!sessionRes.ok) throw new Error(`HTTP ${sessionRes.status}`);
@@ -274,12 +238,6 @@ onMounted(async () => {
     if (promptsRes.ok) availablePrompts.value = (await promptsRes.json()) as { name: string }[];
     if (extensionsRes.ok) {
       availableExtensions.value = (await extensionsRes.json()) as typeof availableExtensions.value;
-    }
-    if (builtinSkillsRes.ok)
-      availableServerBuiltinSkills.value = (await builtinSkillsRes.json()) as Array<{ name: string; description?: string }>;
-    if (capsRes.ok) {
-      const data = (await capsRes.json()) as { modules: Array<{ module: string; capabilities: CapabilityInfo[] }> };
-      capabilityModules.value = data.modules ?? [];
     }
     // load agent info
     if (session.value.agentId) {
@@ -304,15 +262,10 @@ onMounted(async () => {
       enabled: (pick('mcp') as { enabled?: boolean } | null)?.enabled === true,
       servers: [...(((pick('mcp') as { servers?: string[] } | null)?.servers) ?? [])],
     };
-    serverBuiltinSkills.value = [...(pick('serverBuiltinSkills') as string[])];
     extensions.value = [...(pick('extensions') as string[])];
     plugins.value = [...(pick('plugins') as string[])];
     skills.value = [...(pick('skills') as string[])];
     prompts.value = [...(pick('prompts') as string[])];
-    // capabilities 保留 tri-state：session 有 key（数组/null）→ 用 session 的；
-    // 缺 key（存量）→ 用 agent 的（控制面同款 fallback），保存后固化为 session 级。
-    const caps = sc.capabilities as string[] | null | undefined;
-    capabilities.value = caps === undefined ? agentCfg.capabilities : (caps === null ? null : [...caps]);
     // 生效值回显（同 worker 强制规则）
     if (mcp.value.enabled) builtinTools.value = withMcpDependencies(builtinTools.value);
   } catch (err) {
@@ -338,8 +291,6 @@ async function save(): Promise<void> {
       ...(session.value?.config ?? {}),
       builtinTools: [...builtinTools.value],
       mcp: { enabled: mcp.value.enabled, servers: [...mcp.value.servers] },
-      serverBuiltinSkills: [...serverBuiltinSkills.value],
-      capabilities: capabilities.value,
       extensions: [...extensions.value],
       plugins: [...plugins.value],
       skills: [...skills.value],
@@ -371,31 +322,16 @@ function openChat(): void {
 function selectAllBuiltinTools(): void {
   builtinTools.value = [...BUILTIN_TOOL_NAMES];
 }
-function selectAllServerBuiltinSkills(): void {
-  serverBuiltinSkills.value = [...availableServerBuiltinSkills.value.map((s) => s.name)];
-}
-
 function selectAllServerTools(): void {
 }
 function selectAllPlugins(): void {
   plugins.value = availableExtensions.value.plugins.map((p) => p.id);
 }
-function pruneField(field: 'extensions' | 'plugins' | 'skills' | 'prompts' | 'capabilities' | 'builtinTools'): void {
-  if (field === 'capabilities') {
-    if (capabilities.value !== null) capabilities.value = issues.pruneInvalid('capabilities', capabilities.value);
-    return;
-  }
+function pruneField(field: 'extensions' | 'plugins' | 'skills' | 'prompts' | 'builtinTools'): void {
   const refs = { extensions, plugins, skills, prompts, builtinTools } as const;
-  const target = refs[field as 'extensions' | 'plugins' | 'skills' | 'prompts' | 'builtinTools'];
+  const target = refs[field];
   target.value = issues.pruneInvalid(field, target.value);
 }
-function toggleCapability(method: string, checked: boolean): void {
-  const next = new Set(capabilities.value ?? []);
-  if (checked) next.add(method);
-  else next.delete(method);
-  capabilities.value = [...next];
-}
-
 function formatModel(m: string): string {
   const found = allModels.value.find((x) => `${x.provider}/${x.modelId}` === m);
   return found ? `${found.displayName} (${found.provider})` : m;
@@ -645,37 +581,6 @@ function workerUptime(ms: number): string {
               </div>
             </div>
 
-            <!-- Server Builtin Skills（平台随包，只读） -->
-            <div class="sd-resource-group">
-              <div class="sd-resource-header">
-                <span class="sd-resource-title">Server Builtin Skills</span>
-                <InfoTip text="随平台包发布的只读 skill（与 Skills 里的用户 skill 两套名字空间）。仅下次 spawn 生效。" :width="300" />
-                <span class="sd-resource-count">{{ serverBuiltinSkills.length }} / {{ availableServerBuiltinSkills.length }} 项</span>
-                <span v-if="!isView" class="resource-edit-actions">
-                  <button type="button" class="btn-link" @click="selectAllServerBuiltinSkills">全选</button>
-                  <button type="button" class="btn-link" @click="serverBuiltinSkills = []">清空</button>
-                </span>
-              </div>
-              <div v-if="isView" class="tag-list">
-                <span v-for="s in serverBuiltinSkills" :key="s" class="tag">{{ s }}</span>
-                <span v-if="serverBuiltinSkills.length === 0" class="sd-empty">无</span>
-              </div>
-              <div v-else class="tag-list editable">
-                <label v-for="s in availableServerBuiltinSkills" :key="s.name" class="tag-check"
-                  :class="{ checked: serverBuiltinSkills.includes(s.name) }" :title="s.description || s.name">
-                  <input type="checkbox" :value="s.name" v-model="serverBuiltinSkills" /><span>{{ s.name }}</span>
-                </label>
-                <span v-if="availableServerBuiltinSkills.length === 0" class="sd-empty">本版本未随包发布 Skill</span>
-              </div>
-              <div v-if="!isView" class="tag-list editable">
-                <template v-for="s in serverBuiltinSkills" :key="'bad-' + s">
-                  <label v-if="issueIndex('serverBuiltinSkills', s)" class="tag-check checked tag-invalid" title="平台 Skill 不存在或未随此版本发布">
-                    <input type="checkbox" :value="s" v-model="serverBuiltinSkills" /><span>{{ s }}（无效）</span>
-                  </label>
-                </template>
-              </div>
-            </div>
-
             <!-- Extensions -->
             <div class="sd-resource-group">
               <div class="sd-resource-header">
@@ -774,44 +679,6 @@ function workerUptime(ms: number): string {
           </div>
         </div>
 
-        <!-- Capabilities（callServer 方法级授权，快照在 session 行；Resources 外） -->
-        <div v-if="callServerEnabled" class="sd-section">
-          <h3 class="sd-section-title">
-            Capabilities
-            <InfoTip text="callServer 可调用的 server 方法授权（session 快照级）。未勾选任何方法 = 不授权；仅影响本会话，保存后固化不再跟随 agent。" :width="340" />
-          </h3>
-
-          <template v-if="isView">
-            <div v-if="capabilities === null" class="resource-default">未配置（走全局 callServer 策略）</div>
-            <div v-else-if="capabilities.length === 0" class="resource-empty">已配置 0 项（未授权任何方法）</div>
-            <div v-else class="tag-list">
-              <span v-for="m in capabilities" :key="m" class="tag"
-                :class="{ 'tag-invalid': issueIndex('capabilities', m) }">{{ m }}</span>
-            </div>
-          </template>
-          <template v-else>
-            <div class="resource-edit-actions">
-              <button type="button" class="btn-link" @click="capabilities = [...allCapabilityMethods]">全选</button>
-              <button type="button" class="btn-link" @click="capabilities = []">清空（全禁）</button>
-              <button type="button" class="btn-link" @click="pruneField('capabilities')">清理无效项</button>
-            </div>
-            <div v-for="group in capabilityGroups" :key="group.module" style="margin-bottom:8px">
-              <div style="font-size:12px;opacity:.7;margin:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ group.module }}</div>
-              <div class="tag-list editable">
-                <label v-for="cap in group.capabilities" :key="cap.method" class="tag-check"
-                  :class="{ checked: (capabilities ?? []).includes(cap.method) }">
-                  <input type="checkbox" :value="cap.method"
-                    :checked="(capabilities ?? []).includes(cap.method)"
-                    @change="toggleCapability(cap.method, ($event.target as HTMLInputElement).checked)" />
-                  <span :title="cap.summary">{{ cap.method }}<em style="font-style:normal;opacity:.55;margin-left:4px">{{ cap.access }}{{ cap.scoped ? '·own' : '' }}</em></span>
-                </label>
-              </div>
-            </div>
-            <div style="font-size:12px;opacity:.7;line-height:1.6">
-              scoped 写方法仅能操作本 agent / 本 session 自己的行（固定安全网，不可配置）。
-            </div>
-          </template>
-        </div>
 
         <!-- System prompt -->
         <div class="sd-section" v-if="session.config?.systemPrompt || session.config?.appendSystemPrompt">

@@ -159,6 +159,97 @@ if (JSON.stringify(tables) !== JSON.stringify(expected)) {
 }
 console.log(`  ✓ 内核只建自己的表：${tables.join(', ')}`);
 
+// ── 命名空间：两个互不相交的名字空间，注册表里不存在裸名 ──
+{
+  const ipc = await import(path.join(platformRoot, 'packages/ipc-protocol/src/index.js') as string);
+  const reg = new ipc.IpcMethodRegistry();
+  const check = (cond: boolean, msg: string): void => {
+    if (cond) return;
+    console.error(`✗ ${msg}`);
+    process.exit(1);
+  };
+  const ok = { direction: 'forward' as const, source: 'core' as const, kind: 'mirror' as const };
+
+  check(ipc.coreMethodName('prompt') === '__core__.prompt', 'coreMethodName 拼 __core__.');
+  check(ipc.pluginMethodPrefix('acp') === 'acp.', 'pluginMethodPrefix 不带 plugin. 段');
+  check(ipc.isReservedPluginId('__core__'), '插件 id 保留字判定');
+  check(!ipc.isReservedPluginId('acp'), '普通 id 不受保留字影响');
+
+  check(reg.register('prompt', ok, () => 1) === undefined, '裸名内核方法被拒（必须带 __core__）');
+  check(reg.register('__core__.prompt', ok, () => 1) !== undefined, '__core__.prompt 可注册');
+
+  const pluginOpt = { direction: 'forward' as const, source: 'plugin:acp' as const, kind: 'plugin' as const };
+  check(reg.register('acp.emit', pluginOpt, () => 1) !== undefined, '插件方法 <id>.<name> 可注册');
+  check(reg.register('emit', pluginOpt, () => 1) === undefined, '插件方法缺自己 id 前缀被拒');
+  check(reg.register('__core__.steal', pluginOpt, () => 1) === undefined, '插件不许进 __core__ 保留空间');
+  check(
+    reg.rejected().some((r) => r.reason.includes('__core__')),
+    '被拒原因指出版本空间冲突',
+  );
+  console.log('  ✓ IPC 命名：__core__ / <pluginId>. 两个空间，裸名与越界均被拒');
+}
+
+// ── 动作入参校验（一处实现，tool / service / reverse / http 共用）──
+{
+  const { validateParams } = await import(
+    path.join(platformRoot, 'packages/ipc-protocol/src/action-params.js') as string
+  );
+  const schema = {
+    type: 'object',
+    properties: { name: { type: 'string', minLength: 1 }, n: { type: 'integer', minimum: 1 } },
+    required: ['name'],
+    additionalProperties: false,
+  };
+  const okRes = validateParams(schema, { name: 'x', n: 2 });
+  if (!okRes.ok) {
+    console.error(`✗ 合法入参被拒：${okRes.message}`);
+    process.exit(1);
+  }
+  const missing = validateParams(schema, { n: 2 });
+  const tooSmall = validateParams(schema, { name: 'x', n: 0 });
+  const extra = validateParams(schema, { name: 'x', extra: 1 });
+  const wrongType = validateParams(schema, { name: 1 });
+  if (missing.ok || tooSmall.ok || extra.ok || wrongType.ok) {
+    console.error('✗ 非法入参未被拒');
+    process.exit(1);
+  }
+  if (validateParams(undefined, 'anything').ok !== true) {
+    console.error('✗ 无 schema 时不该校验');
+    process.exit(1);
+  }
+  console.log('  ✓ 入参校验：required / 类型 / 范围 / additionalProperties 都拦住');
+}
+
+// ── 动作归属：reach 只约束反向方法来源，来源由桥注入 ──
+{
+  const { createPluginActions } = await import(
+    path.join(platformRoot, 'packages/core/src/services/plugin-actions.js') as string
+  );
+  const acts = createPluginActions();
+  const h = () => ({ ok: true });
+  acts.define('alpha', {
+    private: { params: { type: 'object' }, handler: h },                        // 默认 own
+    shared: { params: { type: 'object' }, handler: h, scope: 'public' },
+  });
+  const check2 = (cond: boolean, msg: string): void => {
+    if (cond) return;
+    console.error(`✗ ${msg}`);
+    process.exit(1);
+  };
+  const reachOf = (name: string) => acts.reachOf(name);
+  // master 的判定规则：`reach === 'own' && source !== owner` → unknown method
+  const allowed = (method: string, source: string): boolean => {
+    const reach = reachOf(method);
+    const owner = method.split('.')[0];
+    return !(reach === 'own' && source !== owner);
+  };
+  check2(allowed('alpha.private', 'alpha'), 'own 动作：owner 自己可调');
+  check2(!allowed('alpha.private', 'beta'), 'own 动作：别的插件被拒（不泄漏存在性）');
+  check2(allowed('alpha.shared', 'beta'), 'public 动作：别的插件放行');
+  check2(reachOf('nope.nothing') === undefined, '非动作方法不做归属校验（插件自有反向方法不受影响）');
+  console.log('  ✓ 动作归属：own 只认 owner / public 放行 / 非动作不校验');
+}
+
 // ── 宿主面：events 总线（进程内、无回执、退订归零）──
 const bus = createPluginBus();
 const seen: unknown[] = [];

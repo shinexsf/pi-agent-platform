@@ -38,7 +38,7 @@ import { logger } from './logger.js';
 /**
  * 浏览器 `emit` 的分发入口；返回插件是否注册了处理器。
  *
- * 走的是 worker 侧方法注册表（`plugin.<id>.emit`）——与 master 主动调这条路
+ * 走的是 worker 侧方法注册表（`<id>.emit`）——与 master 主动调这条路
  * 完全同一条分发路径，没有单独的"插件消息通道"。
  */
 export async function emitToPluginMessage(pluginId: string, name: string, data: unknown): Promise<boolean> {
@@ -53,6 +53,7 @@ export async function emitToPluginMessage(pluginId: string, name: string, data: 
 }
 import type { WorkerEvent, WorkerEventKind, WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
 import type { PluginWorkerBridge } from '@pi-agent-platform/plugin-types';
+import { createActionTools, warnDeferredWithoutToolSearch } from './action-tools.js';
 import { createServerTools, type CallMasterFn } from './tools.js';
 import { callPluginMethod, forwardRegistry, hasPluginMethod, registerPluginMethod } from './methods.js';
 
@@ -275,7 +276,7 @@ function buildTakeoverPrompt(opts: NormalizedBuildSystemPromptOptions): string {
  *
  * Takes the ONE payload master sends (`RuntimeConfig`): `sessionId` / `model` /
  * `thinkingLevel` / `config` / `existingSessionPath` are the session-row snapshot,
- * `workspacePath` / `capabilityIndex` are platform-injected, `plugins` is derived.
+ * `workspacePath` is platform-injected, `plugins` is derived.
  */
 export async function createSession(
   payload: RuntimeConfig,
@@ -394,7 +395,7 @@ export async function createSession(
       logger[level]({ pluginId, ...extra }, message);
     },
     registerMethod(name, handler) {
-      // 封装层职责 1（拼前缀）：插件只说 name，`plugin.<id>.` 由这里补。
+      // 封装层职责 1（拼前缀）：插件只说 name，`<id>.` 由这里补。
       const ok = registerPluginMethod(pluginId, name, (args, ctx) =>
         handler((args[0] ?? {}) as unknown, { sessionId: String(ctx ?? '') }),
       );
@@ -408,7 +409,8 @@ export async function createSession(
     async call(method, args) {
       // 封装层职责 3（限制可调面）：只能走反向表。正向方法名在这里没有意义，
       // master 侧的反向注册表会以 `unknown method` 拒掉。
-      return callMaster(method, args ?? []);
+      // 封装层职责 4（来源不可伪造）：`source` 由这里注入，插件只给方法名与参数。
+      return callMaster(method, args ?? [], pluginId);
     },
   });
 
@@ -474,28 +476,6 @@ export async function createSession(
     ...pluginExtensionFactories,
   ];
 
-  // Server-shipped skills (change: server-builtin-skills). The catalogue lives inside the
-  // installed server package; master passes its location via env and the *selection* via
-  // `config.serverBuiltinSkills` (explicit list, [] = all off). Only the selected dirs are
-  // injected, so nothing unselected can leak through the temporary-scope exemption below.
-  const serverBuiltinSkillsDir = process.env.PI_SERVER_BUILTIN_SKILLS_DIR?.trim();
-  const selectedBuiltinSkills = agentConfig?.serverBuiltinSkills ?? [];
-  const serverBuiltinSkillPaths: string[] = [];
-  if (selectedBuiltinSkills.length > 0) {
-    if (!serverBuiltinSkillsDir) {
-      logger.warn(
-        { sessionId, selected: selectedBuiltinSkills },
-        'serverBuiltinSkills configured but PI_SERVER_BUILTIN_SKILLS_DIR is empty — nothing injected',
-      );
-    } else {
-      for (const name of selectedBuiltinSkills) {
-        const dir = join(serverBuiltinSkillsDir, name);
-        if (existsSync(join(dir, 'SKILL.md'))) serverBuiltinSkillPaths.push(dir);
-        else logger.warn({ sessionId, name, dir }, 'serverBuiltinSkill not found in this release — skipped');
-      }
-    }
-  }
-
   // 插件自带的 skill（`<plugin-dir>/skills/<name>`）：**与工具同源生效** —— 插件对该
   // 会话生效，agent 就自动获得，不需要在 agent 配置里勾 skill/tool。走同一条
   // additionalSkillPaths（pi 判 temporary），因此用户 `skills` 白名单既不能杀它，
@@ -508,7 +488,7 @@ export async function createSession(
       else logger.warn({ sessionId, pluginId: plugin.id, dir }, 'plugin skill missing SKILL.md — skipped');
     }
   }
-  const additionalSkillPaths = [...serverBuiltinSkillPaths, ...pluginSkillPaths];
+  const additionalSkillPaths = pluginSkillPaths;
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspacePath,
@@ -548,11 +528,9 @@ export async function createSession(
       logger.debug({ count: result.extensions.length }, 'extensionsOverride: after');
       return result;
     } : undefined,
-    // Server-shipped skills ride in as extra paths → pi classifies them `temporary`, which
-    // `createSkillsFilter` keeps unconditionally. That is the contract, not an oversight:
-    // the user's `skills` whitelist must not be able to kill a platform skill, and it must
-    // not be the switch for one either (that is `serverBuiltinSkills`). Do NOT add a special
-    // case for builtin skills to resource-filters.ts.
+    // 插件自带的 skill 以额外路径注入 → pi 判它们 `temporary`，`createSkillsFilter` 无条件保留。
+    // 这是契约不是疏漏：用户的 `skills` 白名单**不能**杀掉插件 skill，也**不是**它的开关
+    // （开关只有 `config.plugins`）。不要在 resource-filters.ts 里为插件 skill 加特例。
     additionalSkillPaths: additionalSkillPaths.length > 0 ? additionalSkillPaths : undefined,
     skillsOverride: agentConfig?.skills ? createSkillsFilter(agentConfig.skills) : undefined,
     promptsOverride: agentConfig?.prompts ? createPromptsFilter(agentConfig.prompts) : undefined,
@@ -602,12 +580,23 @@ export async function createSession(
       })()
     : undefined;
 
-  // Server-side tools come from inline plugins (callServer / sendFileToUser) with no
-  // per-agent allowlist anymore — plugin effectiveness decides. capabilityIndex
-  // (master-pushed) both feeds the callServer description and gates its injection.
-  const customTools = createServerTools(sessionId, callMaster, {
-    capabilityIndex: config.capabilityIndex,
-  });
+  // Server-side tools come from inline plugins (sendFileToUser) with no per-agent
+  // allowlist anymore — plugin effectiveness decides.
+  const customTools = createServerTools(sessionId, callMaster);
+
+  // 动作工具：插件声明 `tool` 的动作由平台统一注册（作者不再手抄 registerTool）。
+  // 已占用的名字先由 inline 工具填满 —— 冲突时动作侧让步并 warn，不静默改名。
+  const takenToolNames = new Set(customTools.map((t) => t.name));
+  const actionTools = createActionTools(config.plugins ?? [], callMaster, takenToolNames, logger, sessionId);
+  customTools.push(...actionTools);
+  warnDeferredWithoutToolSearch(
+    actionTools
+      .filter((t) => (t.exposure ?? 'direct') === 'deferred')
+      .map((t) => t.name),
+    agentConfig?.builtinTools,
+    logger,
+    sessionId,
+  );
 
   const result = await createAgentSession({
     cwd: config.workspacePath,

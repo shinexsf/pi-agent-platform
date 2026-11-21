@@ -36,10 +36,14 @@ import {
   type SurfaceRegistration,
   type ToolCardRegistration,
   type ToolCardRegion,
+  type PluginActionContext,
+  type PluginActionDefinition,
+  type PluginSessionsApi,
 } from '@pi-agent-platform/plugin-types';
 import type { HostApi } from '../host-api.js';
 import { PLUGIN_SLOT_NAMES } from '../plugins/constants.js';
 import { childLogger } from '../logger.js';
+import { validateParams } from '@pi-agent-platform/ipc-protocol';
 import { getPluginSnapshot } from './plugins.js';
 import type { LoadedPlugin, PluginSnapshot } from './plugins.js';
 
@@ -55,7 +59,12 @@ const TOOL_MODES = new Set(['replace', 'regions']);
 const TOOL_REGIONS: readonly ToolCardRegion[] = ['header', 'body', 'footer'];
 
 /** R3 反向方法：`name` 是插件自报的短名，宿主拼前缀。 */
-type ReverseMethodHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
+/** 反向方法 handler。`meta.source` = 调用方插件 id（平台填，插件无法伪造）。 */
+type ReverseMethodHandler = (
+  sessionId: string,
+  args: unknown[],
+  meta?: { source?: string },
+) => Promise<unknown>;
 
 /** 插件侧 handler 的形状（与 `PluginMethodsApi.handle` 一致）。 */
 type PluginMethodHandler = (
@@ -67,6 +76,10 @@ type PluginMethodHandler = (
 export interface PluginRuntimeDeps {
   /** 入口实现的宿主能力面。 */
   host: HostApi;
+  /** 动作登记表（动作契约的四类投影都落在这张表 + 既有三张表上）。 */
+  actions: import('./plugin-actions.js').PluginActions;
+  /** 动作 HTTP 面的全局开关（默认关闭）：关闭时动作路由一律 404。 */
+  actionsHttpEnabled?: () => boolean;
   /** R3：把某插件的反向方法挂到 worker→master 分发表。 */
   registerService(
     source: `plugin:${string}`,
@@ -441,6 +454,7 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
   };
   http: { route(def: RouteRegistration): Disposer };
   methods: { handle(name: string, handler: ReverseMethodHandlerWithoutSession): Disposer };
+  actions: { define(defs: Record<string, PluginActionDefinition>): void };
   bus: {
     declare(topic: string, options: { declaredBy: 'publisher' | 'subscriber' }): { ok: boolean; reason?: string };
     publish(topic: string, payload?: unknown): { ok: boolean; delivered: number; reason?: string };
@@ -520,6 +534,18 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
         track(id, host.sessions.subscribe(sessionId, listener, onDispose)),
       ensure: (input) => host.sessions.ensure(input),
       systemEvent: (input) => host.sessions.systemEvent(input),
+      // 会话管理：与 HTTP 路由共用同一份实现（跨 worker + DB 双写，插件自己拼会漏一半）。
+      // 返回的 SessionDTO 在插件契约里是宽松形状（`PluginSessionDetail`）——插件按需读字段，
+      // 平台保证字段名稳定；这一处 cast 是宿主边界的唯一妥协点。
+      detail: async (sessionId) =>
+        host.sessions.detail(sessionId) as unknown as Awaited<ReturnType<PluginSessionsApi['detail']>>,
+      find: async (filter) =>
+        host.sessions.find(filter) as unknown as Awaited<ReturnType<PluginSessionsApi['find']>>,
+      update: async (sessionId, patch) =>
+        host.sessions.update(sessionId, patch as never) as unknown as Awaited<
+          ReturnType<PluginSessionsApi['update']>
+        >,
+      restart: (sessionId) => host.sessions.restart(sessionId),
     },
     agents: {
       list: async () => host.agents.list().map((a) => ({ ...a })),
@@ -543,6 +569,8 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
     lifecycle: {
       onSessionCreated: (hook) => track(id, host.lifecycle.onSessionCreated(hook)),
       onSessionDisposed: (hook) => track(id, host.lifecycle.onSessionDisposed(hook)),
+      // 运行态快照：纯数据转发（无副作用，不需要 disposer）。
+      runtime: () => host.lifecycle.runtime(),
     },
     events: {
       // `events` = 发给**浏览器**（worker → server → SSE），只有 worker 侧能发。
@@ -585,6 +613,104 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
     ui,
     http: {
       route: (def: RouteRegistration) => registerRoute(id, def, phase),
+    },
+    actions: {
+      /**
+       * 一份 handler + 五个暴露字段 → 最多四类**投影**。
+       *
+       * 校验与记账在 `plugin-actions.ts`（纯函数，可单测）；这里只负责把 accepted 的
+       * 记录接进已有的三张表：反向方法表（`entry.methods`，由 `flushMethods` 统一挂到
+       * 分发表）、service 面、插件路由表。工具描述符没有副作用，spawn 时按会话取。
+       *
+       * 为什么复用而不是各开一套：`entry.methods` 已经处理了"重载时整块替换""reload 后
+       * 去掉的方法不残留"，再开一张反向表就要把这些语义再实现一遍。
+       */
+      define(defs) {
+        const res = requireDeps().actions.define(id, defs);
+        if (!res.ok || !res.accepted) {
+          // 整批不注册：先抛错，让 init() 失败可见（插件状态 degraded），
+          // 而不是"部分动作能用、部分静默消失"。
+          throw new Error(res.error ?? 'actions.define 失败');
+        }
+        const actionsTable = requireDeps().actions;
+        for (const rec of res.accepted) {
+          const run = async (params: unknown, ctx: PluginActionContext) => {
+            const check = validateParams(rec.params, params);
+            if (!check.ok) throw new Error(`参数校验失败 ${check.message}`);
+            if (check.ignored?.length) {
+              logger.debug({ pluginId: id, action: rec.action, ignored: check.ignored }, '动作 schema 含未支持的关帧（已忽略）');
+            }
+            return rec.handler(params, ctx);
+          };
+
+          if (rec.reverse) {
+            const entry = entryFor(id);
+            if (entry.methods[rec.name]) {
+              throw new Error(`动作『${rec.action}』的反向方法与已注册方法重名（${rec.name}）`);
+            }
+            entry.methods[rec.name] = (sessionId, args, meta) =>
+              Promise.resolve(
+                run(args[0], {
+                  sessionId,
+                  caller: { pluginId: meta?.source ?? id, kind: 'worker' },
+                }),
+              ) as Promise<unknown>;
+            track(id, () => {
+              delete entry.methods[rec.name];
+            });
+          }
+
+          if (rec.service) {
+            const provided = host.services.provide(id, rec.name, (payload, meta: { pluginId: string }) =>
+              run(payload, { caller: { pluginId: meta.pluginId, kind: 'plugin' } }),
+            );
+            if (!provided.ok) {
+              throw new Error(`动作『${rec.action}』的 service 注册被拒（${provided.reason}）`);
+            }
+          }
+
+          if (rec.httpPath) {
+            // POST + 精确路径：动作面只承诺"一个动作一个地址"，
+            // 通配/参数留给 `host.http.route`（那是作者显式声明的）。
+            registerRoute(
+              id,
+              {
+                method: 'POST',
+                path: rec.httpPath,
+                handler: async (request) => {
+                  const enabled = requireDeps().actionsHttpEnabled?.() ?? false;
+                  if (!enabled) {
+                    return { status: 404, json: { error: 'action http surface is disabled' } };
+                  }
+                  let body: unknown = request.body;
+                  if (typeof body === 'string' && body.length > 0) {
+                    try {
+                      body = JSON.parse(body);
+                    } catch {
+                      return { status: 400, json: { error: 'body 不是合法 JSON' } };
+                    }
+                  }
+                  const check = validateParams(rec.params, body ?? {});
+                  if (!check.ok) {
+                    return { status: 400, json: { error: check.message } };
+                  }
+                  try {
+                    const result = await run(body ?? {}, { caller: { pluginId: id, kind: 'http' } });
+                    return { status: 200, json: result ?? null };
+                  } catch (err) {
+                    logger.error({ pluginId: id, action: rec.action, err: String(err) }, '动作 HTTP 执行失败');
+                    return { status: 500, json: { error: err instanceof Error ? err.message : String(err) } };
+                  }
+                },
+              },
+              phase,
+            );
+          }
+
+          // 兜底：动作记录在插件卸载时清空（disposePlugin 幂等）
+          track(id, () => actionsTable.disposePlugin(id));
+        }
+      },
     },
     methods: {
       handle(name, handler) {
@@ -847,7 +973,8 @@ async function runFacet(
 /**
  * R3：把本插件收集到的反向方法一次性挂到分发表。
  *
- * 插件只写短名（`echo`），**前缀由宿主拼**：`plugin.<pluginId>.echo`。
+ * 插件只写短名（`echo`），**前缀由宿主拼**：`<pluginId>.echo`（去掉了老 IPC 层的
+ * `plugin.` 段 —— 它让同一个动作在 service 与 reverse 上是两个字符串）。
  * 注册表按前缀做准入，所以这里必须拼完整名，否则会被整批判为不合法。
  */
 function flushMethods(plugin: LoadedPlugin): void {
@@ -856,7 +983,7 @@ function flushMethods(plugin: LoadedPlugin): void {
   if (!entry || Object.keys(entry.methods).length === 0) return;
   const prefixed: Record<string, ReverseMethodHandler> = {};
   for (const [name, handler] of Object.entries(entry.methods)) {
-    prefixed[name.startsWith(`plugin.${id}.`) ? name : `plugin.${id}.${name}`] = handler;
+    prefixed[name.startsWith(`${id}.`) ? name : `${id}.${name}`] = handler;
   }
   try {
     requireDeps().registerService(`plugin:${id}`, 'plugin', prefixed);

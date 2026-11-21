@@ -113,7 +113,9 @@ export function createEventsRouter() {
           // session_info_changed is master-internal (consumed to sync sessions.title
           // in index.ts) — not part of the SSE client contract (design D6).
           if (event.event === 'session_info_changed') return;
-          // 插件事件：事件名改写为 `plugin.<id>.<name>`，载荷原样；带硬上限兜底
+          // 插件事件：事件名改写为 `plugin.<id>.<name>`，载荷原样；带硬上限兜底。
+          // 注意：这个 `plugin.` 段**不随方法名迁移**（方法名是 `<id>.<name>`，事件名不是地址，
+          // 带前缀是为了跟平台自身事件在同一条 SSE 流里可区分）。改它会打断前端订阅。
           // （节流责任归插件，平台只保证自己不被拖死）。
           if (event.event === 'plugin_event') {
             const payload = event.data as { pluginId?: string; name?: string; data?: unknown } | undefined;

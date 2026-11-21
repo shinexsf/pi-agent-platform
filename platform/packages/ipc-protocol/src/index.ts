@@ -66,11 +66,19 @@ export type WorkerMethod =
   | 'getSessionResources'
   | 'setSessionName';
 // NOTE: there is deliberately no `pluginEmit` method. A plugin's downlink is its OWN
-// registered method (`plugin.<pluginId>.emit`), so "who can receive this" is answered
+// registered method (`<pluginId>.emit`), so "who can receive this" is answered
 // by the registry instead of by a special-cased platform method.
+//
+// Wire naming (two disjoint spaces, no bare names):
+//   core   → `__core__.<WorkerMethod>`
+//   plugin → `<pluginId>.<name>`
+
+/** Full wire name of a core method. */
+export type CoreMethodFullName = `__core__.${WorkerMethod}`;
 
 export interface CallRequest extends CallEnvelope<'call'> {
-  method: WorkerMethod;
+  /** `CoreMethodFullName` for kernel methods, `<pluginId>.<name>` for plugin ones. */
+  method: string;
 }
 
 export type CallResponseOk = ResponseOkEnvelope<'response'>;
@@ -121,6 +129,32 @@ export interface PluginEventPayload {
  * 形状与 `@pi-agent-platform/plugin-types` 的 `ResolvedPlugin` 对齐；
  * 这里保留独立定义，避免 ipc-protocol 增加运行时依赖。
  */
+/**
+ * 工具元数据（动作描述符的一部分，随 spawn 过线 → worker 自动 `registerTool`）。
+ *
+ * 字段是 pi `ToolDefinition` 的子集：平台担保这几个，其余作者手写工具时自己给。
+ */
+export interface ActionToolSpec {
+  name: string;
+  description: string;
+  /** 缺省 `deferred`（零上下文成本，由 `tool_search` 搜到后激活）。 */
+  exposure?: 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+  /** 分组（`tool_search` 匹配 / codemode 分节）；不参与命名。 */
+  namespace?: string | { name: string; instructions?: string };
+  annotations?: Record<string, unknown>;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+}
+
+/** 一条动作的**工具描述**（纯数据，JSON 可序列化）。 */
+export interface ActionDescriptor {
+  /** 动作短名（不含插件 id 前缀）。 */
+  action: string;
+  /** 入参 JSON Schema。 */
+  params: Record<string, unknown>;
+  tool: ActionToolSpec;
+}
+
 export interface WorkerPluginSpec {
   id: string;
   dir: string;
@@ -128,6 +162,10 @@ export interface WorkerPluginSpec {
   reason?: string;
   extensionPath?: string;
   workerPath?: string;
+  /** 插件自带的 skill 目录（数据目录，不是 facet）。 */
+  skillPaths?: string[];
+  /** 动作工具描述符：worker 据此自动注册工具，`execute` 一律经反向方法回到 handler。 */
+  actions?: ActionDescriptor[];
 }
 
 export type WorkerMessage = CallResponse | WorkerEvent | ReverseCallResponse;
@@ -195,9 +233,37 @@ export type IpcResolveResult =
   | { ok: true; entry: IpcMethodEntry; handler: IpcHandler }
   | { ok: false; error: string };
 
-/** The `plugin.<pluginId>.` prefix every plugin-contributed method must carry. */
+/** The reserved namespace owner: only `source === 'core'` may use it. */
+export const CORE_METHOD_NAMESPACE = '__core__';
+
+/** Full wire name of a core forward method (`__core__.<method>`).
+ *  `WorkerMethod` keeps the SHORT names on purpose: call sites stay readable and the
+ *  prefix is applied in exactly one place (`workerPool.call` / worker registration). */
+export function coreMethodName(name: WorkerMethod): string {
+  return `${CORE_METHOD_NAMESPACE}.${name}`;
+}
+
+/** Full wire name of a plugin-contributed method (`<pluginId>.<name>`).
+ *  Plugins only ever write short names; the prefix is the host's job. */
+export function pluginMethodName(pluginId: string, name: string): string {
+  return `${pluginId}.${name}`;
+}
+
+/** The `<pluginId>.` prefix every plugin-contributed method must carry.
+ *  No `plugin.` segment: that prefix used to live only in IPC and made the same action
+ *  carry two different strings (service vs reverse). */
 export function pluginMethodPrefix(pluginId: string): string {
-  return `plugin.${pluginId}.`;
+  return `${pluginId}.`;
+}
+
+/** Is this name inside the kernel's reserved namespace? */
+export function isReservedMethodName(name: string): boolean {
+  return name.startsWith(`${CORE_METHOD_NAMESPACE}.`);
+}
+
+/** Plugin ids MUST NOT squat the reserved namespace (`__x__`). */
+export function isReservedPluginId(pluginId: string): boolean {
+  return /^__.+__$/.test(pluginId);
 }
 
 /**
@@ -344,15 +410,22 @@ export class IpcMethodRegistry {
     return n;
   }
 
-  /** Built-ins MUST stay unprefixed; plugin methods MUST carry their own id. */
+  /** Two disjoint name spaces, no bare names:
+   *  - `source === 'core'` → MUST live in `__core__.*` (reserved, nobody else may enter)
+   *  - plugin source → MUST live in `<itsOwnId>.*` */
   private checkPrefix(name: string, source: IpcMethodSource): string | undefined {
     if (source === 'core') {
-      return name.startsWith('plugin.') ? `core method '${name}' must not use the 'plugin.' namespace` : undefined;
+      return isReservedMethodName(name)
+        ? undefined
+        : `core method '${name}' must use the reserved namespace '${CORE_METHOD_NAMESPACE}.'`;
+    }
+    if (isReservedMethodName(name)) {
+      return `plugin method '${name}' must not use the reserved namespace '${CORE_METHOD_NAMESPACE}.'`;
     }
     const pluginId = source.slice('plugin:'.length);
     return name.startsWith(pluginMethodPrefix(pluginId))
       ? undefined
-      : `plugin method '${name}' must start with '${pluginMethodPrefix(pluginId)}'`;
+      : `plugin method '${name}' must start with its own id ('${pluginMethodPrefix(pluginId)}')`;
   }
 
   private reject(name: string, source: IpcMethodSource, reason: string): undefined {
@@ -366,7 +439,11 @@ export class IpcMethodRegistry {
 /** Worker → Master: reverse RPC call request — same envelope as `CallRequest`.
  *  `method` is a plain string: the master-side registry is the authority; there is no
  *  fixed method union to keep in sync (design D2/D3). */
-export type ReverseCallRequest = CallEnvelope<'reverse-call'>;
+export interface ReverseCallRequest extends CallEnvelope<'reverse-call'> {
+  /** 调用方插件 id，由 worker 侧 `bridgeFor(pluginId)` 注入 —— 插件代码无法伪造。
+   *  master 用它做归属校验（`reach === 'own'` 的动作只允许 owner 自己调）。 */
+  source: string;
+}
 
 /** Master → Worker: reverse RPC call response — same envelope as `CallResponse`. */
 export type ReverseCallResponse = ResponseEnvelope<'reverse-response'>;
@@ -386,3 +463,4 @@ export interface CreateSessionResult {
    *  Master compares it against sessions.title on load (heal, DB wins). */
   sessionName?: string;
 }
+export * from './action-params.js';

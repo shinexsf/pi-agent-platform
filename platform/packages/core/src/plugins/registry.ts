@@ -400,11 +400,15 @@ export function describePluginState(entry: PluginRegistryEntry): PluginState {
       manifest,
     };
   }
-  if (!Object.values(facets).some(Boolean)) {
+  // "可加载内容"包含**数据目录**：一个只有 `skills/` 的插件（例如 plugin-authoring）
+  // 也是合法的 —— 它的 skill 随 `config.plugins` 生效。完全没有 facet 且没有 skill
+  // 才算坏插件（空目录不该显示成 active，否则"装上了"与"什么都没装"无法区分）。
+  const skillPaths = scanSkillPaths(entry.dir);
+  if (!Object.values(facets).some(Boolean) && skillPaths.length === 0) {
     return {
       ...base,
       status: 'degraded',
-      reason: '没有任何可加载的 facet（server/ worker/ extension/ web/）',
+      reason: '没有任何可加载的 facet 或 skill（server/ worker/ extension/ web/ 与 skills/ 都缺）',
       loadedFacets,
       manifest,
     };

@@ -35,8 +35,9 @@ import type {
   ReverseCallRequest,
   WorkerEvent,
   WorkerEventKind,
+  WorkerMethod,
 } from '@pi-agent-platform/ipc-protocol';
-import { IpcMethodRegistry } from '@pi-agent-platform/ipc-protocol';
+import { coreMethodName, IpcMethodRegistry } from '@pi-agent-platform/ipc-protocol';
 import { coreConfig } from './config.js';
 import { logger } from './logger.js';
 
@@ -108,7 +109,12 @@ export interface WorkerEntry {
   // moved to Session (services/session.ts). WorkerEntry keeps PROCESS facts only.
 }
 
-export type ReverseCallHandler = (sessionId: string, args: unknown[]) => Promise<unknown>;
+export type ReverseCallHandler = (
+  sessionId: string,
+  args: unknown[],
+  /** `source` = 调用方插件 id（来自 IPC 信封，插件无法伪造）。 */
+  meta?: { source?: string },
+) => Promise<unknown>;
 
 /** Registration group for a reverse method source (see `registerService`). */
 export interface ReverseServiceOptions {
@@ -129,6 +135,8 @@ export class WorkerPool extends EventEmitter {
   /** Is this session a placeholder (no DB row)? Domain knowledge injected at
    *  composition time (initSessionRegistry) — pool must not import Session. */
   private hasRowQuery: (sessionId: string) => boolean = () => false;
+  /** 动作可达性（动作契约）：`undefined` = 不是动作方法，不做归属校验。 */
+  private actionReachQuery?: (name: string) => 'own' | 'public' | undefined;
   private nextCallId = 1;
 
   constructor(maxWorkers?: number) {
@@ -175,10 +183,6 @@ export class WorkerPool extends EventEmitter {
         // Platform MCP catalog — the worker reads the definitions from here and registers only
         // the servers the agent selected (change: platform-mcp-catalog).
         PI_SERVER_MCP_CONFIG: coreConfig().mcpConfigPath,
-        // Server-shipped skill dir (change: server-builtin-skills). The worker intersects it with
-        // `config.serverBuiltinSkills` and feeds the hits to pi's `additionalSkillPaths`.
-        // Empty string = nothing bundled (trimmed install) → worker injects nothing.
-        PI_SERVER_BUILTIN_SKILLS_DIR: coreConfig().serverBuiltinSkillsDir ?? '',
       },
       // On Windows, spawning a child from a detached/GUI process would otherwise
       // pop up a new console window for the worker. Hide it; logs still go to
@@ -303,7 +307,7 @@ export class WorkerPool extends EventEmitter {
             // -root wiring bug, so say it loudly once per spawn.
             logger.warn(
               { sessionId },
-              'reverse method registry is EMPTY — worker host calls (plugin.im.sendFile etc.) will fail',
+              'reverse method registry is EMPTY — worker host calls (im.sendFile etc.) will fail',
             );
           }
         }
@@ -381,8 +385,13 @@ export class WorkerPool extends EventEmitter {
     if (!entry) throw new Error(`no worker for session ${sessionId}`);
     if (!entry.ready) throw new Error(`worker not ready for session ${sessionId}`);
 
+    // 名字空间补全的唯一落点：没有点的名字是内核方法（短名，方便调用点可读），
+    // 带点的名字已经是全名（`<pluginId>.<name>` 或调用方显式给的 `__core__.*`）。
+    // 于是"注册表里不存在裸名"由这一行结构性保证，而不是靠 review。
+    const fullName = method.includes('.') ? method : coreMethodName(method as WorkerMethod);
+
     const id = this.nextCallId++;
-    const req: CallRequest = { kind: 'call', id, method: method as never, args };
+    const req: CallRequest = { kind: 'call', id, method: fullName, args };
     return new Promise<T>((resolve, reject) => {
       entry.pendingCalls.set(id, {
         resolve: resolve as (v: unknown) => void,
@@ -489,12 +498,17 @@ export class WorkerPool extends EventEmitter {
     this.hasRowQuery = fn;
   }
 
+  /** 动作可达性查询（动作契约的归属校验）。未接 = 不做校验（无动作时等价）。 */
+  setActionReachQuery(fn: (name: string) => 'own' | 'public' | undefined): void {
+    this.actionReachQuery = fn;
+  }
+
   // ── Reverse IPC: Worker → Master ────────────────────────────────────────
 
   /**
    * Register a whole reverse-method group under one source (design D4: registration is
    * service-level, not one call per method). Names go through the registry, so a plugin
-   * source without its own `plugin.<id>.` prefix is REJECTED here rather than caught later.
+   * source without its own `<id>.` prefix (or core without `__core__.`) is REJECTED here rather than caught later.
    */
   registerService(
     source: IpcMethodSource,
@@ -507,7 +521,10 @@ export class WorkerPool extends EventEmitter {
     // Wrap the sessionId-aware handler into the registry's opaque-ctx shape.
     const wrapped: Record<string, IpcHandler> = {};
     for (const [name, handler] of Object.entries(handlers)) {
-      wrapped[name] = (args, ctx) => handler(ctx as string, args);
+      wrapped[name] = (args, ctx) => {
+        const meta = typeof ctx === 'string' ? { sessionId: ctx } : (ctx as { sessionId: string; source?: string });
+        return handler(meta.sessionId, args, { source: meta.source });
+      };
     }
     const entries = this.reverseRegistry.registerMany(
       source,
@@ -530,11 +547,16 @@ export class WorkerPool extends EventEmitter {
 
   /** Full method picture: master-side reverse table + every live worker's forward table. */
   methodInventory(): {
-    reverse: IpcMethodEntry[];
+    reverse: Array<IpcMethodEntry & { reach?: 'own' | 'public' }>;
     workers: Array<{ sessionId: string; ready: boolean; forward: IpcMethodSummary[] }>;
   } {
     return {
-      reverse: this.reverseRegistry.summary(),
+      // 动作方法补一个 `reach`：排查"别的插件为什么调不通"时，
+      // 光看"方法在表里"不够 —— 还要知道它是不是 `own`（只认 owner）。
+      reverse: this.reverseRegistry.summary().map((e) => {
+        const reach = this.actionReachQuery?.(e.name);
+        return reach ? { ...e, reach } : e;
+      }),
       workers: [...this.workers.values()].map((e) => ({
         sessionId: e.sessionId,
         ready: e.ready,
@@ -556,6 +578,23 @@ export class WorkerPool extends EventEmitter {
     entry: WorkerEntry,
     req: ReverseCallRequest,
   ): Promise<void> {
+    // 归属校验（change: plugin-actions-contract / D6）：动作声明 `scope: 'own'` 时，
+    // 只有自己插件的 worker 能调。报错刻意用 `unknown method`——不泄漏"这个方法存在"。
+    const reach = this.actionReachQuery?.(req.method);
+    const owner = req.method.split('.')[0];
+    if (reach === 'own' && req.source !== owner) {
+      process.stderr.write(
+        `[server] reverse-call ownership denied method=${req.method} source=${req.source} sessionId=${sessionId}\n`,
+      );
+      entry.child.send({
+        kind: 'reverse-response',
+        id: req.id,
+        ok: false,
+        error: { message: `unknown method: ${req.method}` },
+      });
+      return;
+    }
+
     const resolved = this.reverseRegistry.resolve(req.method);
     if (!resolved.ok) {
       entry.child.send({
@@ -570,7 +609,7 @@ export class WorkerPool extends EventEmitter {
       process.stderr.write(`[server] deprecated reverse method called: ${req.method}\n`);
     }
     try {
-      const result = await resolved.handler(req.args, sessionId);
+      const result = await resolved.handler(req.args, { sessionId, source: req.source });
       entry.child.send({ kind: 'reverse-response', id: req.id, ok: true, result });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -4,7 +4,7 @@
 
 import { serve } from '@hono/node-server';
 import { createServerApp } from './app.js';
-import { createHostApi } from './host-api-impl.js';
+import { createHostApi, pluginActionRegistry } from './host-api-impl.js';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import path from 'node:path';
@@ -71,7 +71,6 @@ async function main() {
     attachmentsDir: config.attachmentsDir,
     pluginsDir: config.pluginsDir,
     bundledPluginsDir: config.bundledPluginsDir,
-    serverBuiltinSkillsDir: config.serverBuiltinSkillsDir,
     mcpConfigPath: config.mcpConfigPath,
     workerStartupTimeoutMs: config.workerStartupTimeoutMs,
     workerStopTimeoutMs: config.workerStopTimeoutMs,
@@ -88,11 +87,25 @@ async function main() {
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
   // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
-  // Must init BEFORE any consumer (routes / im-gateway / capabilities) handles a request.
+  // Must init BEFORE any consumer (routes / im-gateway / plugins) handles a request.
   initSessionRegistry({ sessionRepo, agentRepo, workerPool });
 
+  // 动作归属校验（change: plugin-actions-contract）：反向调用带 `source`，
+  // master 用这张表判定 `scope: 'own'` 的动作只允许 owner 自己调。
+  workerPool.setActionReachQuery((name) => pluginActionRegistry().reachOf(name));
+
   // 插件与内核之间唯一稳定缝（四个能力面）；形状在内核，实现在入口。
-  const hostApi = createHostApi({ raw, sessionRepo, workerPool, agentRepo });
+  const hostApi = createHostApi({
+    raw,
+    sessionRepo,
+    workerPool,
+    agentRepo,
+    // 进程事实（`lifecycle.runtime()` 的数据源；插件拿不到 workerPool 句柄）。
+    version: config.version,
+    nodeEnv: config.nodeEnv,
+    port: config.port,
+    maxWorkers: config.maxWorkers,
+  });
   logger.info({ faces: Object.keys(hostApi) }, 'host api ready');
 
   // 装配交给工厂（可被别的进程内嵌），启动器只负责 listen / 信号。

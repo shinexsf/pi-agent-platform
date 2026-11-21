@@ -29,7 +29,15 @@ export interface ServiceInfo {
   owner: string;
 }
 
-export type ServiceHandler = (payload: unknown) => unknown | Promise<unknown>;
+/** 调用方信息：`services.call` 时由宿主填，提供者只读。 */
+export interface ServiceCallerMeta {
+  pluginId: string;
+}
+
+export type ServiceHandler = (
+  payload: unknown,
+  meta: ServiceCallerMeta,
+) => unknown | Promise<unknown>;
 
 interface ProviderEntry {
   name: string;
@@ -90,7 +98,7 @@ export function createPluginServices(): PluginServices {
       const TIMEOUT = Symbol('timeout');
 
       const result = await Promise.race([
-        Promise.resolve().then(() => entry.handler(payload)),
+        Promise.resolve().then(() => entry.handler(payload, { pluginId: callerPluginId })),
         new Promise<typeof TIMEOUT>((resolve) => setTimeout(() => resolve(TIMEOUT), timeoutMs)),
       ]);
 

@@ -310,15 +310,15 @@ export type PluginWebRegister = (host: PluginRegistrationHost) => void | Promise
  * worker facet / extension facet 的桥。
  *
  * 插件**不碰裸 IPC** —— 这个接口就是封装层，它做三件事：
- * 1. **拼前缀**：`registerMethod('emit', h)` 自动注册为 `plugin.<我的 id>.emit`
+ * 1. **拼前缀**：`registerMethod('emit', h)` 自动注册为 `<我的 id>.emit`
  * 2. **解前缀**：分发时刺掉前缀，handler 收到的就是自己注册的名字
  * 3. **限制可调面**：`call` 只能命中反向表（master 侧宿主 API）；
  *    调正向方法名（`prompt` / `createSession`）会被 master 以 `unknown method` 拒掉
  *
  * 方向约定：
  * - `emit`           worker → 浏览器（SSE 的 `plugin_event`，无回执，可丢）
- * - `registerMethod` 浏览器/master → 本插件（`plugin.<id>.<name>`，有回执、有顺序）
- * - `call`           worker → master（`plugin.im.sendFile` 这类反向方法）
+ * - `registerMethod` 浏览器/master → 本插件（`<id>.<name>`，有回执、有顺序）
+ * - `call`           worker → master（`im.sendFile` 这类反向方法）
  * - `log`            插件日志进平台日志（自动带 pluginId）
  *
  * 要回执、要顺序 → 用 `registerMethod` / `call`；可丢、高频 → 用 `emit`。
@@ -330,7 +330,7 @@ export interface PluginWorkerBridge {
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
   /**
    * 注册一个本插件可被调用的方法。`name` 不带前缀（如 `'emit'`）——
-   * 完整名 `plugin.<pluginId>.<name>` 由封装层拼。
+   * 完整名 `<pluginId>.<name>` 由封装层拼。
    *
    * 重名或名字不合法会被拒并记 error 日志，不会静默失败。
    */
@@ -339,7 +339,7 @@ export interface PluginWorkerBridge {
     handler: (params: unknown, ctx: PluginMethodContext) => unknown | Promise<unknown>,
   ): void;
   /**
-   * 调一个反向方法（master 侧宿主 API），如 `call('plugin.im.sendFile', [{ filePath }])`。
+   * 调一个反向方法（master 侧宿主 API），如 `call('im.sendFile', [{ filePath }])`。
    * 只能调反向表里的方法；正向方法名会得到 `unknown method`。
    */
   call?(method: string, args?: unknown[]): Promise<unknown>;
@@ -402,6 +402,19 @@ export interface PluginSessionsApi {
     /** agent 正忙时的处理：`followUp` 排队 / `steer` 插队 / 不传 = pi 报错。 */
     streamingBehavior?: 'steer' | 'followUp';
   }): Promise<void>;
+
+  // ── 会话管理（`admin` 这类插件用；行为与 HTTP 路由同一份实现）──
+  detail(sessionId: string): Promise<(Record<string, unknown> & { workerAlive: boolean }) | null>;
+  find(filter?: {
+    agentId?: string;
+    title?: string;
+    status?: 'active' | 'archived';
+  }): Promise<Array<Record<string, unknown> & { workerAlive: boolean }>>;
+  update(
+    sessionId: string,
+    patch: { title?: string; model?: string; thinkingLevel?: 'off' | 'low' | 'medium' | 'high'; config?: unknown },
+  ): Promise<Record<string, unknown> & { workerAlive: boolean }>;
+  restart(sessionId: string): Promise<{ restarted: true; workerPid: number; historyRestored: true }>;
 }
 
 /** 会话摘要（与内核 `HostSessionSummary` 同形，契约包不依赖内核所以单列一份）。 */
@@ -430,6 +443,15 @@ export interface PluginDbApi {
 export interface PluginLifecycleApi {
   onSessionCreated(hook: (sessionId: string, agentId: string) => void): Disposer;
   onSessionDisposed(hook: (sessionId: string, reason: string) => void): Disposer;
+  /** 进程运行态**快照**（纯数据）。平台不给 `workerPool` 句柄 —— 要信息，不要能力。 */
+  runtime(): {
+    version: string;
+    uptimeMs: number;
+    nodeEnv: string;
+    port: number;
+    pid: number;
+    workers: { active: number; placeholders: number; max: number; pendingCalls: number };
+  };
 }
 
 /** 事件出口：仅 worker 侧可发（worker → server → SSE），无回执、可丢。 */
@@ -530,7 +552,7 @@ export interface PluginMethodContext {
 /** 方法注册面：R3（server 侧反向方法）/ R5（worker 侧正向方法）同形。 */
 export interface PluginMethodsApi {
   /**
-   * `name` 不带前缀；完整名 `plugin.<pluginId>.<name>` 由宿主拼。重名直接拒。
+   * `name` 不带前缀；完整名 `<pluginId>.<name>` 由宿主拼。重名直接拒。
    *
    * `params` 是调用方的**第一个参数**（约定：一个 params 对象，不玩多参），
    * `ctx.sessionId` 由分发侧填 —— 插件不需要自己维护"这次是哪个会话"。
@@ -569,19 +591,112 @@ export interface PluginHost {
  * 与 `host.methods`（面 worker 的私有反向方法）互不相干：这里没有 `sessionId`。
  */
 export interface PluginServicesApi {
-  /** 声明服务。名字 MUST 是 `<插件 id>.<资源>.<动作>`；同名重复注册会被拒。 */
-  provide(name: string, handler: (payload: unknown) => unknown | Promise<unknown>): { ok: boolean; reason?: string };
+  /** 声明服务。名字 MUST 是 `<插件 id>.<资源>.<动作>`；同名重复注册会被拒。
+   *  `meta.pluginId` = 调用方插件 id（由宿主填，被调方无法伪造）。 */
+  provide(
+    name: string,
+    handler: (payload: unknown, meta: { pluginId: string }) => unknown | Promise<unknown>,
+  ): { ok: boolean; reason?: string };
   /** 定向调用：返回业务数据；无提供者/超时/提供者抛错都会抛给调用方。 */
   call(name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
   /** 目录：全部已提供的服务（其他插件可据此发现能力）。 */
   list(): Array<{ name: string; owner: string }>;
 }
 
-/** server 装载点的宿主（比通用宿主多三个注册面）。 */
+/**
+ * pi 的工具暴露级别（pi 1.3.0 原生字段，平台原样透传）。
+ *
+ * - `direct`：直接进模型工具表（默认）
+ * - `model-only` / `codemode`：只给模型，不进 UI 列表
+ * - `deferred`：**不进上下文**，由 `tool_search` 搜到后按需激活（零上下文成本）
+ * - `hidden`：不给模型（平台内部工具）
+ */
+export type PluginToolExposure = 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden';
+
+/**
+ * 手写工具时用的工具定义形状（与 pi 的 `ToolDefinition` 对齐，只取平台担保的部分）。
+ *
+ * 为什么平台要重声明：插件手抄 pi 的 7 行 6 字段结构时字段太少，
+ * **结构上写不进 `exposure`** —— 于是"deferred 工具零上下文成本"这个能力用不上。
+ */
+export interface PluginToolDefinition {
+  /** 工具名（缺省由动作名派生；与其它工具重名时平台不注册、只 warn）。 */
+  name?: string;
+  description: string;
+  /** JSON Schema（与动作 `params` 同一个对象）。 */
+  parameters?: Record<string, unknown>;
+  exposure?: PluginToolExposure;
+  /** 分组（`tool_search` 匹配 + codemode 分节用；不参与命名）。 */
+  namespace?: string | { name: string; instructions?: string };
+  annotations?: Record<string, unknown>;
+  /** 提示词片段。`exposure === 'deferred'` 时 MUST NOT 配（会破前缀缓存）。 */
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+}
+
+/** 动作的 `tool` 暴露声明：工具元数据（名字可由平台派生）。 */
+export interface PluginActionToolExposure extends Omit<PluginToolDefinition, 'name' | 'parameters'> {
+  /** 覆盖派生出来的工具名；缺省 `<pluginId>__<action 点→下划线>`。 */
+  name?: string;
+}
+
+/** 动作的 HTTP 暴露声明。MUST 是对象（布尔被拒）：暴露面要有地址。 */
+export interface PluginActionHttpExposure {
+  /** 子路径（相对 `/api/p/<pluginId>`，以 `/` 开头）；缺省由动作名推导。 */
+  path?: string;
+}
+
+/** 动作 handler 的上下文。 */
+export interface PluginActionContext {
+  /** 调用方所属的会话（HTTP 面为 undefined）。跨插件调用时对目标插件通常无意义。 */
+  sessionId?: string;
+  /** 调用方身份（同一进程内可信，由平台填）。 */
+  caller?: { pluginId: string; kind: 'worker' | 'plugin' | 'http' };
+}
+
+/**
+ * 一份 handler + 五个**独立**的暴露字段。
+ *
+ * | 字段 | 谁会看到 | 缺省 |
+ * |---|---|---|
+ * | `reverse` | 自己插件的 worker（`<id>.<action>` 反向方法） | `true` |
+ * | `scope` | 只约束 `reverse` 的调用来源（`own` = 只有自己） | `'own'` |
+ * | `service` | 别的插件的 server facet（`host.services`） | `false` |
+ * | `tool` | 模型（pi 工具） | `null` |
+ * | `http` | 外部客户端（`POST /api/p/<id>/<path>`） | `null` |
+ *
+ * 默认值的判据：**漏了会静默坏的面默认开，漏了会明确报错的面默认关**。
+ * 约束：`tool` 存在 ⇒ `reverse !== false`（工具在 worker 跑，必须经反向方法）；
+ * `http` 不依赖 reverse（它直接在主进程调 handler）。
+ */
+export interface PluginActionDefinition {
+  /** 入参 JSON Schema（工具/HTTP 面必填；反向与 service 可选）。 */
+  params?: Record<string, unknown>;
+  handler: (params: unknown, ctx: PluginActionContext) => unknown | Promise<unknown>;
+  reverse?: boolean;
+  scope?: 'own' | 'public';
+  service?: boolean;
+  tool?: PluginActionToolExposure | null;
+  http?: PluginActionHttpExposure | null;
+}
+
+/** 动作注册面（server facet）。 */
+export interface PluginActionsApi {
+  /**
+   * 声明一组动作。校验失败**整批不注册**并抛错（不做部分注册）。
+   *
+   * 一次调用产生最多四个互相独立的投影：反向方法 / service / 工具描述符 / HTTP 路由。
+   */
+  define(actions: Record<string, PluginActionDefinition>): void;
+}
+
+/** server 装载点的宿主（比通用宿主多四个注册面）。 */
 export interface PluginServerHost extends PluginHost {
   readonly ui: PluginUiApi;
   readonly http: PluginHttpApi;
   readonly methods: PluginMethodsApi;
+  /** 一份 handler → 五个暴露字段（反向 / service / tool / http）。 */
+  readonly actions: PluginActionsApi;
 }
 
 /** worker 装载点的宿主。 */

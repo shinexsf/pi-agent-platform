@@ -13,8 +13,8 @@
 
 import { Hono } from 'hono';
 import type { WorkerPool } from '@pi-agent-platform/core';
-import type { PluginInteropResponse } from '@pi-agent-platform/api-types';
-import { pluginInteropSnapshot } from '../host-api-impl.js';
+import type { PluginActionsResponse, PluginInteropResponse } from '@pi-agent-platform/api-types';
+import { pluginActionSnapshot, pluginInteropSnapshot } from '../host-api-impl.js';
 
 export function createRuntimeMethodsRouter(workerPool: WorkerPool): Hono {
   const app = new Hono();
@@ -36,5 +36,18 @@ export function createInteropRouter(): Hono {
     const body: PluginInteropResponse = pluginInteropSnapshot();
     return c.json(body);
   });
+  return app;
+}
+
+/**
+ * `GET /api/runtime/actions` —— 动作目录。
+ *
+ * 一条动作可能同时出现在四个面上（反向方法 / service / 工具 / HTTP 路由），
+ * 这一处把这些面**按动作**并排给出：`scope` 说"谁能调"，`hasTool` / `http` 说"暴露到哪"。
+ * 排查"模型为什么没有这个工具"看这里，而不是猜 pi 的注册表。
+ */
+export function createActionsRouter(): Hono {
+  const app = new Hono();
+  app.get('/', (c) => c.json({ actions: pluginActionSnapshot() } as PluginActionsResponse));
   return app;
 }

@@ -48,8 +48,6 @@ function emptyTarget(): TemplateTargetConfig {
       enabled: BASE_AGENT_CONFIG.mcp.enabled === true,
       servers: [...BASE_AGENT_CONFIG.mcp.servers],
     },
-    serverBuiltinSkills: [...BASE_AGENT_CONFIG.serverBuiltinSkills],
-    capabilities: null,
     extensions: [...BASE_AGENT_CONFIG.extensions],
     plugins: [...BASE_AGENT_CONFIG.plugins],
     skills: [...BASE_AGENT_CONFIG.skills],
@@ -64,12 +62,7 @@ function toTarget(t: AgentTemplateDTO): TemplateTargetConfig {
       enabled: t.config.mcp?.enabled === true,
       servers: [...(t.config.mcp?.servers ?? [])],
     },
-    serverBuiltinSkills: [...(t.config.serverBuiltinSkills ?? [])],
     plugins: [...(t.config.plugins ?? [])],
-    capabilities:
-      t.config.capabilities === null || t.config.capabilities === undefined
-        ? null
-        : [...t.config.capabilities],
     extensions: [...(t.config.extensions ?? [])],
     skills: [...(t.config.skills ?? [])],
     prompts: [...(t.config.prompts ?? [])],

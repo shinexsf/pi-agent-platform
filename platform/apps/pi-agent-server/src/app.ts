@@ -20,12 +20,12 @@ import { createConfigRouter } from './routes/config.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createPluginsRouter } from './routes/plugins.js';
 import { createExtensionsRouter, createPluginDispatcherRouter } from './routes/plugin-runtime.js';
-import { recordPluginMigration } from './host-api-impl.js';
+import { pluginActionRegistry, recordPluginMigration } from './host-api-impl.js';
 import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
 import { startPluginRuntime } from '@pi-agent-platform/core';
 import { createServerLogsRouter } from './routes/server-logs.js';
-import { createInteropRouter, createRuntimeMethodsRouter } from './routes/runtime-methods.js';
+import { createActionsRouter, createInteropRouter, createRuntimeMethodsRouter } from './routes/runtime-methods.js';
 import { startTimeoutScanner } from '@pi-agent-platform/core';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { existsSync } from 'node:fs';
@@ -88,7 +88,7 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   app.route('/api/plugins', createPluginsRouter({ pluginsDir: config.pluginsDir, agentDir: config.agentDir }));
   app.route('/api/sessions', createSessionPluginsRouter({ workerPool, agentRepo, sessionRepo }));
   // 通知收件箱已下沉为 bundled 插件 `notifications`（change: plugin-mechanism-v2 之后第一块）：
-  // 表、端点（`/api/p/notifications/*`）、反向方法 `plugin.notifications.post` 都归它。
+  // 表、端点（`/api/p/notifications/*`）、反向方法 `notifications.post` 都归它。
   // 入口侧不再认识"通知"这个概念 —— 插件被禁用时入口零影响。
   // 运行期扩展点（注册式）：全局菜单/页面 + 插件端点分发器
   app.route(
@@ -107,6 +107,9 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   // 运行期句柄（reload 走这条，不重启 server）
   const pluginRuntime = startPluginRuntime(config.pluginsDir, {
     host: hostApi,
+    // 动作契约：登记表由组合根持有，投影由 buildHost() 完成。
+    actions: pluginActionRegistry(),
+    actionsHttpEnabled: () => config.actionHttpEnabled,
     // R3：插件注册的反向方法挂到 worker→master 分发表（内核不暴露 WorkerPool）。
     registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
     // R4：迁移台账（卸载时提示"留下的表"）。
@@ -117,51 +120,17 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   app.route('/api/server-logs', createServerLogsRouter());
   // IPC 方法清单（注册表的可观测面；只读诊断）
   app.route('/api/runtime/methods', createRuntimeMethodsRouter(workerPool));
+  // 动作目录（一份 handler 的暴露面：reverse / service / tool / http）
+  app.route('/api/runtime/actions', createActionsRouter());
   // 插件间目录（topic + service）：广播与定向调用并排可见，但仍是两条派发
   app.route('/api/runtime/interop', createInteropRouter());
-
-  // Capability control plane — SINGLE entry for all server-management abilities
-  // exposed to agents via the callServer tool (register → dispatch → authorize → audit).
-  const { registerAllCapabilities, installControlPlane } = await import('@pi-agent-platform/core');
-  registerAllCapabilities({
-    agentRepo,
-    sessionRepo,
-    workerPool,
-    serverOpts: { nodeEnv: config.nodeEnv, port: config.port, maxWorkers: config.maxWorkers },
-  });
-  installControlPlane({
-    agentRepo,
-    sessionRepo,
-    workerPool,
-    registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
-  });
-  // Read-only capability metadata for the WebUI agent editor (capabilities 授权
-  // checkbox list). Registry is the single source of truth — the UI never
-  // hardcodes method names. Production endpoint (read-only, no secrets),
-  // distinct from /debug/capabilities (dev-only, adds policy + invoke).
-  const { listCapabilities: listCaps, CAPABILITY_MODULES: CAP_MODULES } = await import('@pi-agent-platform/core');
-  app.get('/api/capabilities', (c) =>
-    c.json({
-      modules: CAP_MODULES.map((m) => ({
-        module: m,
-        capabilities: listCaps(m).map((d) => ({
-          method: d.method,
-          access: d.access,
-          scoped: d.scoped,
-          summary: d.summary,
-        })),
-      })),
-    }),
-  );
 
   // Debug routes (dev/test only) — dynamic import so production never loads
   // debug code (incl. /debug/db raw SQL). See doc: pi-agent-server_debug-testing.md.
   if (config.isDev) {
     const { createDebugRouter } = await import('./routes/debug.js');
     app.route('/debug', createDebugRouter(workerPool, sessionRepo, db, agentRepo));
-    const { createCapabilityDebugRouter } = await import('./routes/capabilities-debug.js');
-    app.route('/debug/capabilities', createCapabilityDebugRouter(agentRepo, sessionRepo, workerPool));
-    logger.info('debug routes mounted at /debug (incl. /debug/capabilities)');
+    logger.info('debug routes mounted at /debug');
   } else {
     logger.info('debug routes disabled (production mode)');
   }

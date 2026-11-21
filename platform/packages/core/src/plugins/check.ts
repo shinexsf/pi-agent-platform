@@ -111,8 +111,16 @@ export function checkPluginDir(dir: string): PluginCheckResult {
       `契约版本不匹配：插件声明 ${manifest.apiVersion}，平台要求 ${PLUGIN_API_VERSION}`,
     );
   }
-  if (facets.length === 0) {
-    push('error', 'no-facet', '没有声明任何装载点（server/ worker/ extension/ web/ 都缺）');
+  // `skills/` 是**数据目录**，不是装载点，但它让插件有存在意义（纯 skill 插件合法）。
+  // 所以只有当"既没 facet 也没 skills"时才算坏插件。
+  const hasPluginsSkills = existsSync(path.join(absDir, 'skills'))
+    && readdirSync(path.join(absDir, 'skills'), { withFileTypes: true }).some((d) => d.isDirectory());
+  if (facets.length === 0 && !hasPluginsSkills) {
+    push(
+      'error',
+      'no-facet',
+      '没有声明任何装载点，也没有 skills/（server/ worker/ extension/ web/ 与 skills/ 都缺）',
+    );
   }
 
   // ── 每个声明 facet 的入口存在性 + 说明符 ──

@@ -350,9 +350,9 @@ export function createChannelHostImpl(deps: Deps) {
   // ── Reverse call handlers (worker → master RPC) ────────────────────────────
   deps.workerPool.registerService(
     'plugin:im',
-    { kind: 'plugin', descriptions: { 'plugin.im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
+    { kind: 'plugin', descriptions: { 'im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
     {
-      'plugin.im.sendFile': async (sessionId, args) => {
+      'im.sendFile': async (sessionId, args) => {
         const [params] = args as [{ filePath: string; fileName?: string; caption?: string }];
         // 调用方身份由注册表 ctx 传入（不再由 worker 在 args 里带 sessionId）。
         const meta = getSessionMeta(sessionId);

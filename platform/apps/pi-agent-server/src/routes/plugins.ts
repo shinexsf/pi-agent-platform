@@ -15,7 +15,7 @@ import {
   toPluginEntryDTO,
 } from '@pi-agent-platform/core';
 import { getPluginExtensions } from '@pi-agent-platform/core';
-import { pluginInteropFor } from '../host-api-impl.js';
+import { pluginActionsOf, pluginInteropFor } from '../host-api-impl.js';
 export interface PluginsRouterDeps {
   pluginsDir: string;
   /** pi 的 agent 目录（判定依赖安装时读它的 `settings.json` 与 `npm/node_modules`）。 */
@@ -66,6 +66,9 @@ export function createPluginsRouter(deps: PluginsRouterDeps): Hono {
       pluginId: id,
       extensions: getPluginExtensions(id),
       interop: pluginInteropFor(id),
+      // 动作面与 interop 并列：同一个插件声明了什么 topic/service/动作，
+      // 页面一处能看全（否则排查"模型为什么没有这个工具"要跨三个端点）。
+      actions: pluginActionsOf(id),
     };
     return c.json(body);
   });

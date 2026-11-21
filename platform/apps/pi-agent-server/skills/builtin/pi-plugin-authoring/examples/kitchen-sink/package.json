@@ -1,9 +1,0 @@
-{
-  "name": "demo-kitchen-sink",
-  "version": "0.1.0",
-  "type": "module",
-  "description": "扩展点全景示例：会话槽位 / 工具卡片 / 触发器来源 / 进程内触发 / worker 与 extension facet",
-  "piServer": {
-    "apiVersion": "1"
-  }
-}

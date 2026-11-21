@@ -36,8 +36,6 @@ const CLI_DIR = path.join(PLATFORM_DIR, 'packages', 'cli'); // <repo>/platform/p
 const CLI_DIST = path.join(CLI_DIR, 'dist');
 const SERVER_DIST = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'dist');
 const SERVER_PUBLIC = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'public');
-/** 平台随包 skill（change: server-builtin-skills）——tsc 不搬 .md，必须显式复制 */
-const SERVER_SKILLS = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'skills');
 const WORKER_DIST = path.join(PLATFORM_DIR, 'workers', 'session-worker', 'dist');
 const CHANNELS_DIR = path.join(PLATFORM_DIR, 'channels');
 const MANIFEST = path.join(CHANNELS_DIR, 'manifest.json');
@@ -232,19 +230,6 @@ async function main() {
     } else {
       log(`  skip (not found): ${src}`);
     }
-  }
-
-  log('step 6b/10: copy server builtin skills to cli/dist/server/skills');
-  if (existsSync(SERVER_SKILLS)) {
-    const skillsDst = path.join(CLI_DIST, 'server', 'skills');
-    cpSync(SERVER_SKILLS, skillsDst, {
-      recursive: true,
-      // 打包不搬示例里的 node_modules（当前没有，但别让将来长出来）
-      filter: (src) => !src.split(/[\\/]/).includes('node_modules'),
-    });
-    log(`  copied ${SERVER_SKILLS} → ${skillsDst}`);
-  } else {
-    log(`  skip (not found): ${SERVER_SKILLS}`);
   }
 
   log('step 7/10: copy worker dist to cli/dist/worker');

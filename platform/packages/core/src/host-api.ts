@@ -44,7 +44,8 @@ export interface HostSessionSummary {
 /** 会话能力面 —— 插件对"某个会话做一件事"的唯一入口。 */
 export interface HostSessionsApi {
   /**
-   * 调一个方法。`prompt` / `abort` 这类平台方法名前带 `plugin.<id>.` 的是插件自己的。
+   * 调一个方法。`prompt` / `abort` 是内核方法（线上名 `__core__.prompt`，短名由 `call` 补全）；
+   * 带点的名字（`<pluginId>.<name>`）由插件自己注册。
    *
    * `sessionId` **永远由调用方给**：宿主不提供"选会话"语义，会话映射归插件自己维护。
    * 注意：这条路径是**裸 worker 方法调用**，不过 prompt-resolver（斜杠命令 / 附件占位符）。
@@ -74,6 +75,23 @@ export interface HostSessionsApi {
    * 标签名 / 属性里。**返回即"送到"**：不等待 agent 跑完，也不判断它干得怎么样。
    */
   systemEvent(input: HostSystemEventInput): Promise<void>;
+
+  // ── 会话管理（admin 类插件用：原 capabilities 的行为搬到这里）──
+  //
+  // 为什么这些方法在宿主面而不是让插件自己拼：它们各自跨了 worker + DB 两处
+  // （model/thinkingLevel 要 IPC+DB 双写、restart 要 kill+respawn、title 要走共享改名语义）。
+  // 插件只有 `db.query`，自己拼就会漏掉"worker 活着时立即生效"那一半。
+  /** 完整会话行（含 config）+ worker 存活标记；不存在返回 null。 */
+  detail(sessionId: string): (SessionDTO & { workerAlive: boolean }) | null;
+  /** 组合过滤（AND）：`agentId` 精确 / `title` 子串 / `status`。 */
+  find(filter?: { agentId?: string; title?: string; status?: 'active' | 'archived' }): Array<SessionDTO & { workerAlive: boolean }>;
+  /** 局部更新。生效时机与 HTTP 路由完全一致（同一份实现）。 */
+  update(
+    sessionId: string,
+    patch: { title?: string; model?: string; thinkingLevel?: 'off' | 'low' | 'medium' | 'high'; config?: AgentConfig },
+  ): Promise<SessionDTO & { workerAlive: boolean }>;
+  /** 优雅 kill → 立即重建并复用 `piSessionPath`。busy 时抛错（不 kill）。 */
+  restart(sessionId: string): Promise<{ restarted: true; workerPid: number; historyRestored: true }>;
 }
 
 /** `sessions.ensure` 入参。 */
@@ -155,7 +173,7 @@ export interface HostServicesApi {
   provide(
     pluginId: string,
     name: string,
-    handler: (payload: unknown) => unknown | Promise<unknown>,
+    handler: (payload: unknown, meta: { pluginId: string }) => unknown | Promise<unknown>,
   ): { ok: boolean; reason?: string };
   call(
     callerPluginId: string,
@@ -168,6 +186,29 @@ export interface HostServicesApi {
   disposePlugin(pluginId: string): void;
 }
 
+/**
+ * 动作面（一份 handler + 五个暴露字段）—— 注册表形态，带 owner 的 `pluginId`。
+ *
+ * 这里只做「校验 + 记账」：反向方法 / service / 工具描述符 / HTTP 路由这四类产物由
+ * `plugin-extensions.ts` 的 `buildHost()` 投影（它已经持有那三张表）。
+ */
+export interface HostActionsApi {
+  /** 登记一组动作；任何一条不合法 → 整批不登记并返回错误。 */
+  define(pluginId: string, actions: Record<string, PluginActionDefinition>): DefineResult;
+  /** 全名（`<pluginId>.<action>`）→ 记录。 */
+  resolve(name: string): ActionRecord | undefined;
+  /** 全名 → 可达性（`own` / `public`），worker-pool 的归属校验用。 */
+  reachOf(name: string): ActionReach | undefined;
+  /** 给 worker 的工具描述符（按会话启用的插件过滤）。 */
+  descriptorsFor(pluginIds: readonly string[]): ActionToolDescriptor[];
+  descriptorsOf(pluginId: string): ActionToolDescriptor[];
+  list(): ActionInfo[];
+  listOf(pluginId: string): ActionInfo[];
+  disposePlugin(pluginId: string): void;
+  count(): number;
+  clear(): void;
+}
+
 /** agent 配置能力面。 */
 export interface HostAgentsApi {
   list(): AgentDTO[];
@@ -176,10 +217,24 @@ export interface HostAgentsApi {
   update(agentId: string, patch: Partial<Omit<AgentDTO, 'id' | 'createdAt'>>): void;
 }
 
-/** 生命周期钩子（会话创建 / 终结）。 */
+/** 生命周期钩子（会话创建 / 终结）+ 只读运行态快照。 */
 export interface HostLifecycleApi {
   onSessionCreated(hook: (sessionId: string, agentId: string) => void): () => void;
   onSessionDisposed(hook: (sessionId: string, reason: string) => void): () => void;
+  /**
+   * 进程运行态**快照**（纯数据：版本 / uptime / 端口 / worker 池统计）。
+   *
+   * 为什么不给 `workerPool` 句柄：插件需要的是"现在几个 worker 在跑"，不是"能 kill 谁"。
+   * 句柄一给，`host` 就不再是"唯一通道"（见 invariant：插件不得拿资源管理器）。
+   */
+  runtime(): {
+    version: string;
+    uptimeMs: number;
+    nodeEnv: string;
+    port: number;
+    pid: number;
+    workers: { active: number; placeholders: number; max: number; pendingCalls: number };
+  };
 }
 
 import type {
@@ -189,6 +244,15 @@ import type {
   TopicInfo,
 } from './services/event-bus.js';
 import type { ServiceInfo } from './services/plugin-services.js';
+import type {
+  ActionInfo,
+  ActionReach,
+  ActionRecord,
+  ActionToolDescriptor,
+  DefineResult,
+} from './services/plugin-actions.js';
+import type { PluginActionDefinition } from '@pi-agent-platform/plugin-types';
+import type { AgentConfig, SessionDTO } from '@pi-agent-platform/shared-types';
 
 /**
  * 入口实现的宿主能力面（注册表形态，所有方法带调用方/声明方的 `pluginId`）。
@@ -205,4 +269,6 @@ export interface HostApi {
   readonly bus: HostBusApi;
   /** 插件间协作：**定向调用**（恰好一个提供者、返回业务数据）。 */
   readonly services: HostServicesApi;
+  /** 动作登记表：一份 handler → 反向 / service / tool / http 四个投影。 */
+  readonly actions: HostActionsApi;
 }

@@ -15,6 +15,8 @@ import {
   childLogger,
   createPluginBus,
   createPluginServices,
+  renameSession,
+  pluginActions as pluginActionsSingleton,
   sessionRegistry,
   systemEventPromptOptions,
 } from '@pi-agent-platform/core';
@@ -24,6 +26,11 @@ const logger = childLogger('host-api');
 
 export interface HostApiDeps {
   raw: Database.Database;
+  /** 进程事实（`lifecycle.runtime()` 用）：版本 / 环境 / 端口 / 池上限。 */
+  version: string;
+  nodeEnv: string;
+  port: number;
+  maxWorkers: number;
   sessionRepo: SessionRepo;
   workerPool: WorkerPool;
   agentRepo: {
@@ -64,6 +71,19 @@ const pluginBus = createPluginBus();
 /** 插件间定向调用注册表（恰好一个提供者 / 返回业务数据）。 */
 const pluginServices = createPluginServices();
 
+/**
+ * 动作登记表：**内核单例**（`pluginActions()`），这里只是取个本地名字。
+ *
+ * 不能在这里 `createPluginActions()` 新建一个 —— spawn 前的会话装配在 `core` 里读同一张表，
+ * 两个实例的症状是"插件声明了动作，但 worker 永远收不到工具描述符"。
+ */
+const pluginActions = pluginActionsSingleton();
+
+/** 动作登记表单例（组合根共享给 spawn 逻辑与插件运行期）。 */
+export function pluginActionRegistry(): typeof pluginActions {
+  return pluginActions;
+}
+
 /** 当前订阅数（验收用：插件卸载后必须归零）。 */
 export function pluginEventSubscriberCount(): number {
   return pluginBus.subscriberCount();
@@ -80,6 +100,16 @@ export function pluginInteropFor(pluginId: string): {
   services: ReturnType<typeof pluginServices.listOf>;
 } {
   return { topics: pluginBus.topicsOf(pluginId), services: pluginServices.listOf(pluginId) };
+}
+
+/** 动作目录（`GET /api/runtime/actions`）。 */
+export function pluginActionSnapshot(): ReturnType<typeof pluginActions.list> {
+  return pluginActions.list();
+}
+
+/** 某插件的动作（目录页附带）。 */
+export function pluginActionsOf(pluginId: string): ReturnType<typeof pluginActions.listOf> {
+  return pluginActions.listOf(pluginId);
 }
 
 /** 目录快照（查询面 / 诊断用）。 */
@@ -158,6 +188,89 @@ export function createHostApi(deps: HostApiDeps): HostApi {
           systemEventPromptOptions(input.streamingBehavior),
         ]);
       },
+
+      // ── 会话管理（原 capabilities/handlers/session.ts 的行为，逐条搬过来）──
+      detail(sessionId) {
+        const row = deps.sessionRepo.get(sessionId);
+        if (!row) return null;
+        return { ...row, workerAlive: deps.workerPool.has(sessionId) };
+      },
+      find(filter) {
+        let rows = deps.sessionRepo.list(filter?.agentId);
+        if (filter?.title) {
+          const q = filter.title.toLowerCase();
+          rows = rows.filter((r) => (r.title ?? '').toLowerCase().includes(q));
+        }
+        if (filter?.status) rows = rows.filter((r) => r.status === filter.status);
+        return rows.map((r) => ({ ...r, workerAlive: deps.workerPool.has(r.id) }));
+      },
+      async update(sessionId, patch) {
+        const existing = deps.sessionRepo.get(sessionId);
+        if (!existing) throw Object.assign(new Error(`Session not found: ${sessionId}`), { name: 'NotFoundError' });
+
+        // title → 共享改名语义（与 HTTP 路由同一份实现）
+        if (patch.title !== undefined) {
+          const t = patch.title.trim();
+          if (t.length > 200) throw new Error('Title too long (max 200 chars)');
+          await renameSession({ sessionRepo: deps.sessionRepo, workerPool: deps.workerPool }, sessionId, t || undefined);
+        }
+
+        // model → worker 活着时立即生效（IPC + 运行态缓存 + DB），死了只写 DB
+        if (patch.model !== undefined) {
+          const slashIdx = patch.model.indexOf('/');
+          if (slashIdx <= 0 || !patch.model.slice(slashIdx + 1)) {
+            throw new Error(`Invalid model format (expected provider/modelId): ${patch.model}`);
+          }
+          if (deps.workerPool.has(sessionId)) {
+            const provider = patch.model.slice(0, slashIdx);
+            const modelId = patch.model.slice(slashIdx + 1);
+            await deps.workerPool.call(sessionId, 'setModel', [provider, modelId]);
+            const live = sessionRegistry().get(sessionId);
+            if (live) live.model = { provider, modelId };
+          }
+          deps.sessionRepo.update(sessionId, { model: patch.model });
+        }
+
+        if (patch.thinkingLevel !== undefined) {
+          const VALID = ['off', 'low', 'medium', 'high'] as const;
+          if (!VALID.includes(patch.thinkingLevel)) {
+            throw new Error(`Invalid thinkingLevel (must be one of ${VALID.join(', ')})`);
+          }
+          if (deps.workerPool.has(sessionId)) {
+            await deps.workerPool.call(sessionId, 'setThinkingLevel', [patch.thinkingLevel]);
+            const live = sessionRegistry().get(sessionId);
+            if (live) live.thinkingLevel = patch.thinkingLevel;
+          }
+          deps.sessionRepo.update(sessionId, { thinkingLevel: patch.thinkingLevel || undefined });
+        }
+
+        // config.* → 只写 DB（完全快照语义：下次 spawn 生效）
+        if (patch.config !== undefined) {
+          deps.sessionRepo.update(sessionId, { config: patch.config });
+        }
+
+        return { ...deps.sessionRepo.get(sessionId)!, workerAlive: deps.workerPool.has(sessionId) };
+      },
+      async restart(sessionId) {
+        const existing = deps.sessionRepo.get(sessionId);
+        if (!existing) throw Object.assign(new Error(`Session not found: ${sessionId}`), { name: 'NotFoundError' });
+        const agent = deps.agentRepo.get(existing.agentId);
+        if (!agent) throw new Error(`Agent not found for session: ${existing.agentId}`);
+
+        // busy 检查：有在飞的 master→worker 调用 ⇒ 一轮正在跑 ⇒ 拒绝（MUST NOT kill）
+        const entry = deps.workerPool.get(sessionId);
+        if (entry && entry.pendingCalls.size > 0) {
+          throw new Error('Session busy (turn in progress) — retry later');
+        }
+
+        if (deps.workerPool.has(sessionId)) {
+          await deps.workerPool.kill(sessionId, 'admin-restart');
+        }
+        // respawn 复用 piSessionPath 恢复历史；sessions 行与渠道映射都不碰
+        await sessionRegistry().getOrCreate(sessionId, agent);
+        const newEntry = deps.workerPool.get(sessionId);
+        return { restarted: true as const, workerPid: newEntry?.workerPid ?? -1, historyRestored: true as const };
+      },
     },
 
     bus: {
@@ -168,6 +281,19 @@ export function createHostApi(deps: HostApiDeps): HostApi {
       topics: () => pluginBus.topics(),
       topicsOf: (pluginId) => pluginBus.topicsOf(pluginId),
       disposePlugin: (pluginId) => pluginBus.disposePlugin(pluginId),
+    },
+
+    actions: {
+      define: (pluginId, actions) => pluginActions.define(pluginId, actions),
+      resolve: (name) => pluginActions.resolve(name),
+      reachOf: (name) => pluginActions.reachOf(name),
+      descriptorsFor: (pluginIds) => pluginActions.descriptorsFor(pluginIds),
+      descriptorsOf: (pluginId) => pluginActions.descriptorsOf(pluginId),
+      list: () => pluginActions.list(),
+      listOf: (pluginId) => pluginActions.listOf(pluginId),
+      disposePlugin: (pluginId) => pluginActions.disposePlugin(pluginId),
+      count: () => pluginActions.count(),
+      clear: () => pluginActions.clear(),
     },
 
     services: {
@@ -190,6 +316,23 @@ export function createHostApi(deps: HostApiDeps): HostApi {
     lifecycle: {
       onSessionCreated: (hook) => sessionRegistry().onSessionCreated(hook),
       onSessionDisposed: (hook) => sessionRegistry().onSessionDisposed(hook),
+      // 只读运行态快照：数据而不是句柄（插件拿不到 workerPool）。
+      runtime() {
+        const list = deps.workerPool.list();
+        return {
+          version: deps.version,
+          uptimeMs: Math.round(process.uptime() * 1000),
+          nodeEnv: deps.nodeEnv,
+          port: deps.port,
+          pid: process.pid,
+          workers: {
+            active: list.filter((w) => w.hasRow).length,
+            placeholders: list.filter((w) => !w.hasRow).length,
+            max: deps.maxWorkers,
+            pendingCalls: list.reduce((n, w) => n + w.pendingCalls, 0),
+          },
+        };
+      },
     },
   };
 }

@@ -32,19 +32,16 @@ export * from './services/session-ops.js';
 export * from './services/attachment-store.js';
 export * from './services/extension-utils.js';
 export * from './services/plugins.js';
-export * from './services/server-builtin-skills.js';
 export * from './prompt-resolver.js';
 export * from './slash-commands.js';
 
 // ── 能力控制面 ──
-export * from './capabilities/index.js';
-export * from './capabilities/registry.js';
-export * from './capabilities/authorize.js';
 
 // ── 插件宿主 ──
 export * from './services/plugin-extensions.js';
 export * from './services/event-bus.js';
 export * from './services/plugin-services.js';
+export * from './services/plugin-actions.js';
 export * from './services/system-envelope.js';
 
 // ── 宿主 API surface（插件与内核之间唯一的稳定缝）──

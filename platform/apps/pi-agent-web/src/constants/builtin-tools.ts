@@ -63,7 +63,7 @@ export const BASE_TOOL_NAMES: readonly string[] = ['read', 'write', 'edit', 'bas
  * 新建 agent 的初始配置（change: explicit-agent-config）。
  *
  * 平台不再有"全局默认层"：这份值只是"新表单的初始勾选"，保存后即成为该 agent 的显式清单。
- * `capabilities: null` 是唯一例外语义（null = 全局 callServer 策略）。
+ * 没有例外字段 —— 连 `capabilities` 也已退役（方法级授权是假闸门）。
  */
 export const BASE_AGENT_CONFIG = {
   builtinTools: [...BASE_TOOL_NAMES],
@@ -73,9 +73,6 @@ export const BASE_AGENT_CONFIG = {
   mcp: { enabled: false, servers: [] as string[] },
   /** 平台插件启用列表（新表单默认全选：见编辑器加载后的 autoSelectNewAgentDefaults）。 */
   plugins: [] as string[],
-  /** 平台随包 skill（change: server-builtin-skills）——默认全关，按需勾选。 */
-  serverBuiltinSkills: [] as string[],
-  capabilities: null as string[] | null,
 };
 
 /**
@@ -98,9 +95,9 @@ export function withMcpDependencies(selected: readonly string[]): string[] {
 }
 
 /**
- * 平台工具（`sendFileToUser` / `callServer` / `postNotification`）**不再出现在勾选清单里**。
+ * 平台工具（`sendFileToUser` / `admin_*` / `postNotification`）**不出现在勾选清单里**。
  *
- * 规则改成了"谁提供，谁决定"：插件（含 inline 插件）对该会话生效 → 工具自动注入。
+ * 规则是"谁提供，谁决定"：插件（含 inline 插件）对该会话生效 → 工具自动注入。
  * 于是没有"某个 agent 能用 sendFileToUser、另一个不能"这种配置 —— 要关就关插件。
- * `capabilities` 仍然独立（它是 callServer 的**方法级授权**，不是工具开关）。
+ * 开关只剩一个：`config.plugins`。
  */

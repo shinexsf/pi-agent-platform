@@ -87,13 +87,14 @@ function checkArtifacts() {
     ['dist/server/public/web/index.html', 'web SPA'],
     ['dist/server/public/ide/index.html', 'ide SPA'],
   ];
-  // 平台随包 skill 的固定清单（change: server-builtin-skills）。目录在、文件不在时
-  // 打包照样成功，只有装完才会发现 available_skills 里什么都没有 —— 必须静态断言。
-  const requiredBuiltinSkills = ['pi-capabilities-usage', 'pi-plugin-authoring'];
-  const requiredExamples = [
-    'pi-plugin-authoring/examples/hello-plugin/package.json',
-    'pi-plugin-authoring/examples/kitchen-sink/package.json',
+  // 随包 skill 现在住在 **bundled 插件**里（`dist/server/plugins/<id>/skills/<name>/SKILL.md`）。
+  // 目录在、.md 不在时打包照样成功，只有装完才发现 available_skills 是空的 —— 必须静态断言。
+  const requiredPluginSkills = [
+    ['plugin-authoring', 'pi-plugin-authoring'],
+    ['scheduler', 'scheduler'],
+    ['webhook', 'webhook'],
   ];
+  const requiredPluginSkillAssets = ['plugins/plugin-authoring/skills/pi-plugin-authoring/examples/kitchen-sink/package.json'];
   // dist/ 自身在 distRoot 下时，上面的路径要相对 CLI_DIR 解析
   const base = distRoot.endsWith(`${path.sep}dist`) ? path.dirname(distRoot) : distRoot;
   for (const [file, hint] of required) {
@@ -108,13 +109,13 @@ function checkArtifacts() {
     if (!existsSync(abs)) fail('A.artifact', { file: `server/plugin-types/${name}`, detail: '缺少插件类型声明（plugin check 会拿不到类型）' });
   }
 
-  for (const name of requiredBuiltinSkills) {
-    const abs = path.join(base, 'dist', 'server', 'skills', 'builtin', name, 'SKILL.md');
-    if (!existsSync(abs)) fail('A.builtinSkill', { file: rel(abs), detail: `缺少内置 skill ${name}/SKILL.md` });
+  for (const [pluginId, skillName] of requiredPluginSkills) {
+    const abs = path.join(base, 'dist', 'server', 'plugins', pluginId, 'skills', skillName, 'SKILL.md');
+    if (!existsSync(abs)) fail('A.pluginSkill', { file: rel(abs), detail: `缺少插件 ${pluginId} 的 skill ${skillName}/SKILL.md` });
   }
-  for (const relPath of requiredExamples) {
-    const abs = path.join(base, 'dist', 'server', 'skills', 'builtin', relPath);
-    if (!existsSync(abs)) fail('A.builtinSkill', { file: rel(abs), detail: `缺少内置 skill 示例 ${relPath}` });
+  for (const relPath of requiredPluginSkillAssets) {
+    const abs = path.join(base, 'dist', 'server', relPath);
+    if (!existsSync(abs)) fail('A.pluginSkill', { file: rel(abs), detail: `缺少 skill 示例 ${relPath}` });
   }
 
   // SPA 只有 index.html 没有 assets 是典型事故（复制漏掉 assets / 构建静默失败）：
@@ -220,8 +221,12 @@ function checkBundledPlugins() {
       fail('B2.plugin', { file: `server/plugins/${id}/package.json`, detail: '缺少 piServer.apiVersion（装载器会判为不兼容）' });
     }
     const declared = PLUGIN_FACETS.filter((f) => existsSync(path.join(dir, f)));
-    if (declared.length === 0) {
-      fail('B2.plugin', { file: `server/plugins/${id}`, detail: '没有声明任何装载点' });
+    // `skills/` 是数据目录不是装载点，但它让插件有存在意义（纯 skill 插件合法，
+    // 例如 plugin-authoring）。只有"既没 facet 也没 skills"才是坏插件。
+    const hasSkills = existsSync(path.join(dir, 'skills'))
+      && readdirSync(path.join(dir, 'skills'), { withFileTypes: true }).some((d) => d.isDirectory());
+    if (declared.length === 0 && !hasSkills) {
+      fail('B2.plugin', { file: `server/plugins/${id}`, detail: '没有声明任何装载点，也没有 skills/' });
     }
     for (const facet of declared) {
       const facetDir = path.join(dir, facet);

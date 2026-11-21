@@ -19,6 +19,7 @@
  */
 
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -472,23 +473,111 @@ const { createServerTools } = (await import(
 };
 const noopCall = async () => ({});
 
-// `serverBuiltinTools` 退役后：工具是否注入只看提供方（插件自己的判断）。
-const noCaps = createServerTools('s1', noopCall, { capabilityIndex: [] });
-check(noCaps.some((t) => t.name === 'sendFileToUser'), 'inline 插件 sendFileToUser 自动注入（无逐 agent 白名单）');
+// `callServer` 已随 capabilities 一起退役：管理动作改由 `admin` 插件声明（动作契约）。
+const inlineTools = createServerTools('s1', noopCall);
+check(inlineTools.some((t) => t.name === 'sendFileToUser'), 'inline 插件 sendFileToUser 自动注入（无逐 agent 白名单）');
 check(
-  !noCaps.some((t) => t.name === 'callServer'),
-  '没有任何授权能力 → callServer 不注入（插件自我收窄，不是平台开关）',
+  !inlineTools.some((t) => t.name === 'callServer'),
+  'callServer 不再存在（管理动作迁到 admin 插件的动作面）',
+);
+check(
+  !inlineTools.some((t) => t.name === 'postNotification'),
+  'postNotification 由 notifications 的动作投影注入（不是 worker 硬编码）',
 );
 
-const withCaps = createServerTools('s1', noopCall, {
-  capabilityIndex: [{ method: 'server.status', module: 'server', access: 'read', scoped: false, summary: 'x' }],
-});
-check(withCaps.some((t) => t.name === 'callServer'), '有授权能力 → callServer 自动注入');
+section('6b) 动作契约：一份 handler → 四个独立投影');
+{
+  const { createPluginActions } = (await import(
+    path.join(platformRoot, 'packages/core/src/services/plugin-actions.js') as string
+  )) as { createPluginActions(): import('@pi-agent-platform/core').PluginActions };
+  const acts = createPluginActions();
+  const handler = (p: unknown) => ({ echo: p });
 
-check(
-  !createServerTools('s1', noopCall, {}).some((t) => t.name === 'postNotification'),
-  'postNotification 不再由 worker 硬编码（归 notifications 插件的 extension facet）',
-);
+  // ① 默认值：reverse 开、其余关（"漏了会静默坏" 才默认开）
+  const def = acts.define('alpha', {
+    'task.list': { params: { type: 'object' }, handler },
+  });
+  check(def.ok, 'define 成功');
+  const rec = acts.resolve('alpha.task.list')!;
+  check(rec.reverse === true, 'reverse 默认开（漏了会静默调不通）');
+  check(rec.reach === 'own', "scope 默认 'own'（跨插件调用要显式 public）");
+  check(rec.service === false && rec.tool === undefined && rec.httpPath === undefined, 'service / tool / http 默认关');
+  check(acts.reachOf('alpha.task.list') === 'own', 'reachOf 供 master 做归属校验');
+
+  // ①b 一个动作只有一个名字：反向方法与 service 用**同一个字符串**
+  //     （老 IPC 层有 `plugin.` 段时，同一个动作在这两张表里是两个名字）
+  check(rec.name === 'alpha.task.list', '动作全名 = <pluginId>.<action>，没有额外前缀段');
+  check(
+    realServices.provide('alpha', rec.name, () => ({ ok: true })).ok,
+    'service 直接用动作全名注册（不换名、不重复拼前缀）',
+  );
+  check(
+    realServices.list().filter((x) => x.name === rec.name).length === 1,
+    'services 表里同一个动作只有一个名字',
+  );
+  realServices.disposePlugin('alpha');
+
+  // ② 四种组合都能表达（旧契约做不到的）
+  const combos = acts.define('alpha', {
+    'only.service': { params: { type: 'object' }, handler, reverse: false, service: true },
+    'own.service': { params: { type: 'object' }, handler, scope: 'own', service: true },
+    'public.tool': { params: { type: 'object' }, handler, scope: 'public', tool: { description: 'x' } },
+    'only.http': { params: { type: 'object' }, handler, reverse: false, http: {} },
+  });
+  check(combos.ok, '四字段可自由组合（含 reverse:false + http）');
+  check(acts.resolve('alpha.only.service')!.reverse === false, 'reverse:false = 自己 worker 调不到');
+  check(acts.resolve('alpha.only.http')!.reverse === false, 'http 不依赖 reverse（主进程直调 handler）');
+  check(acts.resolve('alpha.only.http')!.httpPath === '/only/http', 'http 路径缺省由动作名推导');
+  check(acts.resolve('alpha.public.tool')!.tool?.name === 'alpha__public_tool', '工具名缺省 <id>__<action>');
+  check(acts.resolve('alpha.public.tool')!.tool?.exposure === 'deferred', 'exposure 缺省 deferred（零上下文成本）');
+
+  // ③ 校验：tool 必须能经反向方法执行；deferred 不许带 prompt；http 必须对象；路径精确
+  check(!acts.define('alpha', { bad: { params: {}, handler, tool: { description: 'x' }, reverse: false } }).ok, 'tool + reverse:false 被拒');
+  check(
+    !acts.define('alpha', {
+      bad2: { params: {}, handler, tool: { description: 'x', exposure: 'deferred', promptSnippet: 'y' } },
+    }).ok,
+    'deferred + promptSnippet 被拒（会破前缀缓存）',
+  );
+  check(!acts.define('alpha', { bad3: { params: {}, handler, http: true as never } }).ok, 'http: true 被拒（必须对象）');
+  check(!acts.define('alpha', { bad4: { params: {}, handler, http: { path: '/x/:id' } } }).ok, ':param 路径被拒');
+  check(!acts.define('alpha', { bad5: { params: {}, handler, http: { path: '/x/*' } } }).ok, '通配路径被拒');
+  check(!acts.define('alpha', { bad6: { handler } }).ok === false, '无 params 的反向/service 动作合法');
+  check(!acts.define('__core__', { x: { params: {}, handler } }).ok, '保留 id 被拒');
+
+  // ④ 整批不注册：一条不合法 ⇒ 一条都不进表
+  const before = acts.count();
+  const partial = acts.define('alpha', {
+    good: { params: { type: 'object' }, handler },
+    bad: { params: {}, handler, tool: { description: 'x' }, reverse: false },
+  });
+  check(!partial.ok && acts.count() === before, '整批校验失败 → 不落任何一条（不做部分注册）');
+
+  // ⑤ 描述符与卸载
+  const desc = acts.descriptorsFor(['alpha']);
+  check(desc.length >= 1 && desc.every((d) => d.tool.name && d.params), '描述符只取有 tool 的动作');
+  check(acts.descriptorsFor([]).length === 0, '未启用的插件没有描述符');
+  acts.disposePlugin('alpha');
+  check(acts.count() === 0, '卸载后动作全部消失');
+}
+
+section('6c) 动作 HTTP 面：路径精确 / 开关默认关');
+{
+  const src = readFileSync(path.join(platformRoot, 'apps/pi-agent-server/src/config.ts'), 'utf8');
+  check(
+    /actionHttpEnabled:\s*env\.PI_SERVER_ACTION_HTTP === '1'/.test(src),
+    'HTTP 面全局开关默认关（只有显式 PI_SERVER_ACTION_HTTP=1 才开）',
+  );
+  const ext = readFileSync(path.join(platformRoot, 'packages/core/src/services/plugin-extensions.ts'), 'utf8');
+  check(
+    ext.includes("action http surface is disabled") && ext.includes('status: 404'),
+    '开关关闭时动作路由返回 404（不是 403、不是静默 500）',
+  );
+  check(
+    ext.includes("method: 'POST'") && ext.includes("json: { error: check.message }"),
+    '动作 HTTP 只认 POST + 校验失败 400 + 错误原文',
+  );
+}
 
 section('7) 插件互操作：bus 声明化 + services 定向调用');
 
@@ -580,8 +669,8 @@ check(boomErr === 'db down', '提供者抛错原样透传');
 
 // ⑧ 两个表互不混入 + 卸载归零
 check(
-  !realServices.list().some((svc) => svc.name.startsWith('plugin.')),
-  'services 目录不混入反向方法（两张表独立）',
+  realServices.list().filter((svc) => svc.owner === 'alpha').map((svc) => svc.name).sort().join(',') === 'alpha.boom,alpha.echo',
+  'services 目录只含显式 provide 的名字（不混入反向方法 / 动作）',
 );
 realBus.disposePlugin('alpha');
 realServices.disposePlugin('alpha');

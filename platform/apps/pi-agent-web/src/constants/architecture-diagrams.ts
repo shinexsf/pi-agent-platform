@@ -78,20 +78,6 @@ const PLATFORM_DIAGRAMS: readonly ArchitectureDiagram[] = [
     file: 'plugin-system.architecture.html',
   },
   {
-    slug: 'capabilities',
-    label: '能力控制面',
-    hint: '一次 callServer 从 worker 发出到被放行或拒绝的判定与审计',
-    type: 'workflow',
-    file: 'capabilities.workflow.html',
-  },
-  {
-    slug: 'capability-map',
-    label: '能力地图',
-    hint: '按 module 分桶：已实现方法、占位空组、已记录但未立项的候选落点',
-    type: 'tree',
-    file: 'capabilities.tree.html',
-  },
-  {
     slug: 'plugin-map',
     label: '插件扩展点',
     hint: '每个叶子都是今天真实存在的挂载点，单点处就是将来的扩展位',

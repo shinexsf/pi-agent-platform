@@ -435,6 +435,8 @@ export interface PluginExtensionsResponse {
   extensions: PluginExtensions;
   /** 该插件声明的 topic 与提供的 service（运行期，随装载变化）。 */
   interop?: PluginInteropDTO;
+  /** 该插件声明的动作（一份 handler 的多个暴露面）。 */
+  actions?: PluginActionDTO[];
 }
 
 /** 一个插件的互操作声明（目录用）。 */
@@ -452,6 +454,30 @@ export interface PluginInteropDTO {
 
 /** `GET /api/runtime/interop`：全部 topic 与服务目录（诊断 / 排查"我发了没人收"）。 */
 export interface PluginInteropResponse extends PluginInteropDTO {}
+
+/** 一条动作的暴露面（`GET /api/runtime/actions`）。 */
+export interface PluginActionDTO {
+  /** 全名 `<pluginId>.<action>`。 */
+  name: string;
+  owner: string;
+  /** `own` = 只有自己插件的 worker 能调；`public` = 任何插件都能调。 */
+  scope: 'own' | 'public';
+  /** 是否注册了反向方法。 */
+  reverse: boolean;
+  /** 是否作为 service 提供给别的插件。 */
+  service: boolean;
+  /** 是否暴露成 pi 工具（模型可见，取决于 `tool_search` / exposure）。 */
+  hasTool: boolean;
+  /** HTTP 子路径（相对 `/api/p/<owner>`），未暴露为 null。 */
+  http: string | null;
+  /** 是否带 JSON Schema（tool / http 面必然有）。 */
+  hasParams: boolean;
+}
+
+/** `GET /api/runtime/actions`：动作目录（一份 handler 的多面暴露并排可见）。 */
+export interface PluginActionsResponse {
+  actions: PluginActionDTO[];
+}
 
 /** `GET /api/sessions/:id/extensions`：会话级（经闸门过滤）。 */
 export interface SessionExtensionsResponse {
@@ -472,17 +498,6 @@ export interface ApiError {
   error: string;
   path?: string;
 }
-
-/** 平台随包发布的 skill（change: server-builtin-skills）——只读，无写接口。 */
-export interface ServerBuiltinSkillInfo {
-  name: string;
-  /** 取自 `SKILL.md` frontmatter；缺失时为空串（条目仍然列出）。 */
-  description: string;
-  /** `SKILL.md` 的绝对路径（供排障与 UI 提示）。 */
-  path: string;
-  builtin: true;
-}
-
 
 export interface NotificationListResponse {
   items: NotificationDTO[];
