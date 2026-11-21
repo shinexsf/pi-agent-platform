@@ -179,11 +179,11 @@ await host.sessions.systemEvent({
 
 | 能力 | 旧版 | 现在 |
 |---|---|---|
-| agent 自助建任务 | capability `trigger.create/update/delete/run`（`serverBuiltinTools` 勾 `callServer` + `capabilities` allowlist 双闸） | 插件的 `schedule_task` 工具（R6）→ `bridge.call('plugin.scheduler.task.*')` → R3 反向方法 |
+| agent 自助建任务 | capability `trigger.create/update/delete/run`（`serverBuiltinTools` 勾 `callServer` + `capabilities` allowlist 双闸） | 插件的 `schedule_task` 工具（R6）→ `bridge.call('scheduler.task.*')` → 动作的反向方法 |
 | 使用说明 | `pi-trigger-usage` 平台 skill，要在 agent 的 `serverBuiltinSkills` 里勾 | 插件的 `skills/scheduler/SKILL.md`，**插件对该会话生效就自动注入**（不占 agent 配置项） |
 | 全局开关 | `PI_TRIGGERS_DISABLED=1` 环境变量 | 插件台账 `enabled:false`；逐 agent 关闭用 `agent.config.plugins` |
 
-`agent.config.plugins` 不含 `scheduler` 时：`extension` facet 不装载 → **`schedule_task` 工具不存在**、SKILL.md 不注入；但插件的 server facet（路由 + 调度器 timer）仍是进程级全局资源，`/scheduler` 页面照常可用（人工仍可给别的 agent 配任务）。
+`agent.config.plugins` 不含 `scheduler` 时：动作不声明 → **`schedule_task` 工具不存在**、SKILL.md 不注入；但插件的 server facet（路由 + 调度器 timer）仍是进程级全局资源，`/scheduler` 页面照常可用（人工仍可给别的 agent 配任务）。
 
 ## 9. 已知边界
 

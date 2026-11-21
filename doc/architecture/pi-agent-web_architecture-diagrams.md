@@ -26,8 +26,6 @@ apps/pi-agent-web/
 │   ├── pi-agent-platform.architecture.json
 │   ├── session-prompt.sequence.json
 │   ├── plugin-system.architecture.json
-│   ├── capabilities.workflow.json
-│   ├── capabilities.tree.json
 │   ├── plugin-map.tree.json
 │   └── pi/                                    ← 原生 pi 集合
 │       ├── pi-lifecycle.lifecycle.json

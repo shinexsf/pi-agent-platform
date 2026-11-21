@@ -21,7 +21,6 @@ flowchart TB
 
     subgraph Core["内核 (@pi-agent-platform/core)"]
         SES["SessionRegistry 单入口 + Session 领域对象"]
-        CAP["capabilities<br/>(registry → dispatch → 鉴权 → 审计)"]
         PH["插件宿主<br/>(facet 注册表 + 宿主 API<br/>+ 插件间 bus/services)"]
         WPM["WorkerPool<br/>(child_process.spawn)"]
         DB[("SQLite<br/>agents + sessions + attachments")]
@@ -49,7 +48,7 @@ flowchart TB
     IMGateway -->|prompt / kill| WPM
     WPM -->|session_event / crash| SES
     WPM -->|正向 call/response IPC| Proxy
-    Proxy -->|反向 RPC + 事件回流（plugin.admin.invoke / plugin.im.sendFile / 标题 / worker 事件）| WPM
+    Proxy -->|反向 RPC + 事件回流（admin.* 动作 / im.sendFile / 标题 / worker 事件）| WPM
     Proxy -->|method dispatch| SDK
     WPM <--> DB
     SDK -.->|历史文件| PiHist[(~/.pi/agent/<br/>sessions/<id>/)]
@@ -87,12 +86,12 @@ Server 是一个 Node.js 进程（master），负责 HTTP API、DB 持久化、w
 | db-schema | [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) | ✅ 已写 |
 | http-api | [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) | ✅ 已写 |
 | **im-gateway** | **[`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md)** | ✅ **已实施** |
-| **capabilities** | **[`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md)** | ✅ **已上线**（callServer meta-tool + 控制面 registry→dispatch→授权→审计，8 能力） |
+| **admin** | **[`pi-agent-server_admin.md`](pi-agent-server_admin.md)** | ✅ **已上线**（bundled 插件：8 个 `scope:'public'` 动作 + `deferred` 工具 + service + HTTP 面；原 capabilities 控制面已删） |
 | **invariants** | **[`pi-agent-server_invariants.md`](pi-agent-server_invariants.md)** | ✅ **已写**（架构层 hard rules，含 Session 服务层 6 条） |
 | **packaging** | **[`pi-agent-server_packaging.md`](pi-agent-server_packaging.md)** | ✅ **已定**（pi-server npm tarball + `PI_SERVER_CLI` 双模式启动） |
 | **debug-testing** | **[`pi-agent-server_debug-testing.md`](pi-agent-server_debug-testing.md)** | ✅ **已写规范**（unit tests 替代品 — dev-only debug 端点 + curl 验证；debug 代码解耦三约束） |
 | **logging** | **[`pi-agent-server_logging.md`](pi-agent-server_logging.md)** | ✅ **已定**（pino JSON 单时间线 + worker stderr tee + RollingFileSink 固定名滚动 + console 桥） |
-| **builtin-skills** | **[`pi-agent-server_builtin-skills.md`](pi-agent-server_builtin-skills.md)** | ✅ **已上线**（平台随包 skill：`serverBuiltinSkills` 显式清单 + 包内只读发布 + worker `additionalSkillPaths` 注入 + 只读清单接口） |
+| **plugin-authoring** | **[`pi-agent-server_plugin-authoring.md`](pi-agent-server_plugin-authoring.md)** | ✅ **已上线**（只有 `skills/` 的 bundled 数据插件；取代已退役的「平台内置 skill 轴」） |
 | **notifications** | **[`pi-agent-server_notifications.md`](pi-agent-server_notifications.md)** | ✅ **已上线**（**独立子系统**：系统通知表 + `notify()` 内部写入口 + `postNotification` 工具 + 只读收件箱；**平台不对外投递**） |
 
 ## 待决项

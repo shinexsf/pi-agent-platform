@@ -162,12 +162,12 @@ Worker 可通过 `callMaster(method, args)` 回调 master。WorkerPool 监听 `r
 注册是**服务级**的（一个来源一次注册一组方法），不是逐方法散装注册：
 
 ```typescript
-// im 插件在 IM gateway 初始化时注册（名字必须带自己的 plugin.<id>. 前缀）
+// im 插件在 IM gateway 初始化时注册（名字必须带自己的 <id>. 前缀）
 workerPool.registerService(
   'plugin:im',
-  { kind: 'plugin', descriptions: { 'plugin.im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
+  { kind: 'plugin', descriptions: { 'im.sendFile': '向会话所属 IM 渠道下发文件/图片' } },
   {
-    'plugin.im.sendFile': async (sessionId, args) => {
+    'im.sendFile': async (sessionId, args) => {
       const [params] = args as [{ filePath: string; fileName?: string; caption?: string }];
       const meta = getSessionMeta(sessionId);   // 调用方身份由 pool 注入，不在 args 里
       if (!meta) return { ok: true };           // IDE/Web session — no-op
@@ -178,7 +178,7 @@ workerPool.registerService(
 );
 ```
 
-`registerService` 内部把 handler 展开成注册表条目，并做命名校验：`plugin:<id>` 来源的方法名必须带 `plugin.<id>.`，否则拒绝并记录（结构性防冒充）。同名的第二次注册也拒绝。
+`registerService` 内部把 handler 展开成注册表条目，并做命名校验：`plugin:<id>` 来源的方法名必须带 `<id>.`，否则拒绝并记录（结构性防冒充）；`core` 来源必须带 `__core__.`。同名的第二次注册也拒绝。
 
 Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResponse`（**60s** 超时——反向方法里有渠道上传这类真 I/O）。
 
@@ -186,7 +186,9 @@ Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResp
 
 未命中返回 `unknown method: <name>`；插件被禁用时其方法置 `disabled` 并返回 `method disabled: <name>`。注册表内容可通过 `GET /api/runtime/methods` 查看。
 
-**这张表不服务跨插件调用**（`plugin-interop-contract` 定下的边界）：`plugin.<id>.*` 是"本插件的 facet 之间的私有桥"，签名里强制带 `sessionId`（调用方会话身份）。插件要跟别的插件说话用 `host.services`（无会话、独立注册表 `plugin-services.ts`），要替某会话做事用 `sessions.call`。两张表由不同模块持有、在 `GET /api/runtime/methods` 与 `GET /api/runtime/interop` 分别暴露。
+**这张表不服务跨插件调用**（`plugin-interop-contract` 定下的边界）：`<id>.*` 是"本插件的 facet 之间的私有桥"，签名里强制带 `sessionId`（调用方会话身份）。插件要跟别的插件说话用 `host.services`（无会话、独立注册表 `plugin-services.ts`），要替某会话做事用 `sessions.call`。两张表由不同模块持有、在 `GET /api/runtime/methods` 与 `GET /api/runtime/interop` 分别暴露。
+
+动作的 `scope` 也在这一层兜住：反向调用信封带 `source`（`bridge.call` 注入，插件无法伪造），master 用动作表查 `reach`，`own` 且 `source !== owner` 一律回 `unknown method`（**不泄漏存在性**）。`/api/runtime/methods` 的每条动作方法带 `reach` 字段。
 
 ## 事件转发与订阅（2026-09-30 反转）
 

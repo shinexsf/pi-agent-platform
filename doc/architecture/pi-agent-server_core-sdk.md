@@ -26,8 +26,7 @@ flowchart TB
         K5["coreConfig()<br/>入口注入，内核不读 env"]
         K2["SessionRegistry · Session · repos<br/>WorkerPool · 超时回收 · 斜杠命令"]
         K1["db：只建 3 张内核表<br/>agents / sessions / attachments"]
-        K6["宿主 API 四面<br/>db · sessions · agents · lifecycle"]
-        K3["capabilities 控制面<br/>registry → dispatch → 鉴权 → 审计"]
+        K6["宿主 API 七面<br/>db · sessions · agents · lifecycle · bus · services · actions"]
         K4["插件宿主<br/>facet 注册表 · 会话级闸门"]
     end
 
@@ -42,9 +41,8 @@ flowchart TB
     E1 -->|"订阅原生事件后投影"| P1
     E2 -->|"订阅原生事件后投影"| P1
     K2 --> K1
-    K6 --- K3
     K6 --- K4
-    PLG -->|"只能经这六个面访问内核"| K6
+    PLG -->|"只能经这七个面访问内核"| K6
 ```
 
 依赖方向**严格单向**：入口 → 内核。内核不依赖任何入口，也**不依赖投影包**——它不知道 UI 长什么样。这条不变量有可执行断言（见下文「验收」）。
@@ -56,11 +54,10 @@ flowchart TB
 | `db/` | schema（**只有 agents / sessions / attachments 三张表**）+ `initDb` |
 | `repos/` | `agent.repo` / `session.repo`（附件由 `attachment-store` 直接操作） |
 | `services/session.ts` | `Session` / `SessionRegistry`——会话能力的唯一入口 |
-| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `server-builtin-skills` / `plugin-extensions`（插件 facet 注册表）/ **`system-envelope`（信封唯一构造点）** / **`event-bus`（插件广播：声明 + 订阅）** / **`plugin-services`（插件定向调用：提供者表）** |
+| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `plugin-extensions`（插件 facet 注册表 + 动作投影）/ **`system-envelope`（信封唯一构造点）** / **`event-bus`（插件广播：声明 + 订阅）** / **`plugin-services`（插件定向调用：提供者表）** / **`plugin-actions`（动作登记表：一份 handler + 四个投影）** |
 | `worker-pool.ts` | worker 子进程池（进程域 only） |
 | `session-timeout-scanner.ts` | placeholder 超时回收 |
 | `slash-commands.ts` | 会话级命令 |
-| `capabilities/` | 能力控制面：registry → dispatch → authorize → audit + 基础能力组（server / agent / session） |
 | `logger.ts` · `utils/normalize-path.ts` · `config.ts` · `host-api.ts` | 基础设施与契约 |
 
 **不进程内核的**（留在入口侧）：`routes/`、`im-gateway/`、`static-spa`、`startup-banner`、`model-registry`、`config-issues`、通知模块（`notifier` + `notification.repo` + 路由）、配置模板模块（`template.repo` + 路由）、插件 web/server facet 的 HTTP 暴露。
@@ -90,7 +87,7 @@ const migrated = runModuleMigrations(raw);            // 平台功能模块自�
 ```ts
 initCoreConfig({
   maxWorkers, agentDir, attachmentsDir, pluginsDir,
-  serverBuiltinSkillsDir, mcpConfigPath,
+  mcpConfigPath,
   workerStartupTimeoutMs, workerStopTimeoutMs, isDev,
 });
 ```
@@ -173,7 +170,7 @@ systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data?, stream
 | `services`（调用） | 任何插件 → 某个插件 | **恰好 1** | **业务数据** | 错误（`unknown service`） |
 | `methods`（反向 IPC） | 本会话 worker → 自己的 server facet | 1 | 业务数据 | `unknown method` |
 
-`methods` 那张表（`worker-pool.ts` 的 `reverseRegistry`）**不参与跨插件**：按分层，worker 只跟自己的 server facet 说话，`plugin.<id>.*` 里每一条天然全 private —— 所以它连"公开/私有"标记都不需要。
+`methods` 那张表（`worker-pool.ts` 的 `reverseRegistry`）**不参与跨插件**：按分层，worker 只跟自己的 server facet 说话，`<id>.*` 里每一条天然全 private —— 所以它连"公开/私有"标记都不需要。
 
 #### 广播（`host.bus`）的语义
 
@@ -199,17 +196,22 @@ systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data?, stream
 
 诊断面：`GET /api/runtime/interop` → `{ topics, services }`（谁声明、谁在听、末次发布）；`GET /api/plugins/:id/extensions` 附该插件的切片。
 
-## 能力控制面在内核，平台功能能力组不在
+## 管理动作在插件里，内核只剩三个能力面
 
-能力控制面的注册表、分发、鉴权、审计，以及操作内核自身对象的基础组（server 运行时 / agent 行 / 会话生命周期）都在内核里。理由：
+`capabilities` 控制面**已删除**（2026-11-21）。它当年把"agent → 宿主"的方法级授权、审计、
+8 个管理方法都放在内核里，现在拆成两半：
 
-1. **它是 agent → 宿主的唯一授权与审计边界**，必须单实例。第二个入口自己实现一遍 = 安全实现分叉，而这类分叉用户看不见
-2. 基础能力组操作的就是内核自己的对象（`session.restart` 碰 Session 对象、`agent.*` 碰 agent 行），放入口等于允许绕过 `SessionRegistry` 改内核状态
-3. `createSession` 需要 `capabilityIndex` 才能拼参数；不进内核就得注入，而注入空实现意味着第二个入口没有 `callServer`
+| 原来在内核 | 现在 |
+|---|---|
+| 授权 / 审计 / 允许列表 | **没有了**。授权只剩 `config.plugins` 一个开关（删它的理由见 [`invariants`](pi-agent-server_invariants.md)） |
+| `server.status` / `agent.*` / `session.*`（8 个方法） | **`admin` 插件**的 8 个动作，`scope: 'public'` + `deferred` 工具 + service |
+| 方法级实现（跨 worker + DB 双写、kill+respawn） | 内核的宿主面：`host.sessions.update/restart/detail/find`，`host.lifecycle.runtime()` —— 插件拿**数据**与**受控方法**，仍拿不到 `workerPool` |
+| `capabilityIndex` 随 spawn 下发拼 callServer 描述 | 动作描述符随 spawn 下发（`WorkerPluginSpec.actions`），worker 自动注册工具 |
 
-**边界**：未来的平台功能能力组（渠道、调度等）通过宿主 API 注册进来，不长在内核内部。所以"能力控制面在内核"与"触发器做成插件"不矛盾——机制在内核，能力组跟功能走。
+判据是"把 `admin` 插件 `enabled:false` 之后平台还能不能建 agent、开会话、聊完一轮"——
+能，所以它不该在内核。
 
-## 入口：装配与启动分离
+## 入口：装配与启动分离## 入口：装配与启动分离
 
 入口应用把两件事拆开：
 
@@ -247,6 +249,5 @@ main()
 
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— 事件层：原生事件与投影的分工
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— worker 进程域与反向注册
-- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— 能力控制面
-- [`pi-agent-server_plugins.md`](pi-agent-server_plugins.md) —— 插件机制（宿主 API 的消费方）
+- [`pi-agent-server_plugins-runtime.md`](pi-agent-server_plugins-runtime.md) —— 插件运行期（含动作契约的四类投影）
 - [`pi-agent-server_overview.md`](pi-agent-server_overview.md) —— 整体定位与分层图

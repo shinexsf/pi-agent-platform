@@ -30,7 +30,7 @@
 ## Session 服务层（2026-09-30 新增）
 
 - **spawn/复活唯一入口 = `SessionRegistry`**（`services/session.ts` 的 `getOrCreate` / `createFromAgent`）
-  - `spawnPlaceholder` / `spawnAndCreate` 是模块私有实现，routes / capabilities / im-gateway **不得绕过 registry 直接 spawn**
+  - `spawnPlaceholder` / `spawnAndCreate` 是模块私有实现，routes / im-gateway / 插件（含 `admin` 动作）**不得绕过 registry 直接 spawn**
   - 并发首次调用共享同一 inflight promise；失败不缓存
 - **领域状态归 `Session` 对象**（hasRow / model / thinkingLevel / sessionName / systemPrompt / piSessionPath / agentId）
   - `WorkerEntry` 只剩进程事实（child / pid / stderrTail / ready / spawnTime / pendingCalls）
@@ -43,7 +43,7 @@
   - 对象在 spawn 前创建；任何 worker exit（'crash' 事件）→ `dispose` → **通知并清空订阅者**（SSE 发 `session_disposed` 关流，客户端重连）
   - 对象从不跨 worker 死亡；持久身份只在 DB 行
 - **核心代码不得 import `im-gateway/`**
-  - session-bridge 时代 3 处反向依赖（routes / capabilities / prompt-resolver → im-gateway）的教训；`slash-commands` 已上移 `src/` 根且零 channel-types 依赖
+  - session-bridge 时代 3 处反向依赖（routes / prompt-resolver → im-gateway）的教训；`slash-commands` 已上移 `src/` 根且零 channel-types 依赖
 
 依赖方向全景（实线 = import；虚线 = 回调/事件注入，不构成 import 反向）：
 
@@ -52,7 +52,6 @@ flowchart TB
     subgraph L1["消费层（只准向下）"]
         R1["routes/sessions · events"]
         R2["im-gateway（routing / host / ensure-session）"]
-        R3["capabilities/handlers"]
     end
     subgraph L2["核心服务层"]
         SR["SessionRegistry + Session<br/>services/session.ts"]
@@ -63,7 +62,6 @@ flowchart TB
     end
     R1 --> SR
     R2 --> SR
-    R3 --> SR
     R1 --> WP
     SR --> SUP
     SR --> WP
@@ -173,7 +171,16 @@ flowchart TB
   - 例外（`scheduler-plugin`）：`host.bus` 是**进程内**插件间总线 —— 因为它不属于任何插件，而是内核提供的交汇点；浏览器侧的推送仍然只有 `events` → SSE 一条路
 - **工具 / skill 的可见性 = 提供方插件对该会话是否生效**（`scheduler-plugin`）
   - 唯一开关是 `AgentConfig.plugins`（启用列表）；不存在逐 agent 的"工具白名单"（`serverBuiltinTools` 已退役）
+  - 同一个开关管三家：插件自带 `skills/`、动作的 `tool` 投影、`extension` facet 的工具
   - `server` / `web` facet 是进程级全局资源，不受它影响 —— 这条边界必须显式（否则"关了插件却还有页面"看起来像 bug）
+- **面向 agent / 别的插件 / 外部的同一个行为只写一份 handler**（`plugin-actions-contract`）
+  - 用 `host.actions.define()` 声明，`reverse` / `scope` / `service` / `tool` / `http` 五个字段各自决定暴露面；
+    **MUST NOT** 分别手写 `methods.handle` + `services.provide` + `registerTool` 三份（参数 schema 会漂移）
+  - 默认值判据：**漏了会静默坏的面默认开（`reverse`），漏了会明确报错的面默认关（`service` / `tool` / `http`）**
+  - `tool` 存在 ⇒ `reverse !== false`（工具在 worker 跑）；`http` 不依赖 `reverse`（主进程直调 handler）
+  - 工具名唯一性由平台在 spawn 时校验，冲突**不注册 + warn**，**MUST NOT** 静默改名或覆盖
+- **反向调用必须带来源**：信封的 `source` 由 `bridgeFor(pluginId)` 注入、插件代码拿不到；`scope: 'own'` 的动作跨插件一律回 `unknown method`（**不泄漏存在性**）
+  - 归属由注册表的 `source` 字段判定，**不解析方法名字符串**
 - **信封（`<system-event>`）只能由内核构造**：插件传结构化字段，绝不接受插件/外部拼好的文本
   - 理由：文本是平台契约（模型看到的形状必须统一），拼装权外放等于把"标签名/属性注入"交给每个插件自觉
 - **`apiVersion` 不兼容即整包跳过**（`status: 'degraded'` + `detail` 写明原因），不尝试降级运行
@@ -190,6 +197,17 @@ flowchart TB
   - `services`：`provide` / `call` / `list`，返回业务数据、错误透传、**无 `sessionId`**；未提供 = 抛错（与广播"没人听是正常态"相反）
   - 明确不做：跨进程（worker ↔ master）、持久化、重放、通配符、`{ sync: true }` 开关
   - **三个面各有独立注册表**（`topics` / `providers` / 反向 IPC），只共享每插件的 disposer 账本 —— 空态语义不同，合表无法表达
+
+## 授权：只有一个开关（2026-11-21 新增）
+
+- **不存在方法级授权层**（原 `capabilities` 的 L1 allowlist / L2 `write=own` 已删）
+  - 理由：L1 与 `config.plugins` 重复；L2 可被任何插件的 `host.agents.update` / `host.db.query` 绕过
+  - **假的分层比没有分层更糟** —— 它让人以为"有保护"，而绕过路径是公开的
+- 谁能做什么 = **谁被启用了**：`AgentConfig.plugins` 是唯一开关。`admin` 插件的 8 个动作就是"被启用即拥有"
+- **已知后果（写在这里，不当 bug 藏）**：拿到 `admin` 工具的 agent **能给自己加插件**（`agent.update` 改自己的 `config.plugins`）= 自我扩权。
+  这是"插件可信 + 运行时不提供沙箱"的直接推论；出多用户/多租户时必须重做一道门，那是新架构而非补丁
+- 审计降级为**结构化日志**：管理动作 handler 各记一条 pino（`caller.sessionId` / 动作 / 目标 / 结果），不落审计表 —— 会话历史本身就是审计
+- 信任边界在**程序之外**：插件是用户自装的可信代码；"停用插件 + 刷新页面"即回干净态
 
 ## sessionId
 

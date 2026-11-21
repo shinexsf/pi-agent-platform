@@ -342,14 +342,18 @@ function useTheme() {
 - [`pi-agent-web_architecture-diagrams.md`](pi-agent-web_architecture-diagrams.md) —— `/architecture` 架构图集（集合 × 图切换、图源 spec 与编译产物、加图流程）
 - OpenSpec change `responsive-web-layout`（本地工作流产物，不引用路径）—— 本次重构的完整设计文档（proposal/design/tasks/specs）
 
-## 资源表单里的「Server Builtin Skills」组（2026-11-09）
+## 资源配置区的收缩（2026-11-21）
 
-agent 编辑页 / 会话详情页 / 模板表单三处各有一组 **Server Builtin Skills**（与 `Server Builtin Tools` 对称）：
+三处资源配置区（agent 编辑页 / 会话详情页 / 模板表单）**从 7 项减到 5 项**，跟着内核一起做减法：
 
-- 数据源是只读接口 `GET /api/config/server-builtin-skills`，勾选写进 `config.serverBuiltinSkills`
-- 每项带「平台」徽标 + `description` 作为 tooltip；名字失效时按既有 `issueIndex` 标黄并可「清理无效项」
-- 两条软提示（不拦保存）：能力已授权但没勾用法说明（`pi-capabilities-usage`）、勾了 skill 但没开 `read`
-- 内置 skill **不出现在** `配置 → Skill`（那是用户的 `~/.pi/agent/skills`）
+| 删除 | 原因 |
+|---|---|
+| Server Builtin Skills | 随包 skill 改由 bundled 插件自带 `skills/`（如 `plugin-authoring`）→ 勾插件即可，不再有第二套名字空间 |
+| Capabilities | 方法级授权是假闸门（与 `plugins` 重复、下层可绕过）→ 授权只剩「平台插件」一个开关 |
+| Server Builtin Tools | 更早（scheduler-plugin 轮）已退役，工具归属改为插件 |
+
+留下的五项：`builtinTools` / `mcp` / `extensions` / 平台插件 / `skills` / `prompts`（模板快照同此六字段）。
+资源区仍保留「全选 / 清空 / 清理无效项」与黄标语义；软提示只剩一条（启用插件 skill 但 `builtinTools` 没勾 `read`）。
 
 ## 触发器与通知页（2026-11-06）
 

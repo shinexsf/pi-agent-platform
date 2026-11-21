@@ -38,7 +38,7 @@ erDiagram
     }
 ```
 
-- `sessions.config` 是 `agents.config` 的**完全快照**（创建时复制，生命周期不回读 agent——唯一例外：capabilities 缺 key 回落）
+- `sessions.config` 是 `agents.config` 的**完全快照**（创建时复制，生命周期**不回读** agent——没有例外字段）
 - `pi_session_path` 指向 pi jsonl 历史文件（master 直读，worker 死了也能查）
 - IM 渠道表（`channels_wechat` / `channels_qq`）由渠道包自管 DDL，主包零渠道 SQL（见下）
 
@@ -116,15 +116,15 @@ interface AgentConfig {
   skills?: string[];
   prompts?: string[];
 
-  // Server 侧工具白名单（sendFileToUser / callServer / postNotification；缺失 = [] = 全不给）
-  // serverBuiltinSkills：平台随包 skill 名单（与用户 skills 两套名字空间；缺失 = [] = 全关）
-  // 平台插件启用列表（会话内能力来源：extension/worker facet + skills/ 目录）。
-  // 缺失/空 = 不启用任何插件。server/web facet 是进程级全局资源，不受它影响。
+  // 平台插件启用列表（会话内能力的**唯一开关**：extension/worker facet + skills/ 目录
+  // + 动作的工具投影都在它后面）。缺失/空 = 不启用任何插件。
+  // server/web facet 是进程级全局资源，不受它影响。
   plugins?: string[];
 
-  // callServer 方法级授权（opt-in：未配置 = 无任何方法权限，[] = 全禁，数组 = 白名单；
-  // session 行有 key 优先、缺 key 回落 agent，见 capabilities 文档）
-  capabilities?: string[] | null;
+  // 已退役（读路径会丢弃，不会再写回）：
+  //   serverBuiltinTools  → 工具归属改为"插件是否生效"
+  //   serverBuiltinSkills → 随包 skill 改由 bundled 插件自带 skills/
+  //   capabilities        → 方法级授权是假闸门（见 admin 文档）
 }
 ```
 
@@ -183,7 +183,7 @@ export interface Session {
 
 ## session 配置完全独立
 
-session 创建时**完整复制** agent 配置到 sessions.config。session 整个生命周期**不读 agent 表**（**唯一例外**：`capabilities` 字段在 session config 缺 key 时回落 agent 行做授权解析，见 [`capabilities`](pi-agent-server_capabilities.md)）。session 内修改 → 更新 sessions.config（不写回 agent 表）。
+session 创建时**完整复制** agent 配置到 sessions.config。session 整个生命周期**不读 agent 表**（没有任何例外字段：`capabilities` 已退役，配置是完全快照）。session 内修改 → 更新 sessions.config（不写回 agent 表）。
 
 ## IM 渠道表（2026-08-26）
 
@@ -301,5 +301,5 @@ export function normalizePath(p: string): string {
 ## 相关文档
 
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— 配置管理策略
-- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— AgentConfig 的 `capabilities`（方法级授权）与 callServer 注入条件
+- [`pi-agent-server_admin.md`](pi-agent-server_admin.md) —— 平台管理动作（原 `capabilities` 的 8 个方法）
 - [`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md) —— IM 网关 + 渠道包自管表说明

@@ -47,6 +47,7 @@ my-plugin/
 │   └── panel.js
 ├── skills/               ← 数据目录（不是 facet）：插件生效即注入，不占 agent 配置项
 │   └── my-skill/SKILL.md  ← front matter 必须有 name / description
+│                           只有 skills/ 的插件也合法（判 active），见 bundled 的 plugin-authoring
 └── types/plugin-types/   ← `plugin check` 写入的 vendored 类型（不要手改、不要提交进 git）
 ```
 
@@ -122,10 +123,10 @@ export default {
 ```js
 export default {
   init({ bridge }) {
-    // R5 正向方法：master 或浏览器可以通过 sessions.call(会话, 'plugin.<id>.scan', args) 调到你
+    // R5 正向方法：master 或浏览器可以通过 sessions.call(会话, '<id>.scan', args) 调到你
     bridge.registerMethod?.('scan', async (params) => ({ scanned: params }));
     bridge.emit('ready', { at: Date.now() });          // 上行事件（无回执，可丢）
-    bridge.call?.('plugin.notifications.post', [{...}]); // 调反向方法
+    bridge.call?.('notifications.post', [{...}]);      // 调反向方法（名字空间 = <pluginId>.<name>）
   },
 };
 ```
@@ -190,10 +191,11 @@ export function mount(el, host) {
 
 | 面 | 能用在哪 | 方法 |
 |---|---|---|
-| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` · **`ensure({ agentId, sessionId?, title? })`** · **`systemEvent({ sessionId, kind, instruction, data? })`** |
+| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` · **`ensure({ agentId, sessionId?, title? })`** · **`systemEvent({ sessionId, kind, instruction, data? })`** · 管理：`detail(id)` · `find(filter)` · `update(id, patch)` · `restart(id)` |
 | `agents` | 全部 | `list` · `get` · `update(id, patch)` |
 | `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
-| `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` |
+| `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` · `runtime()`（运行态快照：版本/uptime/端口/池统计，**纯数据不是句柄**） |
+| `actions` | 仅 server | `define({ '<action>': { params, handler, reverse?, scope?, service?, tool?, http? } })` —— **一份 handler，四个投影**（见 §3.0） |
 | `bus` | 全部 | `declare(topic, { declaredBy })` · `publish` · `publishAndWait` · `subscribe` · `topics()` —— **插件间广播**（0..n、无业务返回值）。topic 必须先声明，`declaredBy` 决定谁拥有契约 |
 | `services` | 全部 | `provide(name, fn)` · `call(name, payload)` · `list()` —— **插件间定向调用**（恰好 1 个提供者、返回业务数据、错误外抛、**无会话上下文**） |
 | `events` | **仅 worker** | `emit(name, data)` —— 发给**浏览器**（SSE）；server 侧调用会 warn |
@@ -208,7 +210,49 @@ export function mount(el, host) {
 - 除 `db.migrate` 建表之外，别碰平台表
 - **工具与 skill 不需要"注册到某个 agent"**：插件对该会话生效，它们就自动注入；插件的 `server` / `web` facet 是全局的，不受 agent 开关影响
 
-## 3.0 要广播还是要调用（`bus` vs `services`）
+## 3.0 一份 handler，几个暴露面（`actions`）
+
+面向 agent / 别的插件 / 外部的**同一个行为**，只写一份 handler，用五个独立字段声明它怎么被暴露：
+
+```js
+host.actions.define({
+  'task.create': {
+    params: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+    handler: async (params, ctx) => { /* ctx.sessionId 是调用方会话；ctx.caller 是调用方身份 */ },
+    reverse: true,        // 默认 true：注册 <id>.task.create（自己 worker 能调）
+    scope: 'own',         // 默认 own：只有 owner 的 worker 能调；'public' 才跨插件
+    service: false,       // 默认 false：true 则进 host.services 目录（别的插件能 call）
+    tool: null,           // 默认 null：给了就自动注册成 pi 工具（模型可见）
+    http: null,           // 默认 null：给了就挂 POST /api/p/<id>/<path>（外部可达）
+  },
+});
+```
+
+| 字段 | 缺省 | 谁会看到 | 漏了的后果 |
+|---|---|---|---|
+| `reverse` | **`true`** | 自己插件的 worker | 工具/接缝静默调不通 |
+| `scope` | `'own'` | 只约束 `reverse` 的来源 | 别的插件调不通（会**明确报** `unknown method`） |
+| `service` | `false` | 别的插件的 server facet | `unknown service`（明确报错） |
+| `tool` | `null` | 模型 | 模型没有这个工具（会被 `tool_search` 也搜不到） |
+| `http` | `null` | 外部客户端 | 404 |
+
+默认值不是随手定的：**漏了会静默坏的面默认开，漏了会明确报错的面默认关。**
+
+两种"必须知道"的约束：
+
+- `tool` 存在 ⇒ `reverse !== false`（工具在 worker 里跑，只能经反向方法回到 handler）；`http` **不依赖** `reverse`（主进程直调 handler）
+- `deferred`（缺省 `exposure`）的工具**必须**配 `tool_search`，否则模型完全看不见它 —— 平台会在 spawn 时 warn。`deferred` 工具禁止配 `promptSnippet` / `promptGuidelines`（激活会重建 system prompt、破前缀缓存）
+
+工具名缺省 `<id>__<action 点→下划线>`，`namespace.name` 缺省插件 id。重名时平台**不注册 + warn**（pi 自己的工具表是静默先到先得，这里反过来：可发现、不改名）。
+
+**一个工具多个 mode 也能绑动作**：约束只是「一个工具 ↔ 一个动作」，不要求「一个动作只做一件事」。
+声明一个 dispatcher 动作 + `tool.name` 覆盖派生名即可（`scheduler` 的 `schedule_task`、
+`webhook` 的 `manage_webhook` 都这么做 —— handler 内部转调同一份 `api`，不是第二份实现）。
+判据是**参数是否共享**：共享就聚合（模型少一次判断），不共享就拆成多个动作。
+
+**什么时候手写 `pi.registerTool`**：工具完全在 worker 内完成，不需要主进程状态 / 跨插件 / 会话外信息。
+
+## 3.0.1 要广播还是要调用（`bus` vs `services`）
 
 两个面都跨插件，但分工只有一句话：**返回值是元信息 → `bus`；返回值是数据 → `services`。**
 
@@ -218,7 +262,7 @@ export function mount(el, host) {
 | 返回 | `{ delivered }` / `{ handled, failed }` —— **handler 返回值被运行时丢弃** | 业务数据（`notifications.unread` → `7`） |
 | 缺了 | 正常态（`delivered: 0`） | **错误**（`unknown service`） |
 | handler 抛错 | 吞掉，只计入 `failed` | **抛给调用方** |
-| 声明方式 | `bus.declare(topic, { declaredBy })` | `services.provide(name, fn)` |
+| 声明方式 | `bus.declare(topic, { declaredBy })` | `services.provide(name, fn)` 或动作的 `service: true` |
 | 命名 | `<插件 id>.<类别>`（如 `scheduler.run.failed`） | 短名，宿主补全成 `<插件 id>.<资源>.<动作>`（如 `scheduler.task.list`） |
 
 ### 三条硬规则
@@ -363,12 +407,16 @@ REST：
 | 暗色下输入框/按钮还是白底 | 用了不存在的 CSS 变量名（fallback 生效）。改用「3.1 主题」表里的变量，`plugin check` 会告警 |
 | 工具/skill 在该 agent 上不出现 | `agent.config.plugins` 里没有这个插件（逐 agent 开关）；`server`/`web` facet 不受它影响，所以页面还在、工具没了 |
 | 声明了 `skills/` 但不生效 | 目录结构必须是 `skills/<name>/SKILL.md`，且 frontmatter 有 `name`/`description`；`plugin check` 会红 |
+| 只有 `skills/` 的插件被判 degraded | 老版本会（"没有 facet"）；现在 skill 也算可加载内容。若仍 degraded，看 `reason` 是不是"既没 facet 也没 skills"（skills 目录里必须有子目录）|
+| 动作写了 `tool` 但模型看不见 | 缺省 `exposure: 'deferred'`，要靠 `tool_search` 才能被搜到 —— 会话的 `builtinTools` 里没勾 `tool_search` 时平台会在 spawn 日志里 warn。想常驻就用 `exposure: 'direct'` |
+| 动作工具名冲突 | 平台不注册 + warn（不静默改名）。工具名缺省 `<id>__<action>`，两个插件不会撞，撞的多半是同一插件内手写了 `tool.name` |
 
 ## 8. 完整参考
 
 随包示例（`plugin add` 直接可用）：
 
-- `apps/pi-agent-server/skills/builtin/pi-plugin-authoring/examples/hello-plugin` —— 最小集（server + web）
-- `apps/pi-agent-server/skills/builtin/pi-plugin-authoring/examples/kitchen-sink` —— 四类 facet 全景
+- `plugins/plugin-authoring/skills/pi-plugin-authoring/examples/hello-plugin` —— 最小集（server + web）
+- `plugins/plugin-authoring/skills/pi-plugin-authoring/examples/kitchen-sink` —— 四类 facet 全景（含 `bus.declare` / `services.provide` / `actions.define`）
 
-平台自带的 inline 插件（`callServer`）见 `workers/session-worker/src/inline-plugins.ts`：它演示了"声明 → 白名单过滤 → 注入"的完整形状，也是"实现方在平台代码里"时的写法。
+平台自带的 inline 插件（`sendFileToUser`）见 `workers/session-worker/src/inline-plugins.ts`：它演示了"声明 → 注入"的完整形状，也是"实现方在平台代码里"时的写法。
+`admin` 是"平台代码 + 可停用"的范例：8 个动作一份 handler，四个投影全开。

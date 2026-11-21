@@ -50,7 +50,7 @@ interface WorkerEvent { kind: 'event'; event: WorkerEventKind; data?: unknown }
 
 **为什么同形**：两个方向本来就是"一方问、一方答"的同一件事。分成两套类型必然漂移——曾经反向响应就是 `{ ok: boolean, result?, error? }` 的折叠写法，与正向的判别式联合不一致。同形之后两端的 pending / 响应处理逻辑可以共用一套心智。
 
-**超时**：正向不设超时（`prompt` 可能跑几分钟）；反向 60s —— 反向方法里存在真正的 I/O（`plugin.im.sendFile` 会走渠道上传），30s 会误杀。
+**超时**：正向不设超时（`prompt` 可能跑几分钟）；反向 60s —— 反向方法里存在真正的 I/O（`im.sendFile` 会走渠道上传），30s 会误杀。
 
 **不带版本字段**：master 与 worker 同仓、同版本、同一次启动。跨版本互通不存在，加版本号只会得到永远不会被读取的字段。
 
@@ -67,7 +67,7 @@ interface WorkerEvent { kind: 'event'; event: WorkerEventKind; data?: unknown }
 
 | 字段 | 取值 | 说明 |
 |---|---|---|
-| `name` | 完整方法名 | 内置无前缀；插件必须 `plugin.<pluginId>.` |
+| `name` | 完整方法名 | 内核 `__core__.<method>`；插件必须 `<pluginId>.<name>`（**没有裸名**）|
 | `direction` | `forward` / `reverse` | 走哪个方向 |
 | `handlerSide` | `worker` / `master` | handler 在哪一侧执行（派生自 `direction`，落成数据便于诊断） |
 | `source` | `core` / `plugin:<id>` | **归属**。判断方法属于谁一律查这个字段 |
@@ -78,7 +78,7 @@ interface WorkerEvent { kind: 'event'; event: WorkerEventKind; data?: unknown }
 ### 命名规则
 
 - **内置方法不带前缀**，正向内置方法必须与 pi `AgentSession` 同名同义（平台生命周期的 `createSession` 除外）
-- **插件方法强制 `plugin.<pluginId>.<method>`**，注册时校验，不合规直接拒绝并进 `rejected[]`
+- **两个名字空间，无裸名**：`source: 'core'` 必须 `__core__.<method>`；插件必须 `<它的 id>.<name>`。注册时校验，不合规直接拒绝并进 `rejected[]`；插件 id 也不许占 `__x__` 保留空间
 
 前缀只做两件事：**防止插件冒充内置方法**、**按来源分组管理**（日志 / 审计 / 禁用）。归属与语义判断一律读 `source` 字段，**不切分字符串**——前缀是准入规则，不是解析手段。
 
@@ -127,7 +127,7 @@ interface WorkerEvent { kind: 'event'; event: WorkerEventKind; data?: unknown }
 | 段 | 字段 | 来源 |
 |---|---|---|
 | ① 会话行对齐 | `sessionId` / `model` / `thinkingLevel` / `config` / `existingSessionPath` | `sessions` 行（新会话时取 agent 创建它的那份配置） |
-| ② 平台注入 | `workspacePath` / `capabilityIndex` | 不进表。`workspacePath` 取自 agent（工作目录跟随 agent），`capabilityIndex` 是本次启动时的授权快照 |
+| ② 平台注入 | `workspacePath` | 不进表。取自 agent（工作目录跟随 agent）；动作工具的描述符挂在第 ③ 段的 `plugins[i].actions` 上 |
 | ③ 派生 | `plugins` | **必须**由 ① 的 `config.extensions` 派生 |
 
 两条硬约束：
@@ -143,13 +143,13 @@ worker → master 的宿主动作。全部登记在 master 侧注册表。
 
 | 方法 | 提供者 | args 契约 |
 |---|---|---|
-| `plugin.im.sendFile` | im 插件 | `[{ filePath, fileName?, caption? }]` |
-| `plugin.notifications.post` | notifications 插件 | `[{ title, body, severity? }]` |
-| `plugin.admin.invoke` | admin 插件（能力控制面） | `[method, params?]` |
+| `im.sendFile` | im 网关 | `[{ filePath, fileName?, caption? }]` |
+| `notifications.post` | notifications 插件（`scope: 'own'`） | `[{ title, body, severity? }]` |
+| `admin.session.restart` 等 | `admin` 插件的动作（`scope: 'public'`） | 一个 params 对象 |
 
 **调用方身份由注册表上下文传入**（handler 的第一个参数是 `sessionId`），不放在 `args` 里——身份不是业务参数，让调用方自带身份等于让它可以撒谎。
 
-`plugin.admin.invoke` 是 server 管理能力的**统一入口**：所有 `callServer` 业务方法都从这一个反向方法过，由 master 控制面完成"解析 → 授权 → 审计"（见 [`capabilities`](pi-agent-server_capabilities.md)）。
+反向方法的名字空间是 **`<pluginId>.<name>`**（没有 `plugin.` 段了 —— 它只存在于 IPC 一层，会让同一个动作在 service 与 reverse 上是两个字符串）。内核正向方法用保留空间 **`__core__.<method>`**：注册时 `source: 'core'` 的裸名会被拒，插件也不许进这个空间。归属由注册表的 `source` 字段决定，**不解析字符串**。
 
 ## 事件通道
 
@@ -160,7 +160,18 @@ worker → master 的宿主动作。全部登记在 master 侧注册表。
 | 生命周期 | `ready` / `agent_start` / `agent_settled` / `agent_end` |
 | 消息与工具 | `message_update` / `message_end` / `tool_call` / `tool_result` |
 | 重试与队列 | `auto_retry_start` / `auto_retry_end` / `queue_update` |
-| 平台内部与插件 | `session_info_changed`（master 内部消费，不进 SSE）/ `plugin_event`（转发为 SSE `plugin.<id>.<name>`） |
+| 平台内部与插件 | `session_info_changed`（master 内部消费，不进 SSE）/ `plugin_event`（转发为 SSE `plugin.<id>.<name>` —— **事件名仍带 `plugin.`，与方法名迁移无关**）|
+
+## 名字空间：方法名与事件名是两套
+
+2026-11-21 的方法命名迁移（`plugin.<id>.` → `<id>.`）**不动 SSE 事件名**：
+
+| 东西 | 形状 | 为什么 |
+|---|---|---|
+| 正向/反向方法名 | `__core__.<method>` / `<pluginId>.<name>` | 方法名是**地址**，归属由注册表 `source` 字段决定，不解析字符串 |
+| 浏览器 SSE 事件名 | **`plugin.<pluginId>.<name>`** | 事件名不是地址，带 `plugin.` 是为了跟平台自身事件（`session_event` / `title_changed`）在同一条流里可区分 |
+
+前端按 `plugin.<id>.` 前缀订阅，迁移**零改动**。想"顺手统一"这两个命名空间的人请先读这张表。
 
 **事件名集合是开放的**：`event` 字段就是 pi 自己的事件类型（`message_start` / `message_update` / `tool_execution_*` / `agent_start` / `agent_settled` / `agent_end` / `turn_*` / `compaction_*` / `auto_retry_*` / `queue_update` / `session_info_changed` …），worker **原样透传，没有白名单**。平台只保留两个名字：`ready`（进程握手，带方法注册表摘要）与 `plugin_event`（插件上行，没有 pi 对应物）。
 
@@ -196,7 +207,7 @@ worker → master 的宿主动作。全部登记在 master 侧注册表。
 - `registerMethod(name, handler)` —— 注册本插件可被调用的方法，有回执、有顺序
 - `call(method, args)` —— 调 master 反向方法
 
-平台没有"插件专用通道"这种东西：浏览器投递到插件的能力走 `POST /api/sessions/:id/plugins/emit`，最终落到插件自己注册的 `plugin.<id>.emit`，与 master 主动调走同一张表、同一条分发路径。没有接收者就是 `unknown method`，不是静默成功。
+平台没有"插件专用通道"这种东西：浏览器投递到插件的能力走 `POST /api/sessions/:id/plugins/emit`，最终落到插件自己注册的 `<id>.emit`，与 master 主动调走同一张表、同一条分发路径。没有接收者就是 `unknown method`，不是静默成功。
 
 ## 通道时序
 
@@ -218,13 +229,13 @@ sequenceDiagram
     M->>B: SSE（投影后的事件名）
     W-->>M: response ok
 
-    W->>M: reverse-call plugin.im.sendFile（60s 超时）
+    W->>M: reverse-call im.sendFile（60s 超时）
     M->>M: 反向注册表查表（ctx.sessionId 由 master 注入）
     M->>B: 渠道下发 / 落地
     M->>W: reverse-response ok
 
     B->>M: POST /sessions/:id/plugins/emit
-    M->>W: call plugin.<id>.emit
+    M->>W: call <id>.emit
     W->>P: handler(params)
     P-->>W: 返回值
     W-->>M: response ok
@@ -256,7 +267,7 @@ sequenceDiagram
 ## 相关文档
 
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 进程模型与 `registerService` 注册入口
-- [`pi-agent-server_capabilities.md`](pi-agent-server_capabilities.md) —— `plugin.admin.invoke` 的控制面消费方
+- [`pi-agent-server_plugins-runtime.md`](pi-agent-server_plugins-runtime.md) —— 动作契约：反向 / service / tool / http 四个投影
 - [`pi-agent-server_plugins.md`](pi-agent-server_plugins.md) / [`plugins-manual`](pi-agent-server_plugins-manual.md) —— 插件桥（`emit` / `registerMethod` / `call`）
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— 会话创建、恢复与配置快照
 - [`pi-agent-server_core-sdk.md`](pi-agent-server_core-sdk.md) —— 内核边界、订阅契约、投影包归属

@@ -172,7 +172,7 @@ CREATE TABLE webhook_deliveries (
 
 ## 工具与 skill
 
-`manage_webhook`（`extension` facet，R6）：
+`manage_webhook`（聚合动作 `manage` 的 `tool` 面，`tool.name` 覆盖派生名）：
 
 | action | 行为 |
 |---|---|

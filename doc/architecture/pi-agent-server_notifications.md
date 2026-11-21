@@ -26,7 +26,7 @@ flowchart TB
   end
 
   subgraph PLG["bundled 插件 notifications"]
-    M["R3 反向方法<br/>plugin.notifications.post"]
+    M["动作 notifications.post<br/>scope: own + tool"]
     DB[("notifications<br/>插件自己的表")]
     API["R2 端点<br/>/api/p/notifications/*"]
     HDR["R11 顶栏动作<br/>铃铛 + 未读角标"]
@@ -49,7 +49,7 @@ flowchart TB
 
 | 方向 | 形态 |
 |---|---|
-| **写** | 只有反向方法 `plugin.notifications.post`。HTTP 上**没有**创建端点 |
+| **写** | 只有动作 `notifications.post`（`scope:'own'`：只有本插件的 worker 那个工具能调）。HTTP 上**没有**创建端点 |
 | **读** | `GET /api/p/notifications/` + 已读标记，任何客户端都能拉 |
 | **外发** | **平台完全不碰**。要推手机 → 平台之外的组件自己消费读接口 |
 
@@ -77,7 +77,7 @@ host.methods.handle('post', (params, ctx) => { /* 截断 + 拼 actionUrl + inser
 ```
 
 - 调用方是 worker 的 `postNotification` 工具；`sessionId` 来自 `ctx`（分发侧给），模型传不了
-- 闸门只有一个：**本插件对该会话是否生效**（`agent.config.plugins` 含 `notifications`）。工具本身由插件的 `extension` facet 注册（`plugins/notifications/extension/src/index.ts`），插件停用 → 工具消失
+- 闸门只有一个：**本插件对该会话是否生效**（`agent.config.plugins` 含 `notifications`）。工具由动作的 `tool` 面自动注册（描述符随 spawn 下发），插件停用 → 工具消失
 - 名字是 `postNotification` 而**不是** `sendNotifyToUser`：平台不承诺送达
 
 ```mermaid
@@ -132,5 +132,6 @@ POST /api/p/notifications/read-all                            → { ok, changed,
 1. **v1 在入口里**：`services/notifier.ts` + `repos/notification.repo.ts` + `routes/notifications.ts` + app.ts 里一段 `registerService`，共 214 行；web 侧还有 353 行 Vue。
 2. **v1 曾有投递层**：`notifications.json` 渠道文件、`deliveries` 列、重试/合并/静音，前端一次没渲染过 —— 整层删除（见通知退化为系统通知表那次变更）。
 3. **v2 下沉为 bundled 插件**：表、端点、反向方法、UI 全搬进 `platform/plugins/notifications/`；入口侧零残留。迁移后 `grep useNotifications|createNotifier|/api/notifications` 全仓为 0。
-4. **v3 工具也归插件**（`scheduler-plugin`）：`postNotification` 从 worker 硬编码壳迁到 `extension` facet；`serverBuiltinTools` 退役，工具是否出现只看插件是否对该会话生效。
+4. **v3 工具也归插件**（`scheduler-plugin`）：`postNotification` 从 worker 硬编码壳迁到插件；`serverBuiltinTools` 退役，工具是否出现只看插件是否对该会话生效。
+5. **v5 动作化**（`plugin-actions-contract`）：`post` 变成动作（`scope:'own'` + `tool`），`extension` facet 整个删除 —— 工具与 handler 不再各写一份参数 schema。
 5. **v4 接上总线订阅**（`webhook-plugin`）：此前只有发布侧（scheduler 在 `publish('scheduler.run.failed')`），收件箱从未订阅 —— 链路是断的。现在两个 topic 都接上，并顺手修了三处 `theme-var-unknown`（`--danger-bg` / `--text-dim` / `--surface-alt` 都不存在，暗色下是白底）。

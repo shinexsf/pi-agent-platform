@@ -34,8 +34,9 @@ mount 在 `apps/pi-agent-server/src/index.ts:81`，`config.isDev = nodeEnv !== '
 | `GET /debug/sessions/:id` | `{session, worker: {workerPid, ready, stderrTail, pendingCalls} \| null}` | 单 session + worker 元数据 + **最近 100 段 stderr**（关键排查点）|
 | `GET /debug/workers` | `{workers: WorkerSummary[]}` | 仅 workers |
 | `GET /debug/db?sql=...` | `{rows: any[]}` | **直接执行 SQL**（Drizzle `sql.raw`，仅 dev）|
-| `GET /debug/capabilities[?agentId=]` | 完整状态 | 能力控制面：固定策略 + 注册表分组 + agent 字段解析（见 [capabilities](pi-agent-server_capabilities.md)）|
-| `POST /debug/capabilities/invoke` | `{ok, ctx, result/error}` | synthetic ctx 走**真实 dispatch**（`{ sessionId?|agentId?, method, params? }`）——授权矩阵 L1 测试入口，不烧 LLM token |
+| `GET /api/runtime/actions` | `{actions: [...]}` | 动作目录：`scope` / `reverse` / `service` / `hasTool` / `http`——"模型为什么没有这个工具"先看这里 |
+| `GET /api/runtime/methods` | `{reverse, workers}` | 反向/正向方法表（动作方法带 `reach`），排查"名字对不对 / 有没有注册" |
+| `POST /api/p/:pluginId/:path` | 业务结果 | 动作 HTTP 面（需 `PI_SERVER_ACTION_HTTP=1`；默认关时 404）|
 
 **关键点**：`stderrTail` 是 worker 子进程 `child.stderr.on('data')` 收集的最后 100 段 chunk（`worker-pool.ts:177-185`）。worker 端任何 `console.error` 都会进这里。
 
@@ -167,8 +168,6 @@ router.get('/<resource>', (c) => {
 - `GET /debug/sessions/:id`
 - `GET /debug/workers`
 - `GET /debug/db?sql=...`
-- `GET /debug/capabilities[?agentId=]`（能力控制面状态）
-- `POST /debug/capabilities/invoke`（真实 dispatch 的 synthetic 入口）
 
 ### IM gateway debug
 

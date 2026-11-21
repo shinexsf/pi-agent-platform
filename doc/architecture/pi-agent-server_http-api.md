@@ -46,7 +46,8 @@
 | `/api/sessions/:id/attachments` | GET | 列出 session 附件元数据（不含文件路径，新→旧） | URL |
 | **`/api/sessions/import-from-file`** | **POST** | **关联外部 pi session 文件入库**（读 .jsonl 头部拿 sessionId，snapshot agent 配置建 row；不 spawn worker）。body: `{ agentId, piSessionPath, title? }`。Idempotent（id 冲突返已存在 row） | master |
 | **`/api/models`** | **GET** | **全局 model registry**（IDE Add-Agent 对话框下拉用） | master |
-| **`/api/capabilities`** | **GET** | **callServer 能力元数据**（method/module/access/scoped/summary）——WebUI 授权勾选列表唯一事实源，见 [capabilities](pi-agent-server_capabilities.md) | master |
+| **`/api/runtime/actions`** | **GET** | **动作目录**：每条一份 handler 的暴露面（`scope` / `reverse` / `service` / `hasTool` / `http` / `hasParams`）——见 [plugins-runtime](pi-agent-server_plugins-runtime.md) | master |
+| **`/api/p/:pluginId/:path`** | **POST** | **动作的 HTTP 面**：动作声明 `http` 时自动挂上（精确路径、body = params、200/400/404/500）。全局开关默认关（`PI_SERVER_ACTION_HTTP=1`），关闭时一律 404 | 插件 |
 
 **两阶段流程**（v2）：
 1. 客户端打开新对话 → `POST /api/sessions/agents/:agentId` → **master 生成 sessionId + spawn placeholder worker + 调 listCommands/listAvailableModels** → 返回 `{ sessionId, agentId, commands[], models[] }`（**sessions 表未写**）
@@ -171,7 +172,6 @@ interface SessionContextDTO {
 | `/api/config/server` | GET | 获取服务器默认配置（~/.pi/server/config.json）|
 | `/api/config/server` | PUT | 更新服务器默认配置 |
 | `/api/config/skills` | GET | 列出 skills（**用户目录** `~/.pi/agent/skills`；不含平台随包 skill） |
-| `/api/config/server-builtin-skills` | GET | 平台随包 skill 清单 `[{ name, description, path, builtin: true }]`（**只读，无 POST/PUT/DELETE**；见 [builtin-skills](pi-agent-server_builtin-skills.md)） |
 | `/api/config/skills/:name` | GET/PUT/DELETE | 读取/更新/删除 skill |
 | `/api/config/prompts` | GET | 列出 prompts |
 | `/api/config/prompts/:name` | GET/PUT/DELETE | 读取/更新/删除 prompt |

@@ -12,7 +12,7 @@
 |---|---|---|
 | **装载点**（在哪跑） | 目录存在性：`server/` `worker/` `extension/` `web/` | 装载器 |
 | **扩展点**（做什么） | 代码默认导出里调的注册函数 | 内核注册表 |
-| **能力面**（能做什么） | 内核注入的 `host` 对象（六个能力面 + 一个事件出口） | 插件 |
+| **能力面**（能做什么） | 内核注入的 `host` 对象（七个能力面 + 一个事件出口） | 插件 |
 
 facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们是"第二套真相"，会与代码漂移。
 
@@ -35,17 +35,21 @@ flowchart LR
 
   B0["② 四个装载点（各在自己的进程）<br/>server 立即 · worker 下次 spawn<br/>pi 扩展 下次建会话 · web 刷新页面"]
 
-  subgraph L3["③ 运行期说话：六个能力面 + 一个事件出口"]
-    C0["host<br/>db · sessions · agents<br/>lifecycle · bus · services"]
+  subgraph L3["③ 运行期说话：七个能力面 + 一个事件出口"]
+    C0["host<br/>db · sessions · agents · lifecycle<br/>bus · services · actions"]
     C1[("topics<br/>declare / subscribe")]
     C2[("providers<br/>provide / call")]
     C3[("反向 IPC<br/>methods.handle")]
     C4["其他插件的<br/>server facet"]
     C5["面 worker 进程"]
     C6["浏览器"]
+    C7["模型（pi 工具）"]
+    C8["外部客户端"]
     C0 --> C1 --> C4
     C0 --> C2 --> C4
-    C0 --> C3 -->|"bridge.call"| C5
+    C0 -->|"actions.reverse"| C3 -->|"bridge.call"| C5
+    C0 -->|"actions.tool<br/>描述符随 spawn"| C7
+    C0 -->|"actions.http<br/>（开关默认关）"| C8
     C0 -->|"events 出口"| C6
   end
 
@@ -62,7 +66,7 @@ flowchart LR
   A5 -.-> D2
 ```
 
-读法：**① 是"装载一次"**（发现 → 闸门 → import（零副作用断言）→ `init(host)` → 注册 → 记账），**② 是"同一个插件落在几个进程"**（四个装载点各有自己的生效时机），**③ 是"运行期怎么说话"**（六个能力面 → 三张互操作表 → 其它 facet 或浏览器），**④ 是"怎么观察、怎么收回来"**（三个只读端点 + 按插件归零的撤销）。
+读法：**① 是"装载一次"**（发现 → 闸门 → import（零副作用断言）→ `init(host)` → 注册 → 记账），**② 是"同一个插件落在几个进程"**（四个装载点各有自己的生效时机），**③ 是"运行期怎么说话"**（七个能力面 → 三张互操作表 → 其它 facet / 模型 / 外部 / 浏览器），**④ 是"怎么观察、怎么收回来"**（三个只读端点 + 按插件归零的撤销）。
 
 三条虚线是"机制保证而不是纪律约定"的那几处：零副作用断言（import 期注册直接拒）、撤销走账本（`disposePlugin` 一起清订阅与提供者）、查询面只读。
 
@@ -75,7 +79,9 @@ flowchart LR
 | ③ pi 原生扩展 | 会话 worker 内的 pi 扩展系统，`extension/index.js` | 下次创建会话 | 同上 |
 | ④ 浏览器 | SPA，`web/*.js`（`mount(el, host)`） | 浏览器下次加载 / 刷新 | `apps/pi-agent-web/src/plugins/host.ts` |
 
-**平台自身能力走同一条路**：`callServer` 是 worker 侧的 **inline 插件**（`workers/session-worker/src/inline-plugins.ts`），编译进平台、不经目录发现、不可卸载，但注册动作与目录插件完全一致。判定分界 = **实现方在不在平台代码里**。
+**平台自身能力走同一条路**：`sendFileToUser` 是 worker 侧的 **inline 插件**（`workers/session-worker/src/inline-plugins.ts`），编译进平台、不经目录发现、不可卸载，但注册动作与目录插件完全一致。判定分界 = **实现方在不在平台代码里**。
+
+原 `callServer`（8 个管理能力）已改为 bundled 插件 `admin` 的**动作**：它的实现方是平台代码，但"平台管理"本身是可停用的能力，所以走插件形态 —— `enabled:false` 之后平台照样能建 agent、开会话、聊完一轮。
 
 ## 十一个注册扩展点
 
@@ -118,7 +124,7 @@ flowchart LR
 
 `:name` 匹配单段（值进 `request.params`）；`*` 只能作**最后一段**（匹配剩余全部，进 `params['*']`）。分发时**字面量永远优先于模式**（否则"注册顺序决定语义"，作者不可能猜对）。webhook 不需要专用机制：插件拿原始路径自己分发。
 
-## 六个能力面 + 一个事件出口（`host`）
+## 七个能力面 + 一个事件出口（`host`）
 
 插件访问平台的**唯一**通道 —— 不 import 内核模块，也不拿 `WorkerPool`（暴露 = 插件能杀进程）。
 
@@ -127,12 +133,13 @@ flowchart LR
 | `sessions` | `call` / `get` / `list` / `status` / `hasRow` / `subscribe` / **`ensure`** / **`systemEvent`** | **`call` 是唯一调用口**：平台方法 `prompt` / `abort` 与插件正向方法同一形状。`sessionId` 永远由调用方给（宿主不提供"选会话"）。`ensure` 是"取/建一个可用会话"，`systemEvent` 是"把非用户消息（信封）交给它" |
 | `agents` | `list` / `get` / `update` | 插件维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放；每次 query 进审计日志 |
-| `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 会话生命周期钩子 |
+| `lifecycle` | `onSessionCreated` / `onSessionDisposed` / **`runtime()`** | 会话生命周期钩子 + 只读运行态快照（版本/uptime/端口/池统计；**数据不是句柄**） |
 | `bus` | **`declare`** / `publish` / **`publishAndWait`** / `subscribe` / **`topics`** | **插件间广播**（0..n）：topic 必须先声明，owner 双向受控，发布方拿到送达/处理状态。**handler 返回值一律丢弃** —— 要业务数据请用 `services` |
 | `services` | **`provide`** / `call` / **`list`** | **插件间定向调用**（恰好 1 个提供者）：返回业务数据、错误外抛、无会话上下文。与面 worker 的 `host.methods`（带 `sessionId`、私有）**是两套独立机制** |
+| `actions` | **`define`** | 一份 handler → 反向 / service / tool / http 四个投影（见下节「动作契约」）。**面向 agent / 别的插件 / 外部的同一个行为只写这一份** |
 | `events`（出口，非能力面） | `emit` | 发给**浏览器**（worker → server → SSE）；server 侧调用会 warn，明确告警而不是静默吞掉 |
 
-内核侧（`packages/core/src/host-api.ts`）声明六个面：`db` / `sessions` / `agents` / `lifecycle` / `bus` / `services`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
+内核侧（`packages/core/src/host-api.ts`）声明**七个面**：`db` / `sessions` / `agents` / `lifecycle` / `bus` / `services` / `actions`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
 
 **`bus` 与 `events` 不要混**：`bus` 是"发给别的插件"，`events` 是"发给浏览器"。命名冲突过一次（原先想直接复用 `events`），最后按方向拆开。
 
@@ -188,12 +195,38 @@ host.bus.subscribe('webhook.delivery.failed', (p) =>
 
 | 提供方 | 例子 | 注入条件 |
 |---|---|---|
-| 插件的 `extension/` facet（R6） | `postNotification`（notifications）、`schedule_task`（scheduler）、`manage_webhook`（webhook） | 插件在 `agent.config.plugins` 里 |
+| 插件的 `extension/` facet（R6） | 纯 worker 内完成的工具（现有插件已无此类） | 插件在 `agent.config.plugins` 里 |
 | 插件的 `worker/` facet | 正向方法（agent 工具 → `bridge.call`） | 同上 |
 | 插件的 `skills/<name>/SKILL.md` | `scheduler` / `webhook` 的用法说明 | 同上 |
-| **inline 插件**（编译进平台） | `callServer`、`sendFileToUser` | 恒注入；插件自己可以收窄（`callServer` 在没有授权能力时返回空） |
+| **inline 插件**（编译进平台） | `sendFileToUser` | 恒注入（不随 `config.plugins`） |
+| **动作的 `tool` 面**（平台接管注册） | `admin__*` 8 个、`postNotification`、`publishHtmlView`、`schedule_task`、`manage_webhook` | 插件在 `agent.config.plugins` 里，且动作声明了 `tool` |
 
-`inline` 与目录插件的判定分界是**实现方在不在平台代码里**：在（`callServer` 的能力控制面、`sendFileToUser` 的网关侧）→ inline；不在（通知收件箱、定时任务）→ 随那个插件走。
+`inline` 与目录插件的判定分界是**实现方在不在平台代码里**，但这条只用来判断"要不要目录"；
+**能不能停用**是另一个问题 —— 管理动作的实现方是平台代码，却做成了 `admin` 插件，因为
+"平台管理"是可停用的能力。真正恒注入的只剩 `sendFileToUser`（网关侧的传输原语）。
+
+### 动作契约：一份 handler，四个独立投影
+
+`host.actions.define({ '<action>': { params, handler, reverse, scope, service, tool, http } })` 一次声明
+最多产生四类产物，互相独立：
+
+| 字段 | 产物 | 谁会看到 | 缺省 |
+|---|---|---|---|
+| `reverse` | 反向方法 `<id>.<action>` | 自己插件的 worker（自动注册的工具走这条） | **`true`** |
+| `scope` | 只约束 `reverse` 的来源（`own` 只有 owner / `public` 谁都能调） | — | `'own'` |
+| `service` | `host.services` 里的同名 service | 别的插件的 server facet | `false` |
+| `tool` | pi 工具（描述符随 spawn 下发，worker 自动 `registerTool`） | 模型 | `null` |
+| `http` | `POST /api/p/<id>/<path>`（精确路径，body = params） | 外部客户端 | `null`（全局开关默认关） |
+
+默认值判据：**漏了会静默坏的面默认开（`reverse`），漏了会明确报错的面默认关（其余三个）**。
+约束只有两条：`tool` 存在 ⇒ `reverse !== false`（工具在 worker 跑）；`http` **不依赖**
+`reverse`（主进程直调 handler）。
+
+三种旧机制表达不了的组合，现在能写：`{ reverse:false, service:true }`（只给别的 server）、
+`{ scope:'own', service:true }`（别的 server 能、别的 worker 不能）、`{ scope:'own', tool:{…} }`（只给模型）。
+
+工具名缺省 `<id>__<action 点→下划线>`，`exposure` 缺省 `deferred`（零上下文成本，靠 `tool_search`
+激活）；命名的唯一性由平台在 spawn 时校验，冲突者**不注册 + warn**（pi 自己的注册表是静默先到先得）。
 
 ### 插件自带的 skill：数据目录，不是 facet
 
@@ -328,4 +361,5 @@ pnpm pack:cli           # 含 check-packaged：随包插件与 web 产物断言
 - **插件目录监听**：本期靠 `plugin reload` 手动触发
 - **`db.query` 全开放**：插件完全可信，已知可 `DROP TABLE`。缓解是审计日志；DDL 拦截留后续开关
 - **bundled 改名/替换**：旧 id 的墓碑不做特殊处理（新 id 正常出现）
-- **`capabilities/` 里的 `channel.*` / `config.*` 空占位**：im 搬走后归属待定（注册能力组 = 第七个面？还是删）
+- **动作 `tool` 的卡片渲染**：`expose.tool.renderer`（toolCard 随描述符注册）预留，本期未做
+- **`admin` 的只读状态页**：动作已全绿，`web/` 页面还没做（先用 curl / 模型调用）

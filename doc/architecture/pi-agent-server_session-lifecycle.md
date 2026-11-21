@@ -264,7 +264,7 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 
 **session 恢复**：完全读 sessions 表，**不读 agent 表**。
 
-**恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config / **插件集合** 全部优先于 agent，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。**唯一例外**：row config 缺 `capabilities` key（存量 row 未快照过）→ 授权回落 agent 行（`null` 显式 ≠ `undefined` 未快照，见 [`capabilities`](pi-agent-server_capabilities.md)）。spawn 时同时下发 `capabilityIndex`（按有效授权过滤）供 callServer 工具内嵌 description。
+**恢复的实现**（`spawnAndCreate` 重建 worker 时）：`buildRuntimeConfig` 以 session 行为 sessionOverrides——row 的 model / thinkingLevel / config / **插件集合** 全部优先于 agent，实际模型回写也只用 worker 解析结果或 row 值，**不用 agent.model 覆盖 row**。没有任何回落字段（`capabilities` 已退役，配置是完全快照）。spawn 时同时下发**动作工具描述符**（`WorkerPluginSpec.actions`，按该会话启用的插件收集）供 worker 自动注册工具。
 
 **插件集合也挂在 Session 上**（`session.plugins` = 本次 spawn 实际下发的那份），任何「该会话有哪些插件」的查询都读它，不回读 agent 表。
 
@@ -288,7 +288,7 @@ async function setSessionModel(sessionId: string, provider: string, modelId: str
 | 空 | `X` | `setSessionName(X)` 回填 pi（worker-dead 改名）|
 | `X` | `Y` / 空 | DB 赢 `setSessionName(DB)` + info 冲突日志（清空同理）|
 
-三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）与 callServer 控制面的 `session.update` title 分支共用 `services/session-ops.ts` 的 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 已 wiring**：`slash-commands` 将会话级命令委派给 `Session.executeCommand(..., 'zh')`，同样走 `renameSession()`（此前因 ctx 未提供 `setTitle` 恒返“不支持重命名”）；IM `/model` 同路径修复了单参误传 + 落行。
+三个 HTTP 改名入口（`POST /:id/command {name:'name'}`、`POST /:id/rename`、`PATCH /:id` title 分支）与 `host.sessions.update()`（admin 动作 / capabilities 的原行为）的 title 分支共用 `services/session-ops.ts` 的 `renameSession()` helper；worker 活/死分支如上表。**IM 侧 `/name` 已 wiring**：`slash-commands` 将会话级命令委派给 `Session.executeCommand(..., 'zh')`，同样走 `renameSession()`（此前因 ctx 未提供 `setTitle` 恒返“不支持重命名”）；IM `/model` 同路径修复了单参误传 + 落行。
 
 ## sessionId 由 master 生成
 
