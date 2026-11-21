@@ -186,6 +186,8 @@ Worker 端：`callMaster()` 发送 `ReverseCallRequest`，await `ReverseCallResp
 
 未命中返回 `unknown method: <name>`；插件被禁用时其方法置 `disabled` 并返回 `method disabled: <name>`。注册表内容可通过 `GET /api/runtime/methods` 查看。
 
+**这张表不服务跨插件调用**（`plugin-interop-contract` 定下的边界）：`plugin.<id>.*` 是"本插件的 facet 之间的私有桥"，签名里强制带 `sessionId`（调用方会话身份）。插件要跟别的插件说话用 `host.services`（无会话、独立注册表 `plugin-services.ts`），要替某会话做事用 `sessions.call`。两张表由不同模块持有、在 `GET /api/runtime/methods` 与 `GET /api/runtime/interop` 分别暴露。
+
 ## 事件转发与订阅（2026-09-30 反转）
 
 pool **不再持 listener**（旧的 `subscribe()` / `pendingListeners` 缓冲 / tryAttach 定时器 / 死亡转移机制已删除）：

@@ -16,6 +16,56 @@
 
 facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们是"第二套真相"，会与代码漂移。
 
+## 全景图
+
+```mermaid
+flowchart LR
+  subgraph L1["① 装载一次（server 进程）"]
+    A1["发现<br/>bundled 目录 + 注册表台账"]
+    A2{"闸门<br/>apiVersion · PI_PLUGINS<br/>requires.plugins"}
+    A3["import server/index.js<br/>+ 零副作用断言<br/>?v=mtime"]
+    A4["init(host)"]
+    A5["注册扩展点<br/>菜单 / 页面 / 路由 / 槽位 / 工具卡<br/>methods · events · headerActions"]
+    A6[("disposer 账本")]
+    A7["degraded / disabled<br/>整包跳过"]
+    A1 --> A2
+    A2 -->|"放行"| A3 --> A4 --> A5 --> A6
+    A2 -->|"不放行"| A7
+  end
+
+  B0["② 四个装载点（各在自己的进程）<br/>server 立即 · worker 下次 spawn<br/>pi 扩展 下次建会话 · web 刷新页面"]
+
+  subgraph L3["③ 运行期说话：六个能力面 + 一个事件出口"]
+    C0["host<br/>db · sessions · agents<br/>lifecycle · bus · services"]
+    C1[("topics<br/>declare / subscribe")]
+    C2[("providers<br/>provide / call")]
+    C3[("反向 IPC<br/>methods.handle")]
+    C4["其他插件的<br/>server facet"]
+    C5["面 worker 进程"]
+    C6["浏览器"]
+    C0 --> C1 --> C4
+    C0 --> C2 --> C4
+    C0 --> C3 -->|"bridge.call"| C5
+    C0 -->|"events 出口"| C6
+  end
+
+  subgraph L4["④ 观察与撤销（只读 / 归零）"]
+    D1["GET /api/runtime/interop<br/>topics + services"]
+    D2["GET /api/extensions + revs<br/>GET /api/plugins/:id/extensions"]
+    D3["停用 / reload<br/>退订 · 撤提供者 · 撤路由"]
+  end
+
+  A4 -->|"插件拿到的 host"| C0
+  A4 --> B0
+  A6 -.->|"撤销按插件归零"| D3
+  C0 -.-> D1
+  A5 -.-> D2
+```
+
+读法：**① 是"装载一次"**（发现 → 闸门 → import（零副作用断言）→ `init(host)` → 注册 → 记账），**② 是"同一个插件落在几个进程"**（四个装载点各有自己的生效时机），**③ 是"运行期怎么说话"**（六个能力面 → 三张互操作表 → 其它 facet 或浏览器），**④ 是"怎么观察、怎么收回来"**（三个只读端点 + 按插件归零的撤销）。
+
+三条虚线是"机制保证而不是纪律约定"的那几处：零副作用断言（import 期注册直接拒）、撤销走账本（`disposePlugin` 一起清订阅与提供者）、查询面只读。
+
 ## 四个装载点
 
 | 装载点 | 位置 | 生效时机 | 装载者 |
@@ -245,10 +295,11 @@ pi-server plugin reload     # POST /api/extensions/reload
 |---|---|
 | `GET /api/plugins` | 静态事实（含 `source: bundled\|user`、状态、facet 探测结果） |
 | `GET /api/plugins/:id` | 单插件详情（入口探测 / 依赖 / 关联台账条目） |
-| `GET /api/plugins/:id/extensions` | 该插件的全部运行期注册（含 `rejected`） |
-| `GET /api/extensions` | 全局：`pages`（**已摊平菜单字段**）+ 兼容用的 `menus` |
+| `GET /api/plugins/:id/extensions` | 该插件的全部运行期注册（含 `rejected`）+ **`interop` 切片**（该插件声明/订阅的 topic、提供的 service） |
+| `GET /api/extensions` | 全局：`pages`（**已摊平菜单字段**）+ 兼容用的 `menus` + **`revs`**（每个插件 `web/` 的 mtime 版本串，浏览器侧拼 `?v=`） |
 | `GET /api/sessions/:id/extensions` | 会话级：槽位 / 工具卡（按该会话插件集过滤） |
-| `POST /api/extensions/reload` | 重装插件运行期（`plugin reload`） |
+| `POST /api/extensions/reload` | 重装插件运行期（`plugin reload`）；**dev 实例要打自己的端口**，CLI 的 `plugin reload` 默认找打包实例 |
+| **`GET /api/runtime/interop`** | **插件互操作全表**：`topics[]`（topic / owner / declaredBy / 订阅数 / pending 数 / 末次发布）+ `services[]`（name / owner） |
 | `GET /api/p/<id>/*` | 插件 HTTP 端点（唯一分发器） |
 | `GET /plugins/<id>/web/*` | 插件 web 资源（按**快照**解析目录，bundled 也覆盖） |
 

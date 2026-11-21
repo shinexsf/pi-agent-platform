@@ -80,7 +80,7 @@ pi 的 skill scope 由物理位置判定（`loadSkills()` 的 `getSource` + `get
 | skill | 回答的问题 | 明确不写 |
 |---|---|---|
 | `pi-capabilities-usage` | 怎么查/改平台状态、为什么被拒、什么时候生效、写操作最小权限 | 触发流程（一句指针转上一条） |
-| `pi-plugin-authoring` | 给平台加功能：插件形态、四类 facet、扩展点清单、硬约束、最小示例与自测 | capability 授权模型（只在涉及 `host` 权限时提一句） |
+| `pi-plugin-authoring` | 给平台加功能：插件形态、四类 facet（四个装载点）、11 个注册扩展点、**六个能力面 + 插件间通信的两条路（`bus` 广播 / `services` 调用，含「返回值是元信息→bus，是数据→services」判据）**、硬约束、最小示例与自测 | capability 授权模型（只在涉及 `host` 权限时提一句） |
 
 **切分标准是任务粒度，不是能力模块粒度**：`prompt` 里只放 `name` + `description` + `location` 三行（模型据此决定要不要 `read`），所以 `description` 就是"何时读这份"的判据，合并会让命中面变宽、精度下降。三份合计 `<available_skills>` 段约 1.5K 字符（≈500–700 token），成本由 `description` 长度主导。
 

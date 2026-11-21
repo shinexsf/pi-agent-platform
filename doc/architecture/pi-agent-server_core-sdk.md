@@ -120,7 +120,7 @@ initCoreConfig({
 - `events` 只有一个 `maxPayloadBytes` 常量，是出口限流参数，不构成能力；插件侧的 `emit` 在 worker bridge 上
 - `outbound`（反向方法注册）是**注册面**而不是能力面 → 变成 `host.methods.handle`，由装载器 flush 到 `WorkerPool.registerService`
 - **`bus` 是后来加回的**（`scheduler-plugin`）：通知与定时任务都是插件，定时任务的 run 失败要进收件箱，但插件之间不能互相 import。`bus` 是那个匿名的交汇点 —— 发布方与订阅方**互不相识**。它不叫 `events`：`host.events` 已被"worker → server → SSE"的事件出口占用
-- **`services` 是第七个（也是最后一个）**（`plugin-interop-contract`）：`bus` 只能广播、只能回`{ delivered }`，而"问别的插件要数据"没有第一等机制 —— 唯一的候选是面 worker 的反向方法表，但它带 `sessionId`、按分层只服务自己的 facet。于是另开一面，**两张表彻底分开**（见下节「插件互操作的三个面」）
+- **`services` 是「加回两个」里的第二个（现共六个）**（`plugin-interop-contract`）：`bus` 只能广播、只能回`{ delivered }`，而"问别的插件要数据"没有第一等机制 —— 唯一的候选是面 worker 的反向方法表，但它带 `sessionId`、按分层只服务自己的 facet。于是另开一面，**两张表彻底分开**（见下节「插件互操作的三个面」）
 
 `WorkerPool` 明确**不作为面暴露**：暴露 = 插件能决定杀进程 / 超卖并发。需要"活跃会话"信息的地方用 `sessions.list/status`。
 

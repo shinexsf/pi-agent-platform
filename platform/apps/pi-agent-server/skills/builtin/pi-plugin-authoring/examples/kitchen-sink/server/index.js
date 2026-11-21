@@ -1,5 +1,5 @@
 /**
- * server facet —— 扩展点全景（会话槽位 / 工具卡片 / 触发器来源 / 进程内触发）。
+ * server facet —— 扩展点全景（顶栏动作 / 会话槽位 / 工具卡片 / HTTP 端点 / 广播 / 定向调用）。
  *
  * 注意三条硬约束：
  * 1. 所有注册都在 init(host) 里完成 —— 路由表首次请求后冻结，运行期再注册会抛错
@@ -49,6 +49,18 @@ export default {
       }
       return { json: { received: parsed, contentType: req.header('content-type') ?? null } };
     },
+  });
+
+  // ── 广播：声明一个 topic（前缀 MUST 是本插件 id；publisher 型 = 只有你能发）──
+  // 订阅方即使比你先装载也不会漏：它那侧处于 pending，你 declare 后自动接上。
+  host.bus.declare('kitchen-sink.demo.done', { declaredBy: 'publisher' });
+
+  // ── 定向调用：对外提供能力（短名由宿主补成本插件前缀）─────────────────
+  // 别的插件：const n = await host.services.call('kitchen-sink.demo.count', {});
+  let count = 0;
+  host.services.provide('demo.count', () => {
+    count += 1;
+    return { count, at: new Date().toISOString() };
   });
 
   // （触发器扩展点在触发器子系统下线时一并移除；插件化后重新引入）

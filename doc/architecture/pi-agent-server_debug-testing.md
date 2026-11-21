@@ -174,6 +174,13 @@ router.get('/<resource>', (c) => {
 
 - `GET /api/im/debug/state`（实现于 `im-gateway/routes/im-debug.ts`）
 
+### 插件运行期 / 互操作（正式端点，兼作排查入口）
+
+- `GET /api/runtime/interop` —— **插件互操作全表**：每个 topic 的 owner / `declaredBy` / 订阅数 / pending 数 / 末次发布；每个 service 的 name / owner。查"谁在听、谁提供、为什么没人接"先看这里
+- `GET /api/runtime/methods` —— 面 worker 的方法表（正向 + 反向），**与上面的 interop 不是一张表**
+- `GET /api/plugins` / `GET /api/plugins/:id` / `GET /api/plugins/:id/extensions` —— 安装事实 + 该插件的注册项与 `interop` 切片（含 `rejected[]`、`registerError`）
+- `POST /api/extensions/reload` —— 重装插件运行期。**dev 实例必须打自己的端口**（`:3000`），CLI 的 `pi-server plugin reload` 默认找打包实例
+
 ### 生产可用但承载 debug 能力
 
 - `GET /api/im/events` (SSE，渠道日志实时流 — admin UI QR 登录的正式依赖，**全模式正式端点**，已不算 debug)
@@ -243,6 +250,25 @@ curl -s http://localhost:3000/api/im/debug/state | jq .sessions
 # 3. 看 QQ 群 fast-fail 已通知列表
 curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
 ```
+
+### 场景 E：插件之间"说不上话"
+
+按这个顺序看，每一步都有明确判据：
+
+```bash
+curl -s localhost:3000/api/runtime/interop | jq '{topics: [.topics[] | {topic, owner, declaredBy, subscribers, pending}], services: [.services[] | {name, owner}]}'
+```
+
+| 现象 | 判据 | 原因 |
+|---|---|---|
+| `publish` 返回 `reason: "unknown-topic"` | interop 里没有这个 topic | 发布方没 `declare`（或声明前缀不是自己 id） |
+| `delivered: 0` | topic 在表里、订阅数 0 | 没人订阅（**正常态**）；或订阅方还没装载（此时它那侧是 `pending`） |
+| 订阅方说没收到 | 该插件 `pending > 0` | 装载顺序问题：等发布方 `declare` 即自动接上；若一直 pending，说明发布方根本没声明 |
+| `call` 抛 `unknown service` | `services[]` 里没有这个名字 | 提供方没 `provide` / 被停用 / 前缀补错（短名由宿主补成 `<插件 id>.<名字>`） |
+| 有 service 但调用超时 | 提供方 handler 慢 | `services.call` 默认 5s；handler 里别做长等待 |
+| 改了插件代码不生效 | `reload` 返回的 `imports` 数没变 | ① dev 要打 `:3000` 的 reload；② bundled 的 server facet 跑**构建产物**，改 `src/*.ts` 后必须 `pnpm build:plugins` |
+
+停用某插件后再看一眼 interop，是验证"撤销真的归零"最快的办法（它的 service 消失、它的 topic 退回未声明）。
 
 ## 禁止事项
 

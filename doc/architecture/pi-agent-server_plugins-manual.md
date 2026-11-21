@@ -334,6 +334,7 @@ REST：
 | `GET /api/plugins` | 所有插件的状态、facet 探测结果 |
 | `GET /api/plugins/:id/extensions` | 你注册了什么，**以及被拒了什么**（`rejected` 带原因） |
 | `GET /api/extensions` | 全局页面（已带导航字段） |
+| **`GET /api/runtime/interop`** | **你声明/订阅的 topic 与提供的 service 在不在表里**（谁在听、有没有 pending、有没有人提供） |
 | `GET /api/sessions/:id/extensions` | 该会话的槽位 / 工具卡 |
 | `GET /api/p/<id>/...` | 你自己的端点 |
 
@@ -353,6 +354,9 @@ REST：
 | `degraded`：`apiVersion` 不匹配 | `package.json` 的 `piServer.apiVersion` 与平台不一致（版本号写对了才能被装载） |
 | 注册项进了 `rejected` | 重名 / 未定义槽位 / `*` 位置不合法 / web 入口文件不存在 —— 原因字段写清了 |
 | 改了代码没生效 | 插件**代码**变化不会被文件监听捕获，跑 `pi-server plugin reload`；worker/pi 扩展还要等下次 spawn。浏览器侧的 `web/*.js` 不用管缓存（`?v=<rev>` 自动变），但要刷新页面才会重新挂载 |
+| 改了代码没生效（**dev 实例**） | `plugin reload` 这条 CLI **默认打打包实例**，不是你的 dev 端口 —— dev 要 `curl -X POST :3000/api/extensions/reload`（或重启 dev）。随包插件的 `server` facet 跑的是**构建产物**，改 `server/src/*.ts` 后必须 `pnpm build:plugins`，否则旧代码会拿新签名静默失败 |
+| 发布了事件但对方没收到 | 先看 `/api/runtime/interop`：① topic 不在表里 = 你没 `declare`（或前缀不是自己 id → `invalid-topic`）；② 你在表里、订阅数 0 = 没人订阅（正常态）；③ 对方侧 `pending > 0` = 它比你先装载，等你 `declare` 后自动接上 |
+| `services.call` 抛 `unknown service` | 名字是 `<提供方 id>.<名字>`；`provide` 写短名（宿主补前缀），`call` 必须写全名。提供方停用后立刻变 `unknown service`（这是验证撤销是否归零的最快办法） |
 | 页面白屏、导航有项 | web 产物 404：检查 `web/<component>.js` 是否真的存在（`plugin check` 会红） |
 | 详情页白屏，报 `undefined … 'params'` | **平台不给 `mount()` 传路由参数**：签名只有 `(el, host)`。页面注册成 `/x/:id` 后，id 要自己从 `location.pathname` 取最后一段（`new` 之类特殊值自己约定）。typecheck 拦不住（模块导出边界是 `any`） |
 | 顶层注册导致整个插件被拒 | `import()` 后平台断言"注册增量为 0"，注册只能发生在 `init()` 里 |

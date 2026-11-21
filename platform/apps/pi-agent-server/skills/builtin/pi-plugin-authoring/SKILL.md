@@ -12,7 +12,7 @@ description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约：目�
 | 示例 | 覆盖 | 位置 |
 |---|---|---|
 | `hello-plugin` | 最小集：server facet + 一个页面 | 本 skill 同目录的 `examples/hello-plugin/` |
-| `kitchen-sink` | 四个装载点全景（server/worker/extension/web），工具 / 命令 / 钩子 / 槽位 / 工具卡 / 反向方法 | `examples/kitchen-sink/` |
+| `kitchen-sink` | 四个装载点全景（server/worker/extension/web），工具 / 命令 / 钩子 / 槽位 / 工具卡 / 反向方法 / **广播声明 + 服务提供** | `examples/kitchen-sink/` |
 
 把示例复制到一个**你自己的目录**再改（插件 id 就是 `package.json` 的 `name`，别在示例目录里直接改）。
 

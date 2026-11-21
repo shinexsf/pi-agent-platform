@@ -20,7 +20,9 @@
 | **反向调用** `reverse-call` / `reverse-response` | worker → master | 宿主 API：下发文件、写通知、调 server 能力 | 有（60s 超时） |
 | **事件** `event` | worker → master | pi 原生事件透传 | **无** |
 
-> 判据：**要回执、要顺序 → 用调用；可丢、高频 → 用事件**。事件不带 id，也没有 ack —— 需要确认的插件通信走反向方法，而不是在事件上叠回执。
+> 判据：**要回执、要顺序 → 用调用；可丢、高频 → 用事件**。事件不带 id，也没有 ack —— 需要确认的通信走调用，而不是在事件上叠回执。
+>
+> 三层调用各管一段：**worker→自己的 server facet** 走反向方法（带 `sessionId`，本文）· **插件→插件** 走 `host.services`（无会话，见 [`core-sdk`](pi-agent-server_core-sdk.md)）· **插件→某会话** 走 `sessions.call`。
 
 ## 信封
 
