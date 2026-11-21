@@ -37,7 +37,7 @@ flowchart TB
   subgraph kernel["内核（packages/core）"]
     ENSURE["sessions.ensure<br/>三态 + fail closed"]
     SE["sessions.systemEvent<br/>信封唯一构造点<br/>streamingBehavior 透传"]
-    BUS["host.bus<br/>publish"]
+    BUS["host.bus<br/>declare + publish"]
   end
 
   subgraph other["另一个插件"]
@@ -187,20 +187,23 @@ CREATE TABLE webhook_deliveries (
 ## 失败可见性
 
 ```
+init: host.bus.declare('webhook.delivery.failed', { declaredBy: 'publisher' })
+
 dispatch 失败
   ├─ webhook_deliveries 一行 failed + reason（主真相）
-  └─ host.bus.publish('webhook.delivery.failed', { hookId, deliveryId, name, agentId, reason, actionUrl })
-        └─ notifications 订阅后落一行收件箱（severity=error, source=webhook, actionUrl=/webhooks/<id>）
+  ├─ host.bus.publish('webhook.delivery.failed', { hookId, deliveryId, name, agentId, reason, actionUrl })
+  │     └─ 返回 { ok: true, delivered: n }；n===0 记一条 debug（不当错误）
+  └─ notifications 订阅后落一行收件箱（severity=error, source=webhook, actionUrl=/webhooks/<id>）
 ```
 
-发布方**不认识**通知插件；没装通知插件时 `publish` 静默成功，失败信息仍然在台账里。这条链路以前只做了一半（scheduler 在发、notifications 没订阅），本插件落地时一并补上。
+发布方**不认识**通知插件（订阅方 `subscribe` 时若本插件还没装载，会处于 `pending`，声明后自动接上）；没装通知插件时 `delivered: 0`，失败信息仍然在台账里。这条链路以前只做了一半（scheduler 在发、notifications 没订阅），webhook 插件落地时一并补上。
 
 ## 关键边界
 
 | 谁负责 | |
 |---|---|
 | **插件** | 验 secret、读/截断 body、幂等判定、会话绑定、忙时策略、台账、失败上报 |
-| **内核** | 建/取会话（`ensure`）、拼信封并投递（`systemEvent`）、进程内总线（`bus`） |
+| **内核** | 建/取会话（`ensure`）、拼信封并投递（`systemEvent`）、进程内广播（`bus` 的声明/派发机制，插件只给 topic 与 payload） |
 | **外部系统** | 事件语义、过滤、重试、`Idempotency-Key` |
 | **agent** | 收到事件后做什么、成败怎么汇报（用 `postNotification` 等自己的工具） |
 
@@ -210,6 +213,6 @@ dispatch 失败
 
 - [定时任务](pi-agent-server_scheduled-tasks.md) —— 时间驱动的另一个实例（共用 `ensure` / `systemEvent`）
 - [插件运行期 v2](pi-agent-server_plugins-runtime.md) —— R2 路由 / R3 反向方法 / R6 工具 / `skills/`
-- [会话内核](pi-agent-server_core-sdk.md) —— `ensure` / `systemEvent` / `bus`
+- [会话内核](pi-agent-server_core-sdk.md) —— `ensure` / `systemEvent` / 插件互操作三面（`bus` / `services` / `methods`）
 - [系统通知](pi-agent-server_notifications.md) —— 收件箱与订阅清单
 - [HTTP API](pi-agent-server_http-api.md) —— 端点总表

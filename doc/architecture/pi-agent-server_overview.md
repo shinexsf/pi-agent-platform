@@ -22,7 +22,7 @@ flowchart TB
     subgraph Core["内核 (@pi-agent-platform/core)"]
         SES["SessionRegistry 单入口 + Session 领域对象"]
         CAP["capabilities<br/>(registry → dispatch → 鉴权 → 审计)"]
-        PH["插件宿主<br/>(facet 注册表 + 宿主 API)"]
+        PH["插件宿主<br/>(facet 注册表 + 宿主 API<br/>+ 插件间 bus/services)"]
         WPM["WorkerPool<br/>(child_process.spawn)"]
         DB[("SQLite<br/>agents + sessions + attachments")]
     end

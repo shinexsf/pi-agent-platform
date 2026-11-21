@@ -183,9 +183,13 @@ flowchart TB
 
 ## 插件间协作（2026-11-19 新增）
 
-- **插件之间只能经 `host.bus` 通信**：不得互相 `import`、不得直连别人的表、不得靠"装在同一进程"假设调用顺序
-  - 语义与非功能要求：无回执、同步派发、慢订阅者丢弃不回压、订阅者抛错隔离
-  - 明确不做：跨进程（worker ↔ master）、持久化、重放、通配符
+- **插件之间只能经内核的两个面通信**：`host.bus`（广播，0..n）或 `host.services`（定向调用，恰好 1）。
+  不得互相 `import`、不得直连别人的表、不得靠"装在同一进程"假设调用顺序
+  - **判据：返回值是元信息 → `bus`；返回值是数据 → `services`**。广播的 handler 返回值由运行时丢弃，"往事件里塞数据"在结构上不成立
+  - `bus`：先 `declare`（前缀 = 声明者 id），owner 双向管控（publisher 型只有声明者能发、subscriber 型只有声明者能收），`publish` 返回 `{ ok, delivered }`、未声明即拒；同步派发、订阅者抛错隔离、未声明 topic 的订阅进 pending 等对方装载
+  - `services`：`provide` / `call` / `list`，返回业务数据、错误透传、**无 `sessionId`**；未提供 = 抛错（与广播"没人听是正常态"相反）
+  - 明确不做：跨进程（worker ↔ master）、持久化、重放、通配符、`{ sync: true }` 开关
+  - **三个面各有独立注册表**（`topics` / `providers` / 反向 IPC），只共享每插件的 disposer 账本 —— 空态语义不同，合表无法表达
 
 ## sessionId
 

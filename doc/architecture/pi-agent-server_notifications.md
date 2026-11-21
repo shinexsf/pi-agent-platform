@@ -125,7 +125,7 @@ POST /api/p/notifications/read-all                            → { ok, changed,
 
 - 订阅在 `init()` 里注册，disposer 进插件账本（卸载/reload 自动撤销）
 - **发布方不认识通知插件**：没装通知插件时 `publish` 静默成功，失败信息仍留在各自台账（`scheduled_task_runs` / `webhook_deliveries`）
-- 这是 `host.bus` 存在的全部理由 —— 插件之间不能互相 `import`
+- 这是 `host.bus` 存在的全部理由 —— 插件之间不能互相 `import`。**广播只承载"发生了什么"**：要问数据得走 `host.services` —— 本插件目前不提供（未读数由 web 页面直接读自己的端点，跨插件读未读是尚未出现的需求）
 
 ## 8. 历史（为什么长这样）
 

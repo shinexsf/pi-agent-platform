@@ -44,7 +44,7 @@ flowchart TB
     K2 --> K1
     K6 --- K3
     K6 --- K4
-    PLG -->|"只能经这五个面访问内核"| K6
+    PLG -->|"只能经这六个面访问内核"| K6
 ```
 
 依赖方向**严格单向**：入口 → 内核。内核不依赖任何入口，也**不依赖投影包**——它不知道 UI 长什么样。这条不变量有可执行断言（见下文「验收」）。
@@ -56,7 +56,7 @@ flowchart TB
 | `db/` | schema（**只有 agents / sessions / attachments 三张表**）+ `initDb` |
 | `repos/` | `agent.repo` / `session.repo`（附件由 `attachment-store` 直接操作） |
 | `services/session.ts` | `Session` / `SessionRegistry`——会话能力的唯一入口 |
-| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `server-builtin-skills` / `plugin-extensions`（插件 facet 注册表）/ **`system-envelope`（信封唯一构造点）** / **`event-bus`（进程内总线）** |
+| `services/`（其余） | `session-ops` / `prompt-resolver` / `attachment-store` / `extension-utils` / `plugins`（解析与闸门）/ `server-builtin-skills` / `plugin-extensions`（插件 facet 注册表）/ **`system-envelope`（信封唯一构造点）** / **`event-bus`（插件广播：声明 + 订阅）** / **`plugin-services`（插件定向调用：提供者表）** |
 | `worker-pool.ts` | worker 子进程池（进程域 only） |
 | `session-timeout-scanner.ts` | placeholder 超时回收 |
 | `slash-commands.ts` | 会话级命令 |
@@ -103,7 +103,7 @@ initCoreConfig({
 
 插件最终要访问内核（建会话、读写自己的表、注册反向方法、发事件），但它们**不能 import 内核内部模块**——那样每次内核重构都会打断插件，且插件之间可以互相穿透。
 
-所以契约收敛成**五个**面（形状在内核，实现在组合根）：
+所以契约收敛成**六个**面（形状在内核，实现在组合根）：
 
 | 面 | 内容 |
 |---|---|
@@ -111,14 +111,16 @@ initCoreConfig({
 | `sessions` | `call(sessionId, method, args?)`（**唯一调用口**）· `get` · `list` · `status` · `hasRow` · `subscribe` · **`ensure`** · **`systemEvent`** |
 | `agents` | `list` · `get` · `update(id, patch)` |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` |
-| `bus` | `publish(topic, payload?)` · `subscribe(topic, fn)` —— **进程内**事件总线，插件之间的唯一协作通道 |
+| `bus` | `declare(topic, { declaredBy })` · `publish` · `publishAndWait` · `subscribe` · `topics()` —— **进程内广播**（0..n）：topic 先声明，owner 双向管控，**handler 返回值运行时丢弃** |
+| `services` | `provide(name, fn)` · `call(name, payload)` · `list()` —— **进程内定向调用**（恰好 1 个提供者）：返回业务数据、错误外抛、无会话上下文 |
 
-**为什么从六个收到四个、之后又加回一个**（change: `plugin-mechanism-v2` / `scheduler-plugin`）：
+**为什么从六个收到四个、之后又加回两个**（`plugin-mechanism-v2` / `scheduler-plugin` / `plugin-interop-contract`）：
 
 - `web`（`assetBasePath`）本质是"入口怎么托管资源"，属 HTTP 接入层，内核不该知道
 - `events` 只有一个 `maxPayloadBytes` 常量，是出口限流参数，不构成能力；插件侧的 `emit` 在 worker bridge 上
 - `outbound`（反向方法注册）是**注册面**而不是能力面 → 变成 `host.methods.handle`，由装载器 flush 到 `WorkerPool.registerService`
 - **`bus` 是后来加回的**（`scheduler-plugin`）：通知与定时任务都是插件，定时任务的 run 失败要进收件箱，但插件之间不能互相 import。`bus` 是那个匿名的交汇点 —— 发布方与订阅方**互不相识**。它不叫 `events`：`host.events` 已被"worker → server → SSE"的事件出口占用
+- **`services` 是第七个（也是最后一个）**（`plugin-interop-contract`）：`bus` 只能广播、只能回`{ delivered }`，而"问别的插件要数据"没有第一等机制 —— 唯一的候选是面 worker 的反向方法表，但它带 `sessionId`、按分层只服务自己的 facet。于是另开一面，**两张表彻底分开**（见下节「插件互操作的三个面」）
 
 `WorkerPool` 明确**不作为面暴露**：暴露 = 插件能决定杀进程 / 超卖并发。需要"活跃会话"信息的地方用 `sessions.list/status`。
 
@@ -161,21 +163,41 @@ systemEvent({ sessionId, kind, source?, name?, run?, instruction?, data?, stream
 
 最后一条的实现：每个订阅者一条**有界队列**（256 条），由 `setImmediate` 异步排空；队列满了丢最旧的一条并计数，首次丢弃记一条 warn（含 sessionId / 事件名 / 丢弃数）。
 
-### 进程内事件总线（`host.bus`）
+### 插件互操作的三个面（`bus` / `services` / `methods`）
 
-同一套语义的简化版，面向上层**插件之间的协作**：
+三个都是"插件之间说话"，但基数和缺失语义完全不同 —— **合并会逼出 `{ sync: true }` 这种变体**，所以各一张表：
 
-- **无回执**：`publish` 不等任何人，返回 void
-- **同步派发**：订阅者在 `publish` 的调用栈里跑（订阅者自己必须轻）
-- **慢订阅者丢弃不回压**：不排队、不缓冲；无订阅者时静默丢弃
-- **抛错隔离**：单个订阅者抛错只记 warn，不影响其它订阅者与发布方
-- **退订进插件账本**：`subscribe` 返回的 disposer 由装载器按插件 id 记账，卸载归零
+| 面 | 谁跟谁说 | 基数 | 返回 | 缺了 |
+|---|---|---|---|---|
+| `bus`（广播） | 任何插件 → 任何插件 | 0..n | `{ delivered }` / `{ handled, failed }`，**handler 返回值丢弃** | 正常（`delivered: 0`） |
+| `services`（调用） | 任何插件 → 某个插件 | **恰好 1** | **业务数据** | 错误（`unknown service`） |
+| `methods`（反向 IPC） | 本会话 worker → 自己的 server facet | 1 | 业务数据 | `unknown method` |
 
-明确不做：跨进程（worker ↔ master）、持久化、重放、通配符。
+`methods` 那张表（`worker-pool.ts` 的 `reverseRegistry`）**不参与跨插件**：按分层，worker 只跟自己的 server facet 说话，`plugin.<id>.*` 里每一条天然全 private —— 所以它连"公开/私有"标记都不需要。
 
-为什么丢弃而不是排队：事件是 UI 增量、本身可丢（与"事件无回执"同语义）；为一个卡住的消费者排队，等于让整条流陪它一起卡。需要确认的操作走的是请求-响应通道（`prompt` / `abort`），不受影响。
+#### 广播（`host.bus`）的语义
 
-契约只承诺**原生事件**：需要 DTO 的订阅者自己调投影包。
+- **必须先声明**：`declare(topic, { declaredBy })`，topic 前缀 MUST 等于声明者 id ⇒ 声明权与所有权天然一一对应，冒名在结构上不可能
+- **owner 双向管控**：`declaredBy: 'publisher'` → 只有声明者能发（防冒名）、谁都能订阅（这才是广播）；`declaredBy: 'subscriber'` → 只有声明者能收（防抢单）、谁都能发（能力地址）
+- **返回状态而非 void**：未声明 → `{ ok:false, reason:'unknown-topic' }`；0 订阅者 → `{ ok:true, delivered:0 }`（正常态）
+- **同步派发**：订阅者在 `publish` 的调用栈里跑（订阅者自己必须轻）；`publishAndWait` 会等最慢的一个，默认 5s 超时不取消
+- **抛错隔离**：单个订阅者抛错只计入 `failed`，不外抛给发布方
+- **返回值被丢弃**（运行时强制）：于是"业务数据必须走 `services`"从文档约定变成机制 —— 即使有人 `subscribe` 里 `return {n:7}`，那 7 也到不了发布方
+- **pending 订阅**：订阅未声明的 topic 不报错，返回 `state:'pending'`，声明时自动接上（装载顺序 = 目录扫描顺序，init 时校验存在必 flaky）
+- **退订进插件账本**：disposer 由装载器按插件 id 记账，卸载归零（`disposePlugin` 一并清声明与提供者）
+
+**四个注册表分开，只共享 disposer 账本**：extensions store（菜单/页/路由/槽位/工具卡）· `topics` · `providers` · 反向 IPC。理由是空态含义不同 —— topic 可以"声明了但 0 订阅者"（契约在、实现不在），provider 没实现就没这行（错误），两者塞进一张表就得给每行加 `kind` 分支。
+
+#### 定向调用（`host.services`）的语义
+
+- `provide(name, handler)`：短名由宿主补前缀（`task.list` → `scheduler.task.list`），重复提供被拒（`duplicate`）
+- `call(name, payload)`：返回 handler 的业务返回值；错误透传；未提供 → 抛 `unknown service`
+- `list()`：`[{ name, owner }]` 目录
+- **无会话上下文**：`services.call` 的 `(payload) => result` 里没有 `sessionId` —— 需要"替某会话做事"的调用方自己传，或者干脆走 `sessions.call`
+
+为什么广播不排队而是丢弃：事件是 UI 增量、本身可丢（与"事件无回执"同语义）；为一个卡住的消费者排队，等于让整条流陪它一起卡。需要确认的操作走请求-响应通道（`prompt` / `abort` / `services.call`），不受影响。
+
+诊断面：`GET /api/runtime/interop` → `{ topics, services }`（谁声明、谁在听、末次发布）；`GET /api/plugins/:id/extensions` 附该插件的切片。
 
 ## 能力控制面在内核，平台功能能力组不在
 

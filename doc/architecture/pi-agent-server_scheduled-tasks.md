@@ -33,10 +33,11 @@ flowchart TB
   subgraph KERNEL["内核（宿主 API）"]
     ENS["sessions.ensure"]
     SE["sessions.systemEvent"]
-    BUS["bus.publish"]
+    BUS["bus.declare<br/>+ publish"]
   end
 
   NOTI["通知插件<br/>订阅 scheduler.run.failed"]
+  SVC["host.services<br/>scheduler.task.*"]
 
   SCH --> DISP
   DISP --> ENS
@@ -47,8 +48,10 @@ flowchart TB
   API --> REPO
   API --> DISP
   M --> DISP
+  SVC -->|同一实现| DISP
   TOOL -->|bridge.call| M
   SK -.->|插件生效即注入| TOOL
+  OTHER["其他插件"] -.->|services.call| SVC
 ```
 
 三条边界：
