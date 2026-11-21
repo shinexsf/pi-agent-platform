@@ -5,45 +5,56 @@ const MAX_CATCHUP_SLOTS = 500;
 const TASK_ID_PREFIX = "task_";
 var src_default = {
   init(host) {
+    host.bus.declare("scheduler.run.failed", { declaredBy: "publisher" });
     host.db.migrate("scheduler", DDL);
     const store = createStore(host.db);
     const staleCount = store.finalizeStaleRuns();
     if (staleCount > 0) host.log("warn", `\u6536\u5C3E ${staleCount} \u6761\u50F5\u5C38 run\uFF08\u8FDB\u7A0B\u5D29\u6E83\u6B8B\u7559\uFF09`);
     catchUpMissed(host, store);
     const scheduler = createScheduler(host, store);
-    host.methods.handle("task.list", (params) => {
-      const p = params ?? {};
-      return { items: store.list({ agentId: p.agentId, includeDisabled: p.includeDisabled }) };
-    });
-    host.methods.handle("task.create", async (params, ctx) => {
-      const p = { ...params };
-      if (!p.agentId) {
-        const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : void 0;
-        if (callerAgent) p.agentId = callerAgent;
+    const api = {
+      list(payload) {
+        const p = payload ?? {};
+        return { items: store.list({ agentId: p.agentId, includeDisabled: p.includeDisabled }) };
+      },
+      async create(payload, callerAgentId) {
+        const p = { ...payload };
+        if (!p.agentId && callerAgentId) p.agentId = callerAgentId;
+        const { task } = await createTask(host, store, p);
+        scheduler.rearm();
+        return task;
+      },
+      async update(payload) {
+        const p = payload ?? {};
+        if (!p.taskId) throw new Error("taskId is required");
+        const task = await updateTask(host, store, p.taskId, p);
+        scheduler.rearm();
+        return task;
+      },
+      remove(payload) {
+        const p = payload ?? {};
+        if (!p.taskId) throw new Error("taskId is required");
+        store.remove(p.taskId);
+        scheduler.rearm();
+        return { ok: true };
       }
-      const { task } = await createTask(host, store, p);
-      scheduler.rearm();
-      return task;
+    };
+    host.methods.handle("task.list", api.list);
+    host.methods.handle("task.create", async (params, ctx) => {
+      const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : void 0;
+      return api.create(params, callerAgent);
     });
-    host.methods.handle("task.update", async (params) => {
-      const p = params ?? {};
-      if (!p.taskId) throw new Error("taskId is required");
-      const task = await updateTask(host, store, p.taskId, p);
-      scheduler.rearm();
-      return task;
-    });
-    host.methods.handle("task.delete", (params) => {
-      const p = params ?? {};
-      if (!p.taskId) throw new Error("taskId is required");
-      store.remove(p.taskId);
-      scheduler.rearm();
-      return { ok: true };
-    });
+    host.methods.handle("task.update", api.update);
+    host.methods.handle("task.delete", api.remove);
     host.methods.handle("task.run", async (params) => {
       const p = params ?? {};
       if (!p.taskId) throw new Error("taskId is required");
       return dispatch(host, store, p.taskId, "plugin");
     });
+    host.services.provide("task.list", (payload) => api.list(payload));
+    host.services.provide("task.create", (payload) => api.create(payload));
+    host.services.provide("task.update", (payload) => api.update(payload));
+    host.services.provide("task.delete", (payload) => api.remove(payload));
     const route = (method, path, handler) => {
       host.http.route({ method, path, handler });
     };
@@ -296,7 +307,7 @@ async function dispatch(host, store, taskId, triggeredBy) {
     const reason = messageOf(err);
     store.finishRun(runId, { status: "failed", reason });
     host.log("warn", `task ${taskId} delivery failed: ${reason}`);
-    host.bus.publish("scheduler.run.failed", {
+    const published = host.bus.publish("scheduler.run.failed", {
       taskId,
       runId,
       name: task.name,
@@ -304,6 +315,9 @@ async function dispatch(host, store, taskId, triggeredBy) {
       reason,
       actionUrl: `/scheduler/${taskId}`
     });
+    if (published.delivered === 0) {
+      host.log("debug", `run failed but no notification subscriber (topic=${"scheduler.run.failed"})`);
+    }
     return { status: "failed", runId, reason };
   }
 }

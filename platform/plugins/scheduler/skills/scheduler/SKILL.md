@@ -85,3 +85,6 @@ description: 用 schedule_task 工具创建、查看、取消定时任务（cron
 
 创建前如果不确定是否已有同名任务，先 `action:"list"` 看一眼，避免重复排程堆叠。
 取消用 `action:"cancel"` + `taskId`。
+
+> **给其他插件用**：本插件把管理能力暴露成 service（`scheduler.task.list / scheduler.task.create / scheduler.task.update / scheduler.task.delete`），
+> 通过 `host.services.call(name, payload)` 调用；**请不要直接读本插件的表** —— 表结构不是契约。

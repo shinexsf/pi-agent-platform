@@ -38,42 +38,72 @@ const HOOK_ID_PREFIX = 'hook_';
 export default {
   init(host: PluginServerHost) {
     // ── R4：自己的表 ──
+    // 事件主题：publisher 型 —— 只有本插件能发，任何插件可订阅（广播）。
+    host.bus.declare('webhook.delivery.failed', { declaredBy: 'publisher' });
+
     host.db.migrate('webhook', DDL);
     const store = createStore(host.db);
 
     const stale = store.finalizeStaleDeliveries();
     if (stale > 0) host.log('warn', `收尾 ${stale} 条僵尸投递（进程崩溃残留）`);
 
-    // ── R3：反向方法（extension facet 的 `manage_webhook` 工具经此调用）──
+    // ── 唯一实现：两个面（反向方法 / service）都委托这里，绝不复制校验 ──
+    //
+    // 差别只有身份来源：反向方法从调用方**会话**推 agentId（工具不该替别的 agent 建入口），
+    // service 没有会话 → 要求显式传 agentId（跨插件调用属于管理动作，信任边界在装载侧）。
+    const api = {
+      async create(payload: unknown, callerAgentId?: string) {
+        const body = (payload ?? {}) as CreateHookInput & { agentId?: string };
+        const agentId = callerAgentId ?? body.agentId;
+        if (!agentId) throw new Error('无法解析调用方 agent（缺少会话上下文，service 调用必须显式传 agentId）');
+        const { hook } = await createHook(host, store, { ...body, agentId });
+        return { hook, url: hookUrl(hook.id) };
+      },
+      async list(payload: unknown, callerAgentId?: string) {
+        const p = (payload ?? {}) as { agentId?: string };
+        const agentId = callerAgentId ?? p.agentId;
+        return { items: store.list({ agentId, includeDisabled: true }) };
+      },
+      async update(payload: unknown) {
+        const p = (payload ?? {}) as { hookId?: string } & UpdateHookInput;
+        if (!p.hookId) throw new Error('hookId is required');
+        const hook = await updateHook(host, store, p.hookId, p);
+        return { hook, url: hookUrl(hook.id) };
+      },
+      async remove(payload: unknown, callerAgentId?: string) {
+        const p = (payload ?? {}) as { hookId?: string };
+        if (!p.hookId) throw new Error('hookId is required');
+        const hook = store.get(p.hookId);
+        if (!hook) throw new Error(`hook 不存在：${p.hookId}`);
+        // 归属校验只在有调用方身份时成立（反向方法路径）。
+        if (callerAgentId && hook.agentId !== callerAgentId) {
+          throw new Error('不能删除其他 agent 的 webhook');
+        }
+        store.remove(p.hookId);
+        return { ok: true };
+      },
+    };
+
+    // ── R3：反向方法（extension facet 的 `manage_webhook` 工具经此调用；带会话上下文）──
     host.methods.handle('hook.create', async (params, ctx) => {
-      // agentId 一律由调用方会话推导，**不接受参数** —— 工具不该能替别的 agent 建入口。
       const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
       if (!callerAgentId) throw new Error('无法解析调用方 agent（缺少会话上下文）');
-      const { hook } = await createHook(host, store, {
-        ...(params as CreateHookInput),
-        agentId: callerAgentId,
-      });
-      return { hook, url: hookUrl(hook.id) };
+      return api.create(params, callerAgentId);
     });
-
-    host.methods.handle('hook.list', async (_params, ctx) => {
-      const agentId = await callerAgentIdOf(host, ctx?.sessionId);
-      return { items: store.list({ agentId, includeDisabled: true }) };
-    });
-
-    host.methods.handle('hook.delete', async (params, ctx) => {
-      const p = (params ?? {}) as { hookId?: string };
-      if (!p.hookId) throw new Error('hookId is required');
-      const hook = store.get(p.hookId);
-      if (!hook) throw new Error(`hook 不存在：${p.hookId}`);
+    host.methods.handle('hook.list', async (params, ctx) => {
       const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
-      // 归属校验：agent 只能删自己建的入口。
-      if (callerAgentId && hook.agentId !== callerAgentId) {
-        throw new Error('不能删除其他 agent 的 webhook');
-      }
-      store.remove(p.hookId);
-      return { ok: true };
+      return api.list(params, callerAgentId);
     });
+    host.methods.handle('hook.delete', async (params, ctx) => {
+      const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
+      return api.remove(params, callerAgentId);
+    });
+
+    // ── services（跨插件，无会话上下文）：其他插件请调这些，不要直接读表 ──
+    host.services.provide('hook.list', (payload) => api.list(payload));
+    host.services.provide('hook.create', (payload) => api.create(payload));
+    host.services.provide('hook.update', (payload) => api.update(payload));
+    host.services.provide('hook.delete', (payload) => api.remove(payload));
 
     // ── R2：外部入口 ──
     //
@@ -316,7 +346,7 @@ async function dispatch(
     store.finishDelivery(deliveryId, { status: 'failed', reason });
     host.log('warn', `hook ${hook.id} delivery failed: ${reason}`);
     // 事件总线：通知插件订阅后落一行收件箱；没装通知插件就只有投递台账可查。
-    host.bus.publish('webhook.delivery.failed', {
+    const published = host.bus.publish('webhook.delivery.failed', {
       hookId: hook.id,
       deliveryId,
       name: hook.name,
@@ -324,6 +354,9 @@ async function dispatch(
       reason,
       actionUrl: `/webhooks/${hook.id}`,
     });
+    if (published.delivered === 0) {
+      host.log('debug', 'delivery failed but no notification subscriber (topic=webhook.delivery.failed)');
+    }
     return { status: 'failed', deliveryId, reason };
   }
 }

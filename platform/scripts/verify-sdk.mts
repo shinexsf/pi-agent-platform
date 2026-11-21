@@ -117,7 +117,7 @@ console.log('B. 无 HTTP 进程内跑一轮会话');
 
 const {
   initCoreConfig, initDb, createAgentRepo, createSessionRepo, WorkerPool, initSessionRegistry, sessionRegistry,
-  coreConfig, createEventBus, buildSystemEnvelope, systemEventPromptOptions,
+  coreConfig, createPluginBus, buildSystemEnvelope, systemEventPromptOptions,
 } = await import(path.join(platformRoot, 'packages/core/src/index.js') as string);
 const { createSessionProjector } = await import(path.join(platformRoot, 'packages/event-projection/src/index.js') as string);
 
@@ -160,27 +160,93 @@ if (JSON.stringify(tables) !== JSON.stringify(expected)) {
 console.log(`  ✓ 内核只建自己的表：${tables.join(', ')}`);
 
 // ── 宿主面：events 总线（进程内、无回执、退订归零）──
-const bus = createEventBus();
+const bus = createPluginBus();
 const seen: unknown[] = [];
-const offA = bus.subscribe('probe.topic', (p) => seen.push(p));
-const offB = bus.subscribe('probe.topic', () => {
-  throw new Error('订阅者抛错不应影响别人');
-});
-bus.subscribe('probe.other', () => seen.push('other'));
-bus.emit('probe.topic', { n: 1 });
-if (seen.length !== 1) {
-  console.error(`✗ events 派发异常：期望 1 个订阅者收到，实际 ${seen.length}`);
+
+// 未声明 → unknown-topic（拒绝，不静默成功）
+const beforeDeclare = bus.publish('probe', 'probe.topic', { n: 0 });
+if (beforeDeclare.ok || beforeDeclare.reason !== 'unknown-topic') {
+  console.error(`✗ 未声明 topic 应返回 unknown-topic，实际 ${JSON.stringify(beforeDeclare)}`);
   process.exit(1);
 }
-offA();
-offA(); // 幂等退订
-offB();
-if (bus.subscriberCount() !== 1) {
-  console.error(`✗ events 退订后订阅数应为 1，实际 ${bus.subscriberCount()}`);
+
+const declared = bus.declare('probe', 'probe.topic', { declaredBy: 'publisher' });
+if (!declared.ok) {
+  console.error(`✗ 合法声明失败：${JSON.stringify(declared)}`);
+  process.exit(1);
+}
+
+// 前缀不符 → 拒绝
+const badPrefix = bus.declare('probe', 'other.topic', { declaredBy: 'publisher' });
+if (badPrefix.ok) {
+  console.error('✗ 前缀不符的声明应被拒');
+  process.exit(1);
+}
+
+// 冒名发布 → not-owner
+const spoof = bus.publish('other', 'probe.topic', { n: 1 });
+if (spoof.ok || spoof.reason !== 'not-owner') {
+  console.error(`✗ 非 owner 发布应返回 not-owner，实际 ${JSON.stringify(spoof)}`);
+  process.exit(1);
+}
+
+const subA = bus.subscribe('probe', 'probe.topic', (p) => seen.push(p));
+const subB = bus.subscribe('probe', 'probe.topic', () => {
+  throw new Error('订阅者抛错不应影响别人');
+});
+if (subA.state !== 'matched') {
+  console.error(`✗ 已声明 topic 订阅应为 matched，实际 ${subA.state}`);
+  process.exit(1);
+}
+const sent = bus.publish('probe', 'probe.topic', { n: 1 });
+if (!sent.ok || sent.delivered !== 2 || seen.length !== 1) {
+  console.error(`✗ 派发异常：${JSON.stringify(sent)} seen=${seen.length}`);
+  process.exit(1);
+}
+
+// pending 订阅：先订阅后声明
+const pendingSub = bus.subscribe('probe', 'probe.late', (p) => seen.push(p));
+if (pendingSub.state !== 'pending') {
+  console.error(`✗ 未声明 topic 订阅应为 pending，实际 ${pendingSub.state}`);
+  process.exit(1);
+}
+bus.declare('probe', 'probe.late', { declaredBy: 'publisher' });
+bus.publish('probe', 'probe.late', { n: 2 });
+if (seen.length !== 2) {
+  console.error(`✗ pending 订阅未在声明后生效：seen=${seen.length}`);
+  process.exit(1);
+}
+
+// 无订阅者是正常态
+bus.declare('probe', 'probe.silent', { declaredBy: 'publisher' });
+const silent = bus.publish('probe', 'probe.silent', {});
+if (!silent.ok || silent.delivered !== 0) {
+  console.error(`✗ 无订阅者应为 {ok:true,delivered:0}，实际 ${JSON.stringify(silent)}`);
+  process.exit(1);
+}
+
+// handler 返回值被丢弃 + publishAndWait 只回报成败
+const waited = await bus.publishAndWait('probe', 'probe.topic', { n: 3 });
+if (!waited.ok || waited.handled !== 1 || waited.failed !== 1) {
+  console.error(`✗ publishAndWait 统计不符：${JSON.stringify(waited)}`);
+  process.exit(1);
+}
+
+subA.dispose();
+subA.dispose(); // 幂等退订
+subB.dispose();
+pendingSub.dispose();
+if (bus.subscriberCount() !== 0) {
+  console.error(`✗ 退订后订阅数应为 0，实际 ${bus.subscriberCount()}`);
+  process.exit(1);
+}
+bus.disposePlugin('probe');
+if (bus.topics().length !== 0) {
+  console.error(`✗ disposePlugin 后 topic 应清空，实际 ${bus.topics().length}`);
   process.exit(1);
 }
 bus.clear();
-console.log('  ✓ events 面：无回执派发 / 抛错隔离 / 幂等退订 / 归零');
+console.log('  ✓ bus 面：声明/前缀/冒名/送达计数/pending/同步统计/幂等退订/归零');
 
 // ── 信封：唯一构造点，`</data` 被转义，指令原样保留 ──
 const envelope = buildSystemEnvelope({

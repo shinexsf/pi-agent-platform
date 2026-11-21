@@ -9,35 +9,59 @@ import {
 const HOOK_ID_PREFIX = "hook_";
 var src_default = {
   init(host) {
+    host.bus.declare("webhook.delivery.failed", { declaredBy: "publisher" });
     host.db.migrate("webhook", DDL);
     const store = createStore(host.db);
     const stale = store.finalizeStaleDeliveries();
     if (stale > 0) host.log("warn", `\u6536\u5C3E ${stale} \u6761\u50F5\u5C38\u6295\u9012\uFF08\u8FDB\u7A0B\u5D29\u6E83\u6B8B\u7559\uFF09`);
+    const api = {
+      async create(payload, callerAgentId) {
+        const body = payload ?? {};
+        const agentId = callerAgentId ?? body.agentId;
+        if (!agentId) throw new Error("\u65E0\u6CD5\u89E3\u6790\u8C03\u7528\u65B9 agent\uFF08\u7F3A\u5C11\u4F1A\u8BDD\u4E0A\u4E0B\u6587\uFF0Cservice \u8C03\u7528\u5FC5\u987B\u663E\u5F0F\u4F20 agentId\uFF09");
+        const { hook } = await createHook(host, store, { ...body, agentId });
+        return { hook, url: hookUrl(hook.id) };
+      },
+      async list(payload, callerAgentId) {
+        const p = payload ?? {};
+        const agentId = callerAgentId ?? p.agentId;
+        return { items: store.list({ agentId, includeDisabled: true }) };
+      },
+      async update(payload) {
+        const p = payload ?? {};
+        if (!p.hookId) throw new Error("hookId is required");
+        const hook = await updateHook(host, store, p.hookId, p);
+        return { hook, url: hookUrl(hook.id) };
+      },
+      async remove(payload, callerAgentId) {
+        const p = payload ?? {};
+        if (!p.hookId) throw new Error("hookId is required");
+        const hook = store.get(p.hookId);
+        if (!hook) throw new Error(`hook \u4E0D\u5B58\u5728\uFF1A${p.hookId}`);
+        if (callerAgentId && hook.agentId !== callerAgentId) {
+          throw new Error("\u4E0D\u80FD\u5220\u9664\u5176\u4ED6 agent \u7684 webhook");
+        }
+        store.remove(p.hookId);
+        return { ok: true };
+      }
+    };
     host.methods.handle("hook.create", async (params, ctx) => {
       const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
       if (!callerAgentId) throw new Error("\u65E0\u6CD5\u89E3\u6790\u8C03\u7528\u65B9 agent\uFF08\u7F3A\u5C11\u4F1A\u8BDD\u4E0A\u4E0B\u6587\uFF09");
-      const { hook } = await createHook(host, store, {
-        ...params,
-        agentId: callerAgentId
-      });
-      return { hook, url: hookUrl(hook.id) };
+      return api.create(params, callerAgentId);
     });
-    host.methods.handle("hook.list", async (_params, ctx) => {
-      const agentId = await callerAgentIdOf(host, ctx?.sessionId);
-      return { items: store.list({ agentId, includeDisabled: true }) };
+    host.methods.handle("hook.list", async (params, ctx) => {
+      const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
+      return api.list(params, callerAgentId);
     });
     host.methods.handle("hook.delete", async (params, ctx) => {
-      const p = params ?? {};
-      if (!p.hookId) throw new Error("hookId is required");
-      const hook = store.get(p.hookId);
-      if (!hook) throw new Error(`hook \u4E0D\u5B58\u5728\uFF1A${p.hookId}`);
       const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
-      if (callerAgentId && hook.agentId !== callerAgentId) {
-        throw new Error("\u4E0D\u80FD\u5220\u9664\u5176\u4ED6 agent \u7684 webhook");
-      }
-      store.remove(p.hookId);
-      return { ok: true };
+      return api.remove(params, callerAgentId);
     });
+    host.services.provide("hook.list", (payload) => api.list(payload));
+    host.services.provide("hook.create", (payload) => api.create(payload));
+    host.services.provide("hook.update", (payload) => api.update(payload));
+    host.services.provide("hook.delete", (payload) => api.remove(payload));
     host.http.route({
       method: "POST",
       path: "/hooks/:id",
@@ -212,7 +236,7 @@ async function dispatch(host, store, hook, opts) {
     const reason = messageOf(err);
     store.finishDelivery(deliveryId, { status: "failed", reason });
     host.log("warn", `hook ${hook.id} delivery failed: ${reason}`);
-    host.bus.publish("webhook.delivery.failed", {
+    const published = host.bus.publish("webhook.delivery.failed", {
       hookId: hook.id,
       deliveryId,
       name: hook.name,
@@ -220,6 +244,9 @@ async function dispatch(host, store, hook, opts) {
       reason,
       actionUrl: `/webhooks/${hook.id}`
     });
+    if (published.delivered === 0) {
+      host.log("debug", "delivery failed but no notification subscriber (topic=webhook.delivery.failed)");
+    }
     return { status: "failed", deliveryId, reason };
   }
 }

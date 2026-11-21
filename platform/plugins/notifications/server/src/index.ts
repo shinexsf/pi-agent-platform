@@ -216,8 +216,13 @@ export default {
       { topic: 'webhook.delivery.failed', label: (p) => `Webhook「${p.name}」投递失败` },
     ];
 
+    // 通知能力本身也声明一个 topic：`subscriber` 型 = 只有本插件能收、任何插件都能发。
+    // 其它插件想"让我建一条通知"就发它；这里先登记契约，发布方按需接入。
+    host.bus.declare('notifications.notify', { declaredBy: 'subscriber' });
+
     for (const { topic, label } of FAILURE_TOPICS) {
-      const off = host.bus.subscribe(topic, (raw) => {
+      // `state:'pending'` = 发布方还没装载（装载顺序不确定），此时不报错、静默等它声明。
+      const sub = host.bus.subscribe(topic, (raw) => {
         const p = (raw ?? {}) as FailurePayload;
         insert({
           title: label(p),
@@ -228,8 +233,10 @@ export default {
           actionUrl: p.actionUrl ?? null,
         });
       });
-      // disposer 进插件账本（卸载归零由装载器保证），这里只是显式声明意图。
-      void off;
+      if (sub.state === 'pending') {
+        host.log('debug', `waiting for topic ${topic} to be declared (producer not loaded yet)`);
+      }
+      // disposer 已在装载器的账本里（buildHost 包装），这里不需要额外动作。
     }
 
     host.log('info', 'notifications plugin ready');

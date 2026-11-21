@@ -85,3 +85,6 @@ curl -X POST '<URL>' \
 - 不要自己拼 URL 里的 token（平台只认 Bearer 头，不认 query 参数）
 - 不要把 secret 发给不相关的地方 —— 它是"谁能往这个 agent 里塞消息"的唯一凭证
 - 不要指望平台重试：失败就是失败，让对方按 `Idempotency-Key` 重投
+
+> **给其他插件用**：本插件把管理能力暴露成 service（`webhook.hook.list / webhook.hook.create / webhook.hook.update / webhook.hook.delete`），
+> 通过 `host.services.call(name, payload)` 调用；**请不要直接读本插件的表** —— 表结构不是契约。

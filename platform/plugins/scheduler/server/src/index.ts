@@ -46,6 +46,9 @@ interface UpdateTaskInput extends CreateTaskInput {
 export default {
   init(host: PluginServerHost) {
     // ── R4：自己的表 ──
+    // 事件主题：publisher 型 —— 只有本插件能发，任何插件可订阅（广播）。
+    host.bus.declare('scheduler.run.failed', { declaredBy: 'publisher' });
+
     host.db.migrate('scheduler', DDL);
     const store = createStore(host.db);
 
@@ -57,41 +60,55 @@ export default {
     // ── 调度器 ──
     const scheduler = createScheduler(host, store);
 
-    // ── R3：反向方法（extension facet 的 `schedule_task` 工具经此调用）──
-    host.methods.handle('task.list', (params) => {
-      const p = (params ?? {}) as { agentId?: string; includeDisabled?: boolean };
-      return { items: store.list({ agentId: p.agentId, includeDisabled: p.includeDisabled }) };
-    });
+    // ── 唯一实现：两个面（反向方法 / service）都委托这里，绝不复制校验 ──
+    const api = {
+      list(payload: unknown) {
+        const p = (payload ?? {}) as { agentId?: string; includeDisabled?: boolean };
+        return { items: store.list({ agentId: p.agentId, includeDisabled: p.includeDisabled }) };
+      },
+      async create(payload: unknown, callerAgentId?: string) {
+        const p = { ...(payload as CreateTaskInput) };
+        // agentId 缺省取调用方的 agent（反向方法可从会话推；service 无会话 → 必须显式给）
+        if (!p.agentId && callerAgentId) p.agentId = callerAgentId;
+        const { task } = await createTask(host, store, p);
+        scheduler.rearm();
+        return task;
+      },
+      async update(payload: unknown) {
+        const p = (payload ?? {}) as { taskId?: string } & UpdateTaskInput;
+        if (!p.taskId) throw new Error('taskId is required');
+        const task = await updateTask(host, store, p.taskId, p);
+        scheduler.rearm();
+        return task;
+      },
+      remove(payload: unknown) {
+        const p = (payload ?? {}) as { taskId?: string };
+        if (!p.taskId) throw new Error('taskId is required');
+        store.remove(p.taskId);
+        scheduler.rearm();
+        return { ok: true };
+      },
+    };
+
+    // ── R3：反向方法（extension facet 的 `schedule_task` 工具经此调用；带会话上下文）──
+    host.methods.handle('task.list', api.list);
     host.methods.handle('task.create', async (params, ctx) => {
-      const p = { ...(params as CreateTaskInput) };
-      // agentId 缺省取调用方的 agent —— worker 侧不知道自己在哪个 agent 上，也不该猜。
-      if (!p.agentId) {
-        const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : undefined;
-        if (callerAgent) p.agentId = callerAgent;
-      }
-      const { task } = await createTask(host, store, p);
-      scheduler.rearm();
-      return task;
+      const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : undefined;
+      return api.create(params, callerAgent);
     });
-    host.methods.handle('task.update', async (params) => {
-      const p = (params ?? {}) as { taskId?: string } & UpdateTaskInput;
-      if (!p.taskId) throw new Error('taskId is required');
-      const task = await updateTask(host, store, p.taskId, p);
-      scheduler.rearm();
-      return task;
-    });
-    host.methods.handle('task.delete', (params) => {
-      const p = (params ?? {}) as { taskId?: string };
-      if (!p.taskId) throw new Error('taskId is required');
-      store.remove(p.taskId);
-      scheduler.rearm();
-      return { ok: true };
-    });
+    host.methods.handle('task.update', api.update);
+    host.methods.handle('task.delete', api.remove);
     host.methods.handle('task.run', async (params) => {
       const p = (params ?? {}) as { taskId?: string };
       if (!p.taskId) throw new Error('taskId is required');
       return dispatch(host, store, p.taskId, 'plugin');
     });
+
+    // ── services（跨插件，无会话上下文）：其他插件请调这些，不要直接读表 ──
+    host.services.provide('task.list', (payload) => api.list(payload));
+    host.services.provide('task.create', (payload) => api.create(payload));
+    host.services.provide('task.update', (payload) => api.update(payload));
+    host.services.provide('task.delete', (payload) => api.remove(payload));
 
     // ── R2：REST ──
     const route = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, handler: PluginRouteHandler): void => {
@@ -442,7 +459,8 @@ async function dispatch(
     store.finishRun(runId, { status: 'failed', reason });
     host.log('warn', `task ${taskId} delivery failed: ${reason}`);
     // 事件总线：通知插件订阅后落一行收件箱；没装通知插件就只有任务页标红。
-    host.bus.publish('scheduler.run.failed', {
+    // `delivered === 0` 是正常态（没人装通知插件），只记 debug，不当错误。
+    const published = host.bus.publish('scheduler.run.failed', {
       taskId,
       runId,
       name: task.name,
@@ -450,6 +468,9 @@ async function dispatch(
       reason,
       actionUrl: `/scheduler/${taskId}`,
     });
+    if (published.delivered === 0) {
+      host.log('debug', `run failed but no notification subscriber (topic=${'scheduler.run.failed'})`);
+    }
     return { status: 'failed', runId, reason };
   }
 }

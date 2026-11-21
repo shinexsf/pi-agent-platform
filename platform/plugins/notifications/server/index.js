@@ -123,8 +123,9 @@ var src_default = {
       { topic: "scheduler.run.failed", label: (p) => `\u5B9A\u65F6\u4EFB\u52A1\u300C${p.name}\u300D\u6295\u9012\u5931\u8D25` },
       { topic: "webhook.delivery.failed", label: (p) => `Webhook\u300C${p.name}\u300D\u6295\u9012\u5931\u8D25` }
     ];
+    host.bus.declare("notifications.notify", { declaredBy: "subscriber" });
     for (const { topic, label } of FAILURE_TOPICS) {
-      const off = host.bus.subscribe(topic, (raw) => {
+      const sub = host.bus.subscribe(topic, (raw) => {
         const p = raw ?? {};
         insert({
           title: label(p),
@@ -135,6 +136,9 @@ var src_default = {
           actionUrl: p.actionUrl ?? null
         });
       });
+      if (sub.state === "pending") {
+        host.log("debug", `waiting for topic ${topic} to be declared (producer not loaded yet)`);
+      }
     }
     host.log("info", "notifications plugin ready");
   }

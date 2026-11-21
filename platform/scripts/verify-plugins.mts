@@ -48,6 +48,8 @@ const {
   dispatchPluginRoute,
   normalizePath,
   initDb,
+  createPluginBus,
+  createPluginServices,
 } = await import(path.join(platformRoot, 'packages/core/src/index.js') as string);
 
 // ── 断言工具 ───────────────────────────────────────────────────────────────
@@ -205,7 +207,31 @@ const { db, raw } = initDb(dbPath);
 let serviceRegistrations = 0;
 const reverseMethods: Record<string, string[]> = {};
 
+const realBus = createPluginBus();
+const realServices = createPluginServices();
+
 const stubHost = {
+  bus: {
+    declare: (pluginId: string, topic: string, options: { declaredBy: 'publisher' | 'subscriber' }) =>
+      realBus.declare(pluginId, topic, options),
+    publish: (pluginId: string, topic: string, payload?: unknown) => realBus.publish(pluginId, topic, payload),
+    publishAndWait: (pluginId: string, topic: string, payload?: unknown, options?: { timeoutMs?: number }) =>
+      realBus.publishAndWait(pluginId, topic, payload, options),
+    subscribe: (pluginId: string, topic: string, listener: (p: unknown) => void) =>
+      realBus.subscribe(pluginId, topic, listener),
+    topics: () => realBus.topics(),
+    topicsOf: (pluginId: string) => realBus.topicsOf(pluginId),
+    disposePlugin: (pluginId: string) => realBus.disposePlugin(pluginId),
+  },
+  services: {
+    provide: (pluginId: string, name: string, handler: (p: unknown) => unknown) =>
+      realServices.provide(pluginId, name, handler),
+    call: (caller: string, name: string, payload?: unknown, options?: { timeoutMs?: number }) =>
+      realServices.call(caller, name, payload, options),
+    list: () => realServices.list(),
+    listOf: (pluginId: string) => realServices.listOf(pluginId),
+    disposePlugin: (pluginId: string) => realServices.disposePlugin(pluginId),
+  },
   db: {
     migrate(name: string, ddl: string) {
       raw.exec(ddl);
@@ -463,6 +489,113 @@ check(
   !createServerTools('s1', noopCall, {}).some((t) => t.name === 'postNotification'),
   'postNotification 不再由 worker 硬编码（归 notifications 插件的 extension facet）',
 );
+
+section('7) 插件互操作：bus 声明化 + services 定向调用');
+
+// ① 声明与拒绝
+const d1 = realBus.declare('alpha', 'alpha.ready', { declaredBy: 'publisher' });
+check(d1.ok, '合法声明成功');
+check(realBus.topics().some((t) => t.topic === 'alpha.ready' && t.owner === 'alpha'), '声明进入目录（owner 正确）');
+const d2 = realBus.declare('alpha', 'beta.ready', { declaredBy: 'publisher' });
+check(!d2.ok && d2.reason === 'invalid-topic', '前缀不符被拒（invalid-topic）');
+// 抢别人的 topic：前缀规则先拦下（前缀 = 声明者 id ⇒ 声明权天然唯一）
+const d3 = realBus.declare('beta', 'alpha.ready', { declaredBy: 'publisher' });
+check(!d3.ok && d3.reason === 'invalid-topic', '别人已声明的 topic 抢不走（前缀不符）');
+const d4 = realBus.declare('alpha', 'alpha.ready', { declaredBy: 'publisher' });
+check(d4.ok, '同 owner 重复声明幂等（reload 不炸）');
+
+// ② owner 双向管控
+const spoof = realBus.publish('beta', 'alpha.ready', {});
+check(!spoof.ok && spoof.reason === 'not-owner', '冒名发布被拒（not-owner）');
+const capTopic = realBus.declare('beta', 'beta.inbox', { declaredBy: 'subscriber' });
+check(capTopic.ok, 'subscriber 型 topic 声明成功');
+const steal = realBus.subscribe('gamma', 'beta.inbox', () => {});
+check(steal.state === 'pending', 'subscriber 型 topic 别人订阅不生效（待生效 = 防抢单）');
+const selfSub = realBus.subscribe('beta', 'beta.inbox', () => {});
+check(selfSub.state === 'matched', 'owner 自己订阅 subscriber 型 topic 立即生效');
+
+// ③ 送达语义
+const noSub = realBus.publish('alpha', 'alpha.silent', {});
+check(!noSub.ok && noSub.reason === 'unknown-topic', '未声明 topic 发布被拒（unknown-topic）');
+realBus.declare('alpha', 'alpha.silent', { declaredBy: 'publisher' });
+const zero = realBus.publish('alpha', 'alpha.silent', {});
+check(zero.ok && zero.delivered === 0, '无订阅者 = {ok:true, delivered:0}（正常态）');
+
+const seen: unknown[] = [];
+realBus.subscribe('alpha', 'alpha.ready', (p) => seen.push(p));
+realBus.subscribe('alpha', 'alpha.ready', () => {});
+realBus.subscribe('alpha', 'alpha.ready', () => {});
+const three = realBus.publish('alpha', 'alpha.ready', { n: 1 });
+check(three.ok && three.delivered === 3, '多订阅者计数正确（delivered:3）');
+
+// ④ 返回值被丢弃（机制，不是约定）
+realBus.declare('alpha', 'alpha.greedy', { declaredBy: 'publisher' });
+realBus.subscribe('alpha', 'alpha.greedy', () => ({ unread: 7 }));
+const greedy = realBus.publish('alpha', 'alpha.greedy', {});
+check(greedy.delivered === 1 && greedy['unread'] === undefined, 'handler 返回值被丢弃（业务数据只能走 services）');
+
+// ⑤ pending → matched
+const late = realBus.subscribe('alpha', 'alpha.late', () => seen.push('late'));
+check(late.state === 'pending', '先订阅后声明 = pending（不报错）');
+realBus.declare('alpha', 'alpha.late', { declaredBy: 'publisher' });
+realBus.publish('alpha', 'alpha.late', {});
+check(seen.includes('late'), 'pending 订阅在声明后自动生效');
+
+// ⑥ 同步变体只回报成败
+realBus.declare('alpha', 'alpha.sync', { declaredBy: 'publisher' });
+realBus.subscribe('alpha', 'alpha.sync', () => ({ ignored: true }));
+realBus.subscribe('alpha', 'alpha.sync', () => {
+  throw new Error('boom');
+});
+const waited = await realBus.publishAndWait('alpha', 'alpha.sync', {});
+check(waited.ok && waited.handled === 1 && waited.failed === 1, 'publishAndWait 只报成败（抛错不外抛）');
+
+// ⑦ services：提供 / 调用 / 缺失 / 抛错 / 唯一提供者
+const p1 = realServices.provide('alpha', 'alpha.echo', (payload) => ({ echo: payload }));
+check(p1.ok, 'provide 成功');
+const p2 = realServices.provide('beta', 'alpha.echo', () => 1);
+check(!p2.ok && p2.reason === 'not-owner', '前缀不符的 provide 被拒');
+const p3 = realServices.provide('alpha', 'alpha.echo', () => 2);
+check(!p3.ok && p3.reason === 'duplicate', '重复提供者被拒（不静默覆盖）');
+const echoed = await realServices.call('beta', 'alpha.echo', { hi: 1 });
+check((echoed as { echo: unknown }).echo !== undefined, 'call 拿到业务数据');
+let unknownErr = '';
+try {
+  await realServices.call('beta', 'beta.missing');
+} catch (err) {
+  unknownErr = String((err as Error).message);
+}
+check(unknownErr.includes('unknown service'), '无提供者 → unknown service');
+
+realServices.provide('alpha', 'alpha.boom', () => {
+  throw new Error('db down');
+});
+let boomErr = '';
+try {
+  await realServices.call('beta', 'alpha.boom');
+} catch (err) {
+  boomErr = String((err as Error).message);
+}
+check(boomErr === 'db down', '提供者抛错原样透传');
+
+// ⑧ 两个表互不混入 + 卸载归零
+check(
+  !realServices.list().some((svc) => svc.name.startsWith('plugin.')),
+  'services 目录不混入反向方法（两张表独立）',
+);
+realBus.disposePlugin('alpha');
+realServices.disposePlugin('alpha');
+check(realBus.topics().every((t) => t.owner !== 'alpha'), '卸载后该插件的 topic 全部消失');
+check(realServices.list().every((svc) => svc.owner !== 'alpha'), '卸载后该插件的 service 全部消失');
+let goneErr = '';
+try {
+  await realServices.call('beta', 'alpha.echo');
+} catch (err) {
+  goneErr = String((err as Error).message);
+}
+check(goneErr.includes('unknown service'), '提供者卸载后 call 立刻抛 unknown service');
+realBus.clear();
+realServices.clear();
 
 // ── 7. 收尾 ───────────────────────────────────────────────────────────────
 
