@@ -117,9 +117,31 @@ export default {
 | `agents` | `list` / `get` / `update` | 维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放，走审计日志；只建自己的表 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 返回退订函数 |
-| `bus` | `publish(topic, payload)` / `subscribe(topic, fn)` | 插件**之间**唯一的协作通道：无回执、同步派发、无订阅者静默丢弃。别叫它 `events` —— `events` 是发给浏览器的出口 |
+| `bus` | `declare(topic, {declaredBy})` · `publish` · `publishAndWait` · `subscribe` · `topics()` | 插件间**广播**（0..n）：topic 必须先声明、前缀是本插件 id；`declaredBy:'publisher'` 只有你能发、谁都能订阅；**handler 返回值被丢弃**。别叫它 `events` —— `events` 是发给浏览器的出口 |
+| `services` | `provide(name, fn)` · `call(name, payload)` · `list()` | 插件间**定向调用**：恰好一个提供者、返回业务数据、错误外抛、无 `sessionId`。要拿数据就用它，不要试图从 `bus` 里取 |
 | `events` | `emit` | **仅 worker 侧**有效；server 侧调用会 warn |
 | `ui` / `http` / `methods` | 注册面 | 都返回退订函数，卸载时平台也会统一撤 |
+
+## 4.1 事件还是服务：一句话判据
+
+**返回值是元信息 → `bus`；返回值是数据 → `services`。**
+
+```js
+// 事件：通知别人"发生了什么"，0..n 个订阅者，拿不到业务数据
+host.bus.declare('my.run.failed', { declaredBy: 'publisher' });
+const r = host.bus.publish('my.run.failed', { id, reason });
+// r = { ok: true, delivered: 1 }；没人订阅 = { ok: true, delivered: 0 }（正常态）
+
+// 服务：对外提供一个能力，恰好一个提供者，调用方拿返回值
+host.services.provide('unread', () => 7);            // 全名 my-plugin.unread
+const n = await host.services.call('notifications.unread', {});
+```
+
+三条容易踩的：
+
+- **订阅不存在的 topic 不报错**（返回 `state:'pending'`，等对方装载后生效）—— 所以不要把"顺序"写进假设
+- **`services.call` 到没提供的名字会抛错**（`unknown service`），必须自己 try/catch 决定降级
+- **事件处理器里不要等待**：`publishAndWait` 等最慢的订阅者，重型工作请在订阅方自己起异步
 
 ## 5. 插件自带 skill（给 agent 的技能）
 

@@ -194,7 +194,8 @@ export function mount(el, host) {
 | `agents` | 全部 | `list` · `get` · `update(id, patch)` |
 | `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
 | `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` |
-| `bus` | 全部 | `publish(topic, payload?)` · `subscribe(topic, fn)` —— **插件之间**的进程内总线（无回执、同步、慢订阅者丢弃）。例：scheduler 发 `scheduler.run.failed`，通知插件订阅 |
+| `bus` | 全部 | `declare(topic, { declaredBy })` · `publish` · `publishAndWait` · `subscribe` · `topics()` —— **插件间广播**（0..n、无业务返回值）。topic 必须先声明，`declaredBy` 决定谁拥有契约 |
+| `services` | 全部 | `provide(name, fn)` · `call(name, payload)` · `list()` —— **插件间定向调用**（恰好 1 个提供者、返回业务数据、错误外抛、**无会话上下文**） |
 | `events` | **仅 worker** | `emit(name, data)` —— 发给**浏览器**（SSE）；server 侧调用会 warn |
 | `ui`（注册面） | 仅 server | `page`（`nav: false` 可只登记路由）· `slot` · `headerAction` · `toolCard` |
 | `ui`（浏览器侧） | 浏览器 | `navigate(path)` · `toast` · `sheet` |
@@ -206,6 +207,38 @@ export function mount(el, host) {
 - `sessions.ensure` 是"取一个可用会话"（新建 / 懒恢复 / 目标无效抛错），`sessions.systemEvent` 是"把一条非用户消息交给会话"（信封由**内核**拼，你不要自己拼 `<system-event>`）
 - 除 `db.migrate` 建表之外，别碰平台表
 - **工具与 skill 不需要"注册到某个 agent"**：插件对该会话生效，它们就自动注入；插件的 `server` / `web` facet 是全局的，不受 agent 开关影响
+
+## 3.0 要广播还是要调用（`bus` vs `services`）
+
+两个面都跨插件，但分工只有一句话：**返回值是元信息 → `bus`；返回值是数据 → `services`。**
+
+| | `bus`（广播） | `services`（调用） |
+|---|---|---|
+| 定向 | 否（0..n 订阅者，谁接谁接） | **是**（恰好一个提供者） |
+| 返回 | `{ delivered }` / `{ handled, failed }` —— **handler 返回值被运行时丢弃** | 业务数据（`notifications.unread` → `7`） |
+| 缺了 | 正常态（`delivered: 0`） | **错误**（`unknown service`） |
+| handler 抛错 | 吞掉，只计入 `failed` | **抛给调用方** |
+| 声明方式 | `bus.declare(topic, { declaredBy })` | `services.provide(name, fn)` |
+| 命名 | `<插件 id>.<类别>`（如 `scheduler.run.failed`） | 短名，宿主补全成 `<插件 id>.<资源>.<动作>`（如 `scheduler.task.list`） |
+
+### 三条硬规则
+
+1. **topic / 服务名前缀 MUST 是本插件 id** —— 声明权与所有权因此天然一一对应，冒名不可能
+2. **owner 双向受控**：`declaredBy: 'publisher'` 的 topic 只有声明者能 `publish`（防冒名），任何插件能 `subscribe`（广播）；`declaredBy: 'subscriber'` 的 topic 只有声明者能 `subscribe`（防抢单），任何插件能 `publish`（能力地址）
+3. **事件处理器里不要做等待型工作** —— `publishAndWait` 会等最慢的订阅者（head-of-line block），重型逻辑应该由订阅方自己起异步任务，或改用 `services.call`
+
+### 一个常见误用
+
+```js
+// ✗ 想通过事件把数据带回去 —— 返回值会被丢弃
+host.bus.subscribe('x.y', () => ({ unread: 7 }));
+
+// ✓ 要数据就声明一个服务
+host.services.provide('unread', () => 7);
+const n = await host.services.call('notifications.unread', {});
+```
+
+**订阅不存在的 topic 不是错**：`subscribe` 返回 `state:'pending'`，等对方装载后自动生效（插件装载顺序是目录扫描顺序，不可依赖）。反向：`services.call` 到未提供的名字是**错误**，调用方必须处理。
 
 ## 3.1 主题：只用平台承诺的 CSS 变量
 

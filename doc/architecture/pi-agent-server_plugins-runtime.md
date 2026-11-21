@@ -12,7 +12,7 @@
 |---|---|---|
 | **装载点**（在哪跑） | 目录存在性：`server/` `worker/` `extension/` `web/` | 装载器 |
 | **扩展点**（做什么） | 代码默认导出里调的注册函数 | 内核注册表 |
-| **能力面**（能做什么） | 内核注入的 `host` 对象（五个能力面 + 一个事件出口） | 插件 |
+| **能力面**（能做什么） | 内核注入的 `host` 对象（六个能力面 + 一个事件出口） | 插件 |
 
 facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们是"第二套真相"，会与代码漂移。
 
@@ -68,7 +68,7 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 
 `:name` 匹配单段（值进 `request.params`）；`*` 只能作**最后一段**（匹配剩余全部，进 `params['*']`）。分发时**字面量永远优先于模式**（否则"注册顺序决定语义"，作者不可能猜对）。webhook 不需要专用机制：插件拿原始路径自己分发。
 
-## 五个能力面 + 一个事件出口（`host`）
+## 六个能力面 + 一个事件出口（`host`）
 
 插件访问平台的**唯一**通道 —— 不 import 内核模块，也不拿 `WorkerPool`（暴露 = 插件能杀进程）。
 
@@ -78,32 +78,57 @@ facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们�
 | `agents` | `list` / `get` / `update` | 插件维护自己的配置块 |
 | `db` | `migrate` / `query` | 读写都开放；每次 query 进审计日志 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 会话生命周期钩子 |
-| `bus` | `publish` / `subscribe` | **插件之间的唯一协作通道**（进程内、无回执、同步派发、慢订阅者丢弃）。当前唯一生产链路：scheduler / webhook 发 `*.failed`，通知插件订阅后落一行（见下「发布方与订阅方互不相识」） |
+| `bus` | **`declare`** / `publish` / **`publishAndWait`** / `subscribe` / **`topics`** | **插件间广播**（0..n）：topic 必须先声明，owner 双向受控，发布方拿到送达/处理状态。**handler 返回值一律丢弃** —— 要业务数据请用 `services` |
+| `services` | **`provide`** / `call` / **`list`** | **插件间定向调用**（恰好 1 个提供者）：返回业务数据、错误外抛、无会话上下文。与面 worker 的 `host.methods`（带 `sessionId`、私有）**是两套独立机制** |
 | `events`（出口，非能力面） | `emit` | 发给**浏览器**（worker → server → SSE）；server 侧调用会 warn，明确告警而不是静默吞掉 |
 
-内核侧（`packages/core/src/host-api.ts`）声明五个面：`db` / `sessions` / `agents` / `lifecycle` / `bus`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
+内核侧（`packages/core/src/host-api.ts`）声明六个面：`db` / `sessions` / `agents` / `lifecycle` / `bus` / `services`。`web`（资源前缀）归入口的 HTTP 层，`events` 是出口而不是能力，`outbound` 属于注册面（变成 `methods.handle`）。
 
 **`bus` 与 `events` 不要混**：`bus` 是"发给别的插件"，`events` 是"发给浏览器"。命名冲突过一次（原先想直接复用 `events`），最后按方向拆开。
 
 会话面与 agent 面一律返回 `Promise`（宿主机将来可能跨进程），`db` 面保持同步（DB 本来就是本进程的资源）。**除 `db.migrate`（内核 `initDb` 只建内核对象的表）之外，插件自己的表都要自己建。**
 
-## 发布方与订阅方互不相识
-
-`host.bus` 存在的全部理由。当前唯一的生产链路：
+## 发布方与订阅方互不相识（广播：`bus`）
 
 ```ts
-// scheduler / webhook 侧 —— 发布方不认识通知插件
-host.bus.publish('webhook.delivery.failed', {
+// ① 声明：publisher 型 = 只有我能发，谁都能订阅（广播）；前缀 MUST 是本插件 id
+host.bus.declare('webhook.delivery.failed', { declaredBy: 'publisher' });
+
+// ② 发布：拿到送达状态（无订阅者是正常态，不是错误）
+const r = host.bus.publish('webhook.delivery.failed', {
   hookId, deliveryId, name, agentId, reason, actionUrl: `/webhooks/${hookId}`,
 });
+// r = { ok: true, delivered: 1 }；未声明 topic → { ok:false, reason:'unknown-topic' }
 
-// notifications 侧 —— 订阅方不认识 webhook
+// ③ 订阅：可能 pending（发布方还没装载），声明后自动生效
 host.bus.subscribe('webhook.delivery.failed', (p) =>
   insert({ title: `Webhook「${p.name}」投递失败`, severity: 'error', source: 'webhook', actionUrl: p.actionUrl }),
 );
 ```
 
-订阅方缺失时 `publish` **静默成功** —— 失败信息仍在发布方自己的台账里（`scheduled_task_runs` / `webhook_deliveries`）。这是设计而不是缺陷：**插件不能假设别的插件存在**。topic 命名 `<pluginId>.<noun>.<event>`。
+**owner 双向管控**（两条都可机械校验，校验点在 `buildHost(plugin)` 的身份绑定里）：
+
+| `declaredBy` | 谁能发 | 谁能收 |
+|---|---|---|
+| `publisher` | **只有声明者**（防冒名） | 任何插件（这才是广播） |
+| `subscriber` | 任何插件 | **只有声明者**（防抢单） |
+
+推论：广播只属于事件；能力型 topic 恰好一个接收者；多个消费方必须显式成链（例如 notifications 自己发 `notifications.raised`，im 订阅它）。
+
+**handler 返回值被丢弃**（运行时强制，不是文档约定）：`publish` 只回 `{ ok, delivered }`，`publishAndWait` 只回 `{ handled, failed, timedOut }` 且 handler 抛错**不外抛**。要业务数据必须走 `services`。
+
+**三个目录各一张表，互不混入**：
+
+| 注册表 | 内容 | 空态含义 |
+|---|---|---|
+| extensions store | 菜单 / 页面 / 路由 / 槽位 / 工具卡 | 由 facet 存在性决定 |
+| `plugin-bus.ts`（`event-bus.ts`） | topic 声明 + 订阅 | **"契约在、暂时没人听"**（正常） |
+| `plugin-services.ts` | service 提供者 | **"没人提供"**（错误） |
+| 反向 IPC 表（`worker-pool.ts`） | 面 worker 的私有方法（带 `sessionId`） | 未装载 |
+
+三者只共享**每插件的 disposer 账本**（卸载归零断言不变）。合成一张表必须给每行加 `kind` 分支，而"没人接"与"没人提供"这两种相反的空态无法表达。
+
+诊断面：`GET /api/runtime/interop` → `{ topics, services }`（谁声明、谁在听、末次发布；`/api/plugins/:id/extensions` 附带该插件的切片）。
 
 ## 工具与 skill：谁提供，谁决定
 
@@ -248,7 +273,7 @@ pnpm pack:cli           # 含 check-packaged：随包插件与 web 产物断言
 ## 待决项
 
 - **server 侧 `events`**：插件主动推 UI 本期未做。将来若需要，可能走"插件自己的 HTTP 路由 + SSE"，而不是新增能力面
-- **`bus` 只有进程内**：worker ↔ master 的事件不走它（那是 `events` + SSE）；没有持久化/重放
+- **`bus` / `services` 只有进程内**：worker ↔ master 的事件不走它们（那是 `events` + SSE）；没有持久化/重放；worker facet 也没有 `bus`（会话事实走 `sessions.subscribe`）
 - **插件目录监听**：本期靠 `plugin reload` 手动触发
 - **`db.query` 全开放**：插件完全可信，已知可 `DROP TABLE`。缓解是审计日志；DDL 拦截留后续开关
 - **bundled 改名/替换**：旧 id 的墓碑不做特殊处理（新 id 正常出现）
