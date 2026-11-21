@@ -15,6 +15,7 @@ import {
   toPluginEntryDTO,
 } from '@pi-agent-platform/core';
 import { getPluginExtensions } from '@pi-agent-platform/core';
+import { pluginInteropFor } from '../host-api-impl.js';
 export interface PluginsRouterDeps {
   pluginsDir: string;
   /** pi 的 agent 目录（判定依赖安装时读它的 `settings.json` 与 `npm/node_modules`）。 */
@@ -61,7 +62,11 @@ export function createPluginsRouter(deps: PluginsRouterDeps): Hono {
     const snapshot = getPluginSnapshot(deps.pluginsDir);
     const plugin = snapshot.plugins.find((p) => p.entry.id === id);
     if (!plugin) return c.json({ error: 'plugin not found' }, 404);
-    const body: PluginExtensionsResponse = { pluginId: id, extensions: getPluginExtensions(id) };
+    const body: PluginExtensionsResponse = {
+      pluginId: id,
+      extensions: getPluginExtensions(id),
+      interop: pluginInteropFor(id),
+    };
     return c.json(body);
   });
 

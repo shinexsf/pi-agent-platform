@@ -10,7 +10,14 @@
  */
 
 import type { HostApi, SessionRepo, WorkerPool } from '@pi-agent-platform/core';
-import { buildSystemEnvelope, childLogger, createEventBus, sessionRegistry, systemEventPromptOptions } from '@pi-agent-platform/core';
+import {
+  buildSystemEnvelope,
+  childLogger,
+  createPluginBus,
+  createPluginServices,
+  sessionRegistry,
+  systemEventPromptOptions,
+} from '@pi-agent-platform/core';
 import type Database from 'better-sqlite3';
 
 const logger = childLogger('host-api');
@@ -51,12 +58,33 @@ export function listPluginMigrationTables(raw: Database.Database, pluginId: stri
   return rows.map((r) => r.name);
 }
 
-/** 进程内事件总线单例 —— 插件之间唯一的协作通道（双方互不相识）。 */
-const eventBus = createEventBus();
+/** 插件间广播总线单例（带声明 / owner 管控 / 送达状态）。 */
+const pluginBus = createPluginBus();
+
+/** 插件间定向调用注册表（恰好一个提供者 / 返回业务数据）。 */
+const pluginServices = createPluginServices();
 
 /** 当前订阅数（验收用：插件卸载后必须归零）。 */
 export function pluginEventSubscriberCount(): number {
-  return eventBus.subscriberCount();
+  return pluginBus.subscriberCount();
+}
+
+/** 当前服务数（验收用：插件卸载后必须归零）。 */
+export function pluginServiceCount(): number {
+  return pluginServices.count();
+}
+
+/** 某插件的互操作声明（`GET /api/plugins/:id/extensions` 附带的目录片段）。 */
+export function pluginInteropFor(pluginId: string): {
+  topics: ReturnType<typeof pluginBus.topicsOf>;
+  services: ReturnType<typeof pluginServices.listOf>;
+} {
+  return { topics: pluginBus.topicsOf(pluginId), services: pluginServices.listOf(pluginId) };
+}
+
+/** 目录快照（查询面 / 诊断用）。 */
+export function pluginInteropSnapshot(): { topics: ReturnType<typeof pluginBus.topics>; services: ReturnType<typeof pluginServices.list> } {
+  return { topics: pluginBus.topics(), services: pluginServices.list() };
 }
 
 export function createHostApi(deps: HostApiDeps): HostApi {
@@ -133,8 +161,21 @@ export function createHostApi(deps: HostApiDeps): HostApi {
     },
 
     bus: {
-      publish: (topic, payload) => eventBus.emit(topic, payload),
-      subscribe: (topic, listener) => eventBus.subscribe(topic, listener),
+      declare: (pluginId, topic, options) => pluginBus.declare(pluginId, topic, options),
+      publish: (pluginId, topic, payload) => pluginBus.publish(pluginId, topic, payload),
+      publishAndWait: (pluginId, topic, payload, options) => pluginBus.publishAndWait(pluginId, topic, payload, options),
+      subscribe: (pluginId, topic, listener) => pluginBus.subscribe(pluginId, topic, listener),
+      topics: () => pluginBus.topics(),
+      topicsOf: (pluginId) => pluginBus.topicsOf(pluginId),
+      disposePlugin: (pluginId) => pluginBus.disposePlugin(pluginId),
+    },
+
+    services: {
+      provide: (pluginId, name, handler) => pluginServices.provide(pluginId, name, handler),
+      call: (callerPluginId, name, payload, options) => pluginServices.call(callerPluginId, name, payload, options),
+      list: () => pluginServices.list(),
+      listOf: (pluginId) => pluginServices.listOf(pluginId),
+      disposePlugin: (pluginId) => pluginServices.disposePlugin(pluginId),
     },
 
     agents: {

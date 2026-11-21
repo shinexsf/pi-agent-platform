@@ -25,7 +25,7 @@ import { createSessionPluginsRouter } from './routes/session-plugins.js';
 import { createPluginAssetsRouter } from './routes/plugin-assets.js';
 import { startPluginRuntime } from '@pi-agent-platform/core';
 import { createServerLogsRouter } from './routes/server-logs.js';
-import { createRuntimeMethodsRouter } from './routes/runtime-methods.js';
+import { createInteropRouter, createRuntimeMethodsRouter } from './routes/runtime-methods.js';
 import { startTimeoutScanner } from '@pi-agent-platform/core';
 import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { existsSync } from 'node:fs';
@@ -117,6 +117,8 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   app.route('/api/server-logs', createServerLogsRouter());
   // IPC 方法清单（注册表的可观测面；只读诊断）
   app.route('/api/runtime/methods', createRuntimeMethodsRouter(workerPool));
+  // 插件间目录（topic + service）：广播与定向调用并排可见，但仍是两条派发
+  app.route('/api/runtime/interop', createInteropRouter());
 
   // Capability control plane — SINGLE entry for all server-management abilities
   // exposed to agents via the callServer tool (register → dispatch → authorize → audit).

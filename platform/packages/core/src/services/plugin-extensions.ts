@@ -441,6 +441,25 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
   };
   http: { route(def: RouteRegistration): Disposer };
   methods: { handle(name: string, handler: ReverseMethodHandlerWithoutSession): Disposer };
+  bus: {
+    declare(topic: string, options: { declaredBy: 'publisher' | 'subscriber' }): { ok: boolean; reason?: string };
+    publish(topic: string, payload?: unknown): { ok: boolean; delivered: number; reason?: string };
+    publishAndWait(
+      topic: string,
+      payload?: unknown,
+      options?: { timeoutMs?: number },
+    ): Promise<{ ok: boolean; handled: number; failed: number; timedOut: number; reason?: string }>;
+    subscribe(
+      topic: string,
+      listener: (payload: unknown) => void,
+    ): { dispose: Disposer; state: 'matched' | 'pending' };
+    topics(): unknown[];
+  };
+  services: {
+    provide(name: string, handler: (payload: unknown) => unknown | Promise<unknown>): { ok: boolean; reason?: string };
+    call(name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
+    list(): Array<{ name: string; owner: string }>;
+  };
 } {
   const id = plugin.entry.id;
   const dir = plugin.entry.dir;
@@ -531,9 +550,36 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       emit: (_name, _data) => warnOnce(id, 'events.emit', 'host.events.emit 只有 worker 侧可用（server 侧请用 host.bus 做插件间广播）'),
     },
     bus: {
-      // `bus` = 发给**别的插件**（进程内）。订阅进 disposer 账本，卸载即退订。
-      publish: (topic, payload) => host.bus.publish(topic, payload),
-      subscribe: (topic, listener) => track(id, host.bus.subscribe(topic, listener)),
+      // `bus` = 发给**别的插件**的广播（进程内）。声明与订阅进 disposer 账本，卸载即撤销。
+      declare: (topic, options) => {
+        const res = host.bus.declare(id, topic, options as never);
+        if (res.ok) {
+          track(id, () => host.bus.disposePlugin(id));
+        }
+        return res;
+      },
+      publish: (topic, payload) => host.bus.publish(id, topic, payload),
+      publishAndWait: (topic, payload, options) => host.bus.publishAndWait(id, topic, payload, options),
+      subscribe: (topic, listener) => {
+        const res = host.bus.subscribe(id, topic, listener);
+        return { ...res, dispose: track(id, res.dispose) };
+      },
+      topics: () => host.bus.topics(),
+    },
+    services: {
+      // `services` = 发给**别的插件**的定向调用（无会话上下文、返回业务数据）。
+      // 短名（`task.list`）由宿主补全成 `<pluginId>.task.list` —— 与反向方法同一条约定，
+      // 作者不该手写自己的 id（写错就是"前缀不符被拒"，而且 reload 时容易漂移）。
+      provide: (name, handler) => {
+        const full = name.startsWith(`${id}.`) ? name : `${id}.${name}`;
+        const res = host.services.provide(id, full, handler);
+        if (res.ok) {
+          track(id, () => host.services.disposePlugin(id));
+        }
+        return res;
+      },
+      call: (name, payload, options) => host.services.call(id, name, payload, options),
+      list: () => host.services.list(),
     },
     // ── 注册面 ──
     ui,

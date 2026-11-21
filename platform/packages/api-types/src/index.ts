@@ -433,7 +433,25 @@ export interface GlobalExtensionsResponse {
 export interface PluginExtensionsResponse {
   pluginId: string;
   extensions: PluginExtensions;
+  /** 该插件声明的 topic 与提供的 service（运行期，随装载变化）。 */
+  interop?: PluginInteropDTO;
 }
+
+/** 一个插件的互操作声明（目录用）。 */
+export interface PluginInteropDTO {
+  topics: Array<{
+    topic: string;
+    owner: string;
+    declaredBy: 'publisher' | 'subscriber';
+    subscribers: number;
+    pending: number;
+    lastPublishAt: string | null;
+  }>;
+  services: Array<{ name: string; owner: string }>;
+}
+
+/** `GET /api/runtime/interop`：全部 topic 与服务目录（诊断 / 排查"我发了没人收"）。 */
+export interface PluginInteropResponse extends PluginInteropDTO {}
 
 /** `GET /api/sessions/:id/extensions`：会话级（经闸门过滤）。 */
 export interface SessionExtensionsResponse {

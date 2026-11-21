@@ -438,15 +438,42 @@ export interface PluginEventsApi {
 }
 
 /**
- * 插件间事件总线（**进程内**）—— 发布方与订阅方互不认识。
+ * 插件间**广播**（进程内）—— 发布方与订阅方互不认识。
  *
- * 与 `events` 的区别：`events` 是"发给浏览器"，`bus` 是"发给别的插件"。
- * 语义：无回执、同步派发、无订阅者时静默丢弃、单个订阅者抛错不影响别人。
- * 订阅返回的 disposer 进插件账本（卸载即退订）。
+ * topic 必须先 `declare`；`declaredBy` 决定谁拥有契约：
+ * - `publisher`：只有声明者能发（防冒名），任何人都能订阅（真正的广播）
+ * - `subscriber`：只有声明者能收（防抢单），任何人都能发（能力地址）
+ *
+ * 返回值语义：`publish` 只回报送达数，`publishAndWait` 只回报处理成败 ——
+ * **handler 的返回值一律被丢弃**。要业务数据请用 `host.services`。
  */
 export interface PluginBusApi {
-  publish(topic: string, payload?: unknown): void;
-  subscribe(topic: string, listener: (payload: unknown) => void): Disposer;
+  declare(
+    topic: string,
+    options: { declaredBy: 'publisher' | 'subscriber' },
+  ): { ok: boolean; reason?: string };
+  /** 广播，不等处理。未声明 → `{ok:false, reason:'unknown-topic'}`；无订阅者是正常态。 */
+  publish(topic: string, payload?: unknown): { ok: boolean; delivered: number; reason?: string };
+  /** 同步广播：等处理完成，只回报成败（handler 抛错不外抛）。 */
+  publishAndWait(
+    topic: string,
+    payload?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<{ ok: boolean; handled: number; failed: number; timedOut: number; reason?: string }>;
+  /** 订阅。topic 尚未声明时返回 `state:'pending'`（不报错），声明后自动生效。 */
+  subscribe(
+    topic: string,
+    listener: (payload: unknown) => void,
+  ): { dispose: Disposer; state: 'matched' | 'pending' };
+  /** 目录：全部已声明 topic。 */
+  topics(): Array<{
+    topic: string;
+    owner: string;
+    declaredBy: 'publisher' | 'subscriber';
+    subscribers: number;
+    pending: number;
+    lastPublishAt: string | null;
+  }>;
 }
 
 /**
@@ -531,7 +558,23 @@ export interface PluginHost {
   readonly lifecycle: PluginLifecycleApi;
   readonly events: PluginEventsApi;
   readonly bus: PluginBusApi;
+  readonly services: PluginServicesApi;
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
+}
+
+/**
+ * 插件间**定向调用** —— 恰好一个提供者、返回业务数据、错误外抛。
+ *
+ * 与 `bus` 的分工：`bus` 的返回值只是成败（业务数据被丢弃），`services` 才是拿数据的地方。
+ * 与 `host.methods`（面 worker 的私有反向方法）互不相干：这里没有 `sessionId`。
+ */
+export interface PluginServicesApi {
+  /** 声明服务。名字 MUST 是 `<插件 id>.<资源>.<动作>`；同名重复注册会被拒。 */
+  provide(name: string, handler: (payload: unknown) => unknown | Promise<unknown>): { ok: boolean; reason?: string };
+  /** 定向调用：返回业务数据；无提供者/超时/提供者抛错都会抛给调用方。 */
+  call(name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
+  /** 目录：全部已提供的服务（其他插件可据此发现能力）。 */
+  list(): Array<{ name: string; owner: string }>;
 }
 
 /** server 装载点的宿主（比通用宿主多三个注册面）。 */

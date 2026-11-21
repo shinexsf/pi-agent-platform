@@ -118,16 +118,54 @@ export interface HostSystemEventInput {
 }
 
 /**
- * 进程内事件总线（插件之间的唯一协作通道）。
+ * 进程内广播总线（插件之间的**广播**通道）。
  *
  * 为什么不叫 `events`：`host.events` 已经被占用（worker → server → SSE 的事件出口）。
  * 这一面是**给别的插件**的广播，名字必须能区分开。
+ *
+ * 注意：这一层的签名**带 `pluginId`**（注册表形态，身份显式）；插件拿到的是
+ * `buildHost()` 包装后的绑定版（不需要传 id）。owner 管控必须在注册表这一层做，
+ * 否则插件可以自己伪造身份。
  */
 export interface HostBusApi {
-  /** 发布。无回执、同步派发、无订阅者时静默丢弃。 */
-  publish(topic: string, payload?: unknown): void;
-  /** 订阅。返回幂等退订（进插件 disposer 账本）。 */
-  subscribe(topic: string, listener: (payload: unknown) => void): () => void;
+  declare(
+    pluginId: string,
+    topic: string,
+    options: { declaredBy: TopicDeclarer },
+  ): { ok: boolean; reason?: string };
+  publish(pluginId: string, topic: string, payload?: unknown): PublishResult;
+  publishAndWait(
+    pluginId: string,
+    topic: string,
+    payload?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<PublishAndWaitResult>;
+  subscribe(
+    pluginId: string,
+    topic: string,
+    listener: (payload: unknown) => void,
+  ): { dispose: () => void; state: 'matched' | 'pending' };
+  topics(): TopicInfo[];
+  topicsOf(pluginId: string): TopicInfo[];
+  disposePlugin(pluginId: string): void;
+}
+
+/** 插件间定向调用（恰好一个提供者、返回业务数据）。 */
+export interface HostServicesApi {
+  provide(
+    pluginId: string,
+    name: string,
+    handler: (payload: unknown) => unknown | Promise<unknown>,
+  ): { ok: boolean; reason?: string };
+  call(
+    callerPluginId: string,
+    name: string,
+    payload?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
+  list(): ServiceInfo[];
+  listOf(pluginId: string): ServiceInfo[];
+  disposePlugin(pluginId: string): void;
 }
 
 /** agent 配置能力面。 */
@@ -144,17 +182,27 @@ export interface HostLifecycleApi {
   onSessionDisposed(hook: (sessionId: string, reason: string) => void): () => void;
 }
 
-/** 插件拿到的宿主 API（四个能力面）。 */
+import type {
+  PublishAndWaitResult,
+  PublishResult,
+  TopicDeclarer,
+  TopicInfo,
+} from './services/event-bus.js';
+import type { ServiceInfo } from './services/plugin-services.js';
+
+/**
+ * 入口实现的宿主能力面（注册表形态，所有方法带调用方/声明方的 `pluginId`）。
+ *
+ * 插件本身看到的不是这个对象：`plugin-extensions.ts` 的 `buildHost()` 会包一层，把
+ * 身份绑定进去并挂 disposer 账本 —— 那是 owner 管控与卸载归零的唯一实现点。
+ */
 export interface HostApi {
   readonly db: HostDbApi;
   readonly sessions: HostSessionsApi;
   readonly agents: HostAgentsApi;
   readonly lifecycle: HostLifecycleApi;
-  /**
-   * 插件间协作（进程内事件总线）。
-   *
-   * 为什么是能力面而不是注册面：发布方与订阅方**互不认识**，内核只是那个交汇点；
-   * 没有"注册一个方法给别人调"这种方向性，所以它不归装载器。
-   */
+  /** 插件间协作：**广播**（0..n 订阅者、无业务返回值）。 */
   readonly bus: HostBusApi;
+  /** 插件间协作：**定向调用**（恰好一个提供者、返回业务数据）。 */
+  readonly services: HostServicesApi;
 }

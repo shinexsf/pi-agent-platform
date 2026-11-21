@@ -44,6 +44,7 @@ export * from './capabilities/authorize.js';
 // ── 插件宿主 ──
 export * from './services/plugin-extensions.js';
 export * from './services/event-bus.js';
+export * from './services/plugin-services.js';
 export * from './services/system-envelope.js';
 
 // ── 宿主 API surface（插件与内核之间唯一的稳定缝）──
