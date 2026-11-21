@@ -84,26 +84,137 @@ export default {
       },
     };
 
-    // ── R3：反向方法（extension facet 的 `manage_webhook` 工具经此调用；带会话上下文）──
-    host.methods.handle('hook.create', async (params, ctx) => {
-      const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
-      if (!callerAgentId) throw new Error('无法解析调用方 agent（缺少会话上下文）');
-      return api.create(params, callerAgentId);
-    });
-    host.methods.handle('hook.list', async (params, ctx) => {
-      const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
-      return api.list(params, callerAgentId);
-    });
-    host.methods.handle('hook.delete', async (params, ctx) => {
-      const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
-      return api.remove(params, callerAgentId);
+    // ── 动作：一份 handler → 反向方法 + service ──
+    //
+    // 每个 handler 都读 `ctx.sessionId` 推出调用方 agent：反向方法路径一定有会话
+    // （工具在会话里跑），service 路径没有 → 归属校验自动降级（见 `api.remove`）。
+    // `scope: 'public'` = 别的插件也能管理 hook（`scheduler` 那种"发事件"的场景除外）。
+    //
+    // 不给 `tool`：`manage_webhook` 是一个工具多 mode（create/list/delete），
+    // 聚合工具留在 extension facet 手写；不给 `http`：外部入口 `/hooks/:id` 带 secret
+    // 与特殊状态码，必须 `host.http.route`。
+    host.actions.define({
+      'hook.create': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: async (params, ctx) => {
+          const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
+          if (!callerAgentId) throw new Error('无法解析调用方 agent（缺少会话上下文）');
+          return api.create(params, callerAgentId);
+        },
+      },
+      'hook.list': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: async (params, ctx) => api.list(params, await callerAgentIdOf(host, ctx?.sessionId)),
+      },
+      'hook.update': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: async (params) => api.update(params),
+      },
+      'hook.delete': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: async (params, ctx) => api.remove(params, await callerAgentIdOf(host, ctx?.sessionId)),
+      },
     });
 
-    // ── services（跨插件，无会话上下文）：其他插件请调这些，不要直接读表 ──
-    host.services.provide('hook.list', (payload) => api.list(payload));
-    host.services.provide('hook.create', (payload) => api.create(payload));
-    host.services.provide('hook.update', (payload) => api.update(payload));
-    host.services.provide('hook.delete', (payload) => api.remove(payload));
+    // ── 聚合动作：一个工具三种 mode（create|list|delete），工具名保持 `manage_webhook` ──
+    //
+    // 聚合工具绑动作的做法：声明 dispatcher 动作 + `tool.name` 覆盖派生名，
+    // handler 转调同一份 `api`。于是 extension facet 消失（工具由平台按描述符注册）。
+    const manageSchema = {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['create', 'list', 'delete'], description: 'create 创建；list 列出；delete 删除' },
+        name: { type: 'string', description: '短名（出现在列表与失败通知里）' },
+        prompt: { type: 'string', description: '事件到达时要执行的指令（就是你在那个会话里该做的事）' },
+        sessionMode: {
+          type: 'string',
+          enum: ['new', 'reuse'],
+          description: 'new = 每个事件新建会话（默认）；reuse = 固定复用一个会话（不传 sessionId 时首次自动创建）',
+        },
+        sessionId: { type: 'string', description: 'reuse 模式下的目标会话 id；只建议复用当前会话时传' },
+        busyPolicy: {
+          type: 'string',
+          enum: ['followUp', 'steer', 'skip'],
+          description: '收到事件时你正在跑怎么办：followUp 排队（默认）/ steer 插队 / skip 这次不投',
+        },
+        hookId: { type: 'string', description: 'delete 时的 hook id' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    } as const;
+
+    host.actions.define({
+      manage: {
+        scope: 'own',
+        params: manageSchema,
+        tool: {
+          name: 'manage_webhook',
+          description:
+            '创建 / 查看 / 删除 webhook 入口：外部系统 POST 到该 URL 时，平台会把你写的指令送进一个会话执行。'
+            + '创建后返回完整 URL 与 Bearer secret —— 把这两个交给要调用的一方即可。只管理入口本身，不返回执行结果。',
+          exposure: 'direct',
+          namespace: 'webhook',
+          promptSnippet:
+            'manage_webhook: 创建/查看/删除 webhook 入口（外部系统 POST 触发）；只在用户明确要"接外部事件"时使用',
+        },
+        handler: async (raw, ctx) => {
+          const p = (raw ?? {}) as Record<string, unknown> & { action?: string };
+          const action = String(p.action ?? '');
+          const callerAgentId = await callerAgentIdOf(host, ctx?.sessionId);
+
+          if (action === 'list') {
+            const res = api.list({}, callerAgentId) as { items?: Array<{ id: string; name: string; enabled: boolean }> };
+            const items = res.items ?? [];
+            return {
+              ok: true,
+              message: items.length === 0 ? '当前没有 webhook 入口。' : `当前 webhook ${items.length} 个`,
+              items,
+            };
+          }
+          if (action === 'delete') {
+            if (!p.hookId) throw new Error('delete 需要 hookId（可先 action:"list" 查看）');
+            await api.remove({ hookId: p.hookId }, callerAgentId);
+            return { ok: true, message: `已删除 webhook ${String(p.hookId)}` };
+          }
+          if (action !== 'create') throw new Error(`未知 action：${action}`);
+          if (!p.prompt) throw new Error('create 需要 prompt（事件到达时要执行的指令）');
+
+          const res = (await api.create(
+            {
+              name: p.name,
+              prompt: p.prompt,
+              sessionMode: p.sessionMode,
+              sessionId: p.sessionMode === 'reuse' ? p.sessionId : undefined,
+              busyPolicy: p.busyPolicy,
+            },
+            callerAgentId,
+          )) as { hook?: { id?: string; name?: string; secret?: string }; url?: string };
+          const hook = res.hook ?? {};
+          return {
+            ok: true,
+            message: `已创建 webhook「${hook.name ?? String(p.name ?? '')}」（id=${hook.id ?? '?'}）`,
+            url: res.url ?? '',
+            secret: hook.secret ?? '',
+            hook,
+            howToCall: [
+              'curl -X POST <你的服务地址>' + (res.url ?? ''),
+              '  -H "Authorization: Bearer ' + (hook.secret ?? '') + '"',
+              '  -H "Content-Type: application/json"',
+              `  -d '{"event":"deploy.failed","service":"api"}'`,
+            ].join(' \\\n'),
+            note: 'body 原样进 <data>.payload（请求头信息在 _meta）；需要去重就让对方带 Idempotency-Key 头。',
+          };
+        },
+      },
+    });
 
     // ── R2：外部入口 ──
     //

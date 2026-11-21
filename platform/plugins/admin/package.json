@@ -1,0 +1,8 @@
+{
+  "name": "admin",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "平台管理动作（状态 / agent / session）：8 个 scope:public 动作 + deferred 工具 + service",
+  "piServer": { "apiVersion": "1" }
+}

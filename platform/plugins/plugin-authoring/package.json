@@ -1,0 +1,8 @@
+{
+  "name": "plugin-authoring",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "插件编写说明（纯 skill 数据插件：没有 facet，启用即注入 skills/pi-plugin-authoring）",
+  "piServer": { "apiVersion": "1" }
+}

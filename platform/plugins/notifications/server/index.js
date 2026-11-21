@@ -103,21 +103,53 @@ var src_default = {
       );
       return id;
     }
-    host.methods.handle("post", (params, ctx) => {
-      const p = params ?? {};
-      const title = (p.title ?? "").trim();
-      const body = (p.body ?? "").trim();
-      if (!title && !body) throw new Error("postNotification: title/body required");
-      const id = insert({
-        title,
-        body,
-        severity: p.severity ?? "info",
-        source: "agent",
-        sourceId: ctx.sessionId || null,
-        // 深链由平台拼，调用方（模型）给不了
-        actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null
-      });
-      return { id, unreadCount: unreadCount() };
+    host.actions.define({
+      post: {
+        scope: "own",
+        params: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "\u77ED\u6807\u9898\uFF08<= 120 \u5B57\u7B26\uFF09" },
+            body: { type: "string", description: "\u6B63\u6587\uFF08\u7EAF\u6587\u672C\uFF0C\u4E0D\u8981 markdown\uFF09" },
+            severity: {
+              type: "string",
+              enum: ["info", "warning", "error"],
+              description: "info = \u544A\u77E5\uFF0Cwarning = \u9700\u8981\u770B\u4E00\u773C\uFF0Cerror = \u51FA\u9519\u4E86"
+            }
+          },
+          required: ["title", "body"],
+          additionalProperties: false
+        },
+        tool: {
+          description: "\u5411 server \u901A\u77E5\u4E2D\u5FC3\u53D1\u9001\u4E00\u6761\u6D88\u606F\uFF08\u5199\u8FDB\u6536\u4EF6\u7BB1\uFF0C\u4F9B\u7528\u6237\u7A0D\u540E\u67E5\u770B\uFF1B\u5E73\u53F0\u4E0D\u505A\u5916\u90E8\u63A8\u9001\uFF09",
+          // direct：这是少数"模型必须随手可用"的工具（失败要能立刻汇报），
+          // 藏进 tool_search 只会让失败信息留在会话里没人看见。
+          exposure: "direct",
+          namespace: "notifications",
+          promptSnippet: "Post a message to the server notification inbox",
+          promptGuidelines: [
+            'Use postNotification when the result matters while the user is away \u2014 scheduled/long tasks, failures, or explicit "tell me when done" requests.',
+            "Do NOT use it for ordinary replies: if the user is chatting with you, answer in the conversation.",
+            "severity: info for progress, warning for something the user should look at, error for failures."
+          ]
+        },
+        handler: (params, ctx) => {
+          const p = params ?? {};
+          const title = (p.title ?? "").trim();
+          const body = (p.body ?? "").trim();
+          if (!title && !body) throw new Error("postNotification: title/body required");
+          const id = insert({
+            title,
+            body,
+            severity: p.severity ?? "info",
+            source: "agent",
+            sourceId: ctx.sessionId || null,
+            // 深链由平台拼，调用方（模型）给不了
+            actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null
+          });
+          return { id, unreadCount: unreadCount() };
+        }
+      }
     });
     const FAILURE_TOPICS = [
       { topic: "scheduler.run.failed", label: (p) => `\u5B9A\u65F6\u4EFB\u52A1\u300C${p.name}\u300D\u6295\u9012\u5931\u8D25` },

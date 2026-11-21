@@ -188,22 +188,61 @@ export default {
       return id;
     }
 
-    // R3：反向方法（worker 的 `postNotification` 工具调 `plugin.notifications.post`）
-    host.methods.handle('post', (params, ctx) => {
-      const p = (params ?? {}) as { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' };
-      const title = (p.title ?? '').trim();
-      const body = (p.body ?? '').trim();
-      if (!title && !body) throw new Error('postNotification: title/body required');
-      const id = insert({
-        title,
-        body,
-        severity: p.severity ?? 'info',
-        source: 'agent',
-        sourceId: ctx.sessionId || null,
-        // 深链由平台拼，调用方（模型）给不了
-        actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null,
-      });
-      return { id, unreadCount: unreadCount() };
+    // ── 动作：`post` 一份 handler + 工具声明 ──
+    //
+    // 以前是"反向方法 + extension facet 里手抄 7 行 PiToolRegistrar"两处：
+    // 工具与 handler 分开写，改参数 schema 有一半概率漏改工具那一份。
+    // 现在 `tool` 由平台按描述符自动注册，extension facet 整个消失。
+    //
+    // `scope: 'own'`：只有**本插件的 worker**（也就是那个工具）能调；别的插件想发通知
+    // 请用广播 `notifications.notify`（声明式、带 `subscribedBy: 'subscriber'`）。
+    host.actions.define({
+      post: {
+        scope: 'own',
+        params: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: '短标题（<= 120 字符）' },
+            body: { type: 'string', description: '正文（纯文本，不要 markdown）' },
+            severity: {
+              type: 'string',
+              enum: ['info', 'warning', 'error'],
+              description: 'info = 告知，warning = 需要看一眼，error = 出错了',
+            },
+          },
+          required: ['title', 'body'],
+          additionalProperties: false,
+        },
+        tool: {
+          description: '向 server 通知中心发送一条消息（写进收件箱，供用户稍后查看；平台不做外部推送）',
+          // direct：这是少数"模型必须随手可用"的工具（失败要能立刻汇报），
+          // 藏进 tool_search 只会让失败信息留在会话里没人看见。
+          exposure: 'direct',
+          namespace: 'notifications',
+          promptSnippet: 'Post a message to the server notification inbox',
+          promptGuidelines: [
+            'Use postNotification when the result matters while the user is away — scheduled/long tasks, failures, or explicit "tell me when done" requests.',
+            'Do NOT use it for ordinary replies: if the user is chatting with you, answer in the conversation.',
+            'severity: info for progress, warning for something the user should look at, error for failures.',
+          ],
+        },
+        handler: (params, ctx) => {
+          const p = (params ?? {}) as { title?: string; body?: string; severity?: 'info' | 'warning' | 'error' };
+          const title = (p.title ?? '').trim();
+          const body = (p.body ?? '').trim();
+          if (!title && !body) throw new Error('postNotification: title/body required');
+          const id = insert({
+            title,
+            body,
+            severity: p.severity ?? 'info',
+            source: 'agent',
+            sourceId: ctx.sessionId || null,
+            // 深链由平台拼，调用方（模型）给不了
+            actionUrl: ctx.sessionId ? `/chat/${ctx.sessionId}` : null,
+          });
+          return { id, unreadCount: unreadCount() };
+        },
+      },
     });
 
     // ── 总线订阅：别的插件的失败事件 → 收件箱 ──

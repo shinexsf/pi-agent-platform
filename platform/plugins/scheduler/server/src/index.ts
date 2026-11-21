@@ -90,25 +90,171 @@ export default {
       },
     };
 
-    // ── R3：反向方法（extension facet 的 `schedule_task` 工具经此调用；带会话上下文）──
-    host.methods.handle('task.list', api.list);
-    host.methods.handle('task.create', async (params, ctx) => {
-      const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : undefined;
-      return api.create(params, callerAgent);
-    });
-    host.methods.handle('task.update', api.update);
-    host.methods.handle('task.delete', api.remove);
-    host.methods.handle('task.run', async (params) => {
-      const p = (params ?? {}) as { taskId?: string };
-      if (!p.taskId) throw new Error('taskId is required');
-      return dispatch(host, store, p.taskId, 'plugin');
+    // ── 动作：一份 handler，五个独立暴露字段 ──
+    //
+    // 原来这里要写两遍（`host.methods.handle` × 5 + `host.services.provide` × 4），
+    // 现在一条声明同时产生反向方法（extension facet 的工具经此调用，带会话上下文）
+    // 与 service（跨插件、无会话）。`scope: 'public'` = 别的插件也能调。
+    //
+    // 不给 `tool`：`schedule_task` 是**一个工具三种 mode**（create/list/cancel），
+    // 动作投影是"一个动作一个工具"，聚合工具留在 extension facet 手写（见那里的注释）。
+    // 不给 `http`：REST 形状是 `/tasks/:id` + 409/400 语义，属作者手写路由的地盘。
+    const callerAgentOf = async (ctx: { sessionId?: string }): Promise<string | undefined> =>
+      ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : undefined;
+
+    host.actions.define({
+      'task.list': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', properties: {}, additionalProperties: true },
+        handler: (params) => api.list(params),
+      },
+      'task.create': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: async (params, ctx) => api.create(params, await callerAgentOf(ctx)),
+      },
+      'task.update': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: (params) => api.update(params),
+      },
+      'task.delete': {
+        scope: 'public',
+        service: true,
+        params: { type: 'object', additionalProperties: true },
+        handler: (params) => api.remove(params),
+      },
+      'task.run': {
+        scope: 'public',
+        service: true,
+        params: {
+          type: 'object',
+          properties: { taskId: { type: 'string' } },
+          required: ['taskId'],
+          additionalProperties: false,
+        },
+        handler: async (params) => {
+          const p = (params ?? {}) as { taskId?: string };
+          if (!p.taskId) throw new Error('taskId is required');
+          return dispatch(host, store, p.taskId, 'plugin');
+        },
+      },
     });
 
-    // ── services（跨插件，无会话上下文）：其他插件请调这些，不要直接读表 ──
-    host.services.provide('task.list', (payload) => api.list(payload));
-    host.services.provide('task.create', (payload) => api.create(payload));
-    host.services.provide('task.update', (payload) => api.update(payload));
-    host.services.provide('task.delete', (payload) => api.remove(payload));
+    // ── 聚合动作：一个工具三种 mode（`action: create|list|cancel`）──
+    //
+    // 聚合工具**可以**绑到动作上：约束只是"一个工具 ↔ 一个动作"，不要求"一个动作只做一件事"。
+    // 做法是声明一个 dispatcher 动作，并用 `tool.name` 覆盖派生的工具名（保持 `schedule_task`），
+    // handler 内部转调同一份 `api`（不是第二份实现）。于是 extension facet 整个消失。
+    //
+    // 为什么不是拆成三个工具：模型要多做一次"该用哪个"的判断，而这三个 mode 共享同一批参数，
+    // 收益是负的。判据是"参数是否共享" —— 共享就聚合，不共享就分开。
+    const aggregateSchema = {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'list', 'cancel'],
+          description: 'create 创建；list 列出当前工作区/agent 的定时任务；cancel 按 taskId 取消',
+        },
+        name: { type: 'string', description: '任务名（用于列表与通知，简短）' },
+        prompt: { type: 'string', description: '到点时要执行的指令（就是你在那个会话里该做的事）' },
+        scheduleKind: {
+          type: 'string',
+          enum: ['cron', 'once'],
+          description: 'cron = 重复（需 cronExpr + timezone）；once = 一次性（需 at）',
+        },
+        cronExpr: {
+          type: 'string',
+          description: '5 段 cron（分 时 日 月 周），最小间隔 5 分钟，例：`0 9 * * *` = 每天 9:00',
+        },
+        timezone: { type: 'string', description: 'IANA 时区，例：`Asia/Shanghai`。缺省 UTC' },
+        at: { type: 'string', description: '一次性任务的时刻，ISO 8601（例：`2026-11-20T09:00:00+08:00`）' },
+        sessionMode: {
+          type: 'string',
+          enum: ['new', 'reuse'],
+          description: 'new = 每次触发新建会话（默认）；reuse = 固定复用一个会话（不传 sessionId 时首次触发自动创建）',
+        },
+        sessionId: { type: 'string', description: 'reuse 模式下的目标会话 id；只建议复用当前会话时传' },
+        busyPolicy: {
+          type: 'string',
+          enum: ['followUp', 'steer', 'skip'],
+          description: '到点时 agent 正在跑怎么办：followUp 排队（默认）/ steer 插队 / skip 这一次不投。高频任务建议 skip',
+        },
+        taskId: { type: 'string', description: 'cancel 时的任务 id' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    } as const;
+
+    host.actions.define({
+      schedule: {
+        scope: 'own',
+        params: aggregateSchema,
+        tool: {
+          // 覆盖派生名：模型侧看到的仍是 schedule_task（skill 与文档都按这个名字写的）。
+          name: 'schedule_task',
+          description:
+            '创建 / 查看 / 取消定时任务：按 cron 表达式或一个具体时刻，把一段指令在指定会话里自动执行。'
+            + '只管理任务本身，不返回执行结果（任务会在到点时独立运行）。',
+          // 常驻而不是 deferred：用户说"每天…"时必须随手可用，藏进 tool_search 会漏用。
+          exposure: 'direct',
+          namespace: 'scheduler',
+          promptSnippet:
+            'schedule_task: 创建/查看/取消定时任务（cron 或一次性时刻）；只在用户明确要求"定时/每天/提醒"时使用',
+        },
+        handler: async (raw, ctx) => {
+          const p = (raw ?? {}) as Record<string, unknown> & { action?: string };
+          const action = String(p.action ?? '');
+
+          if (action === 'list') {
+            const res = api.list({}) as { items?: unknown[] };
+            return { ok: true, message: `当前定时任务 ${res.items?.length ?? 0} 个`, items: res.items ?? [] };
+          }
+          if (action === 'cancel') {
+            if (!p.taskId) throw new Error('cancel 需要 taskId（可先 action:"list" 查看）');
+            api.remove({ taskId: p.taskId });
+            return { ok: true, message: `已取消任务 ${String(p.taskId)}` };
+          }
+          if (action !== 'create') throw new Error(`未知 action：${action}`);
+          if (!p.prompt) throw new Error('create 需要 prompt（到点要执行的指令）');
+
+          const scheduleKind = p.scheduleKind === 'once' ? 'once' : 'cron';
+          let at: number | undefined;
+          if (scheduleKind === 'once') {
+            if (!p.at) throw new Error('一次性任务需要 at（ISO 8601 时间）');
+            const parsed = Date.parse(String(p.at));
+            if (Number.isNaN(parsed)) throw new Error(`at 不是合法时间：${String(p.at)}`);
+            at = parsed;
+          }
+          const task = (await api.create(
+            {
+              name: p.name,
+              prompt: p.prompt,
+              scheduleKind,
+              cronExpr: p.cronExpr,
+              timezone: p.timezone,
+              at,
+              sessionMode: p.sessionMode,
+              sessionId: p.sessionMode === 'reuse' ? p.sessionId : undefined,
+              busyPolicy: p.busyPolicy,
+            },
+            await callerAgentOf(ctx),
+          )) as { id?: string; name?: string; nextAt?: number };
+          const when = task.nextAt
+            ? new Date(task.nextAt).toLocaleString('zh-CN', { timeZone: String(p.timezone ?? 'UTC') })
+            : '未知';
+          return {
+            ok: true,
+            message: `已创建定时任务「${task.name ?? String(p.name ?? '')}」（id=${task.id ?? '?'}），下次运行：${when}`,
+            task,
+          };
+        },
+      },
+    });
 
     // ── R2：REST ──
     const route = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, handler: PluginRouteHandler): void => {

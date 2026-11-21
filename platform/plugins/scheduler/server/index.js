@@ -39,22 +39,143 @@ var src_default = {
         return { ok: true };
       }
     };
-    host.methods.handle("task.list", api.list);
-    host.methods.handle("task.create", async (params, ctx) => {
-      const callerAgent = ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : void 0;
-      return api.create(params, callerAgent);
+    const callerAgentOf = async (ctx) => ctx.sessionId ? (await host.sessions.get(ctx.sessionId))?.agentId : void 0;
+    host.actions.define({
+      "task.list": {
+        scope: "public",
+        service: true,
+        params: { type: "object", properties: {}, additionalProperties: true },
+        handler: (params) => api.list(params)
+      },
+      "task.create": {
+        scope: "public",
+        service: true,
+        params: { type: "object", additionalProperties: true },
+        handler: async (params, ctx) => api.create(params, await callerAgentOf(ctx))
+      },
+      "task.update": {
+        scope: "public",
+        service: true,
+        params: { type: "object", additionalProperties: true },
+        handler: (params) => api.update(params)
+      },
+      "task.delete": {
+        scope: "public",
+        service: true,
+        params: { type: "object", additionalProperties: true },
+        handler: (params) => api.remove(params)
+      },
+      "task.run": {
+        scope: "public",
+        service: true,
+        params: {
+          type: "object",
+          properties: { taskId: { type: "string" } },
+          required: ["taskId"],
+          additionalProperties: false
+        },
+        handler: async (params) => {
+          const p = params ?? {};
+          if (!p.taskId) throw new Error("taskId is required");
+          return dispatch(host, store, p.taskId, "plugin");
+        }
+      }
     });
-    host.methods.handle("task.update", api.update);
-    host.methods.handle("task.delete", api.remove);
-    host.methods.handle("task.run", async (params) => {
-      const p = params ?? {};
-      if (!p.taskId) throw new Error("taskId is required");
-      return dispatch(host, store, p.taskId, "plugin");
+    const aggregateSchema = {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["create", "list", "cancel"],
+          description: "create \u521B\u5EFA\uFF1Blist \u5217\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A/agent \u7684\u5B9A\u65F6\u4EFB\u52A1\uFF1Bcancel \u6309 taskId \u53D6\u6D88"
+        },
+        name: { type: "string", description: "\u4EFB\u52A1\u540D\uFF08\u7528\u4E8E\u5217\u8868\u4E0E\u901A\u77E5\uFF0C\u7B80\u77ED\uFF09" },
+        prompt: { type: "string", description: "\u5230\u70B9\u65F6\u8981\u6267\u884C\u7684\u6307\u4EE4\uFF08\u5C31\u662F\u4F60\u5728\u90A3\u4E2A\u4F1A\u8BDD\u91CC\u8BE5\u505A\u7684\u4E8B\uFF09" },
+        scheduleKind: {
+          type: "string",
+          enum: ["cron", "once"],
+          description: "cron = \u91CD\u590D\uFF08\u9700 cronExpr + timezone\uFF09\uFF1Bonce = \u4E00\u6B21\u6027\uFF08\u9700 at\uFF09"
+        },
+        cronExpr: {
+          type: "string",
+          description: "5 \u6BB5 cron\uFF08\u5206 \u65F6 \u65E5 \u6708 \u5468\uFF09\uFF0C\u6700\u5C0F\u95F4\u9694 5 \u5206\u949F\uFF0C\u4F8B\uFF1A`0 9 * * *` = \u6BCF\u5929 9:00"
+        },
+        timezone: { type: "string", description: "IANA \u65F6\u533A\uFF0C\u4F8B\uFF1A`Asia/Shanghai`\u3002\u7F3A\u7701 UTC" },
+        at: { type: "string", description: "\u4E00\u6B21\u6027\u4EFB\u52A1\u7684\u65F6\u523B\uFF0CISO 8601\uFF08\u4F8B\uFF1A`2026-11-20T09:00:00+08:00`\uFF09" },
+        sessionMode: {
+          type: "string",
+          enum: ["new", "reuse"],
+          description: "new = \u6BCF\u6B21\u89E6\u53D1\u65B0\u5EFA\u4F1A\u8BDD\uFF08\u9ED8\u8BA4\uFF09\uFF1Breuse = \u56FA\u5B9A\u590D\u7528\u4E00\u4E2A\u4F1A\u8BDD\uFF08\u4E0D\u4F20 sessionId \u65F6\u9996\u6B21\u89E6\u53D1\u81EA\u52A8\u521B\u5EFA\uFF09"
+        },
+        sessionId: { type: "string", description: "reuse \u6A21\u5F0F\u4E0B\u7684\u76EE\u6807\u4F1A\u8BDD id\uFF1B\u53EA\u5EFA\u8BAE\u590D\u7528\u5F53\u524D\u4F1A\u8BDD\u65F6\u4F20" },
+        busyPolicy: {
+          type: "string",
+          enum: ["followUp", "steer", "skip"],
+          description: "\u5230\u70B9\u65F6 agent \u6B63\u5728\u8DD1\u600E\u4E48\u529E\uFF1AfollowUp \u6392\u961F\uFF08\u9ED8\u8BA4\uFF09/ steer \u63D2\u961F / skip \u8FD9\u4E00\u6B21\u4E0D\u6295\u3002\u9AD8\u9891\u4EFB\u52A1\u5EFA\u8BAE skip"
+        },
+        taskId: { type: "string", description: "cancel \u65F6\u7684\u4EFB\u52A1 id" }
+      },
+      required: ["action"],
+      additionalProperties: false
+    };
+    host.actions.define({
+      schedule: {
+        scope: "own",
+        params: aggregateSchema,
+        tool: {
+          // 覆盖派生名：模型侧看到的仍是 schedule_task（skill 与文档都按这个名字写的）。
+          name: "schedule_task",
+          description: "\u521B\u5EFA / \u67E5\u770B / \u53D6\u6D88\u5B9A\u65F6\u4EFB\u52A1\uFF1A\u6309 cron \u8868\u8FBE\u5F0F\u6216\u4E00\u4E2A\u5177\u4F53\u65F6\u523B\uFF0C\u628A\u4E00\u6BB5\u6307\u4EE4\u5728\u6307\u5B9A\u4F1A\u8BDD\u91CC\u81EA\u52A8\u6267\u884C\u3002\u53EA\u7BA1\u7406\u4EFB\u52A1\u672C\u8EAB\uFF0C\u4E0D\u8FD4\u56DE\u6267\u884C\u7ED3\u679C\uFF08\u4EFB\u52A1\u4F1A\u5728\u5230\u70B9\u65F6\u72EC\u7ACB\u8FD0\u884C\uFF09\u3002",
+          // 常驻而不是 deferred：用户说"每天…"时必须随手可用，藏进 tool_search 会漏用。
+          exposure: "direct",
+          namespace: "scheduler",
+          promptSnippet: 'schedule_task: \u521B\u5EFA/\u67E5\u770B/\u53D6\u6D88\u5B9A\u65F6\u4EFB\u52A1\uFF08cron \u6216\u4E00\u6B21\u6027\u65F6\u523B\uFF09\uFF1B\u53EA\u5728\u7528\u6237\u660E\u786E\u8981\u6C42"\u5B9A\u65F6/\u6BCF\u5929/\u63D0\u9192"\u65F6\u4F7F\u7528'
+        },
+        handler: async (raw, ctx) => {
+          const p = raw ?? {};
+          const action = String(p.action ?? "");
+          if (action === "list") {
+            const res = api.list({});
+            return { ok: true, message: `\u5F53\u524D\u5B9A\u65F6\u4EFB\u52A1 ${res.items?.length ?? 0} \u4E2A`, items: res.items ?? [] };
+          }
+          if (action === "cancel") {
+            if (!p.taskId) throw new Error('cancel \u9700\u8981 taskId\uFF08\u53EF\u5148 action:"list" \u67E5\u770B\uFF09');
+            api.remove({ taskId: p.taskId });
+            return { ok: true, message: `\u5DF2\u53D6\u6D88\u4EFB\u52A1 ${String(p.taskId)}` };
+          }
+          if (action !== "create") throw new Error(`\u672A\u77E5 action\uFF1A${action}`);
+          if (!p.prompt) throw new Error("create \u9700\u8981 prompt\uFF08\u5230\u70B9\u8981\u6267\u884C\u7684\u6307\u4EE4\uFF09");
+          const scheduleKind = p.scheduleKind === "once" ? "once" : "cron";
+          let at;
+          if (scheduleKind === "once") {
+            if (!p.at) throw new Error("\u4E00\u6B21\u6027\u4EFB\u52A1\u9700\u8981 at\uFF08ISO 8601 \u65F6\u95F4\uFF09");
+            const parsed = Date.parse(String(p.at));
+            if (Number.isNaN(parsed)) throw new Error(`at \u4E0D\u662F\u5408\u6CD5\u65F6\u95F4\uFF1A${String(p.at)}`);
+            at = parsed;
+          }
+          const task = await api.create(
+            {
+              name: p.name,
+              prompt: p.prompt,
+              scheduleKind,
+              cronExpr: p.cronExpr,
+              timezone: p.timezone,
+              at,
+              sessionMode: p.sessionMode,
+              sessionId: p.sessionMode === "reuse" ? p.sessionId : void 0,
+              busyPolicy: p.busyPolicy
+            },
+            await callerAgentOf(ctx)
+          );
+          const when = task.nextAt ? new Date(task.nextAt).toLocaleString("zh-CN", { timeZone: String(p.timezone ?? "UTC") }) : "\u672A\u77E5";
+          return {
+            ok: true,
+            message: `\u5DF2\u521B\u5EFA\u5B9A\u65F6\u4EFB\u52A1\u300C${task.name ?? String(p.name ?? "")}\u300D\uFF08id=${task.id ?? "?"}\uFF09\uFF0C\u4E0B\u6B21\u8FD0\u884C\uFF1A${when}`,
+            task
+          };
+        }
+      }
     });
-    host.services.provide("task.list", (payload) => api.list(payload));
-    host.services.provide("task.create", (payload) => api.create(payload));
-    host.services.provide("task.update", (payload) => api.update(payload));
-    host.services.provide("task.delete", (payload) => api.remove(payload));
     const route = (method, path, handler) => {
       host.http.route({ method, path, handler });
     };
