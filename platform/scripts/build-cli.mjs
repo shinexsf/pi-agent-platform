@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * build-cli.mjs — aggregate server + worker + channels + SPA into
+ * build-cli.mjs — aggregate server + worker + bundled plugins + SPA into
  * `packages/cli/dist/`, then run `pnpm pack` to produce the installable tarball.
  *
  * better-sqlite3 is NOT bundled into the tarball. It is declared as a
@@ -11,14 +11,13 @@
  *
  * Steps:
  *   1. compile CLI itself                    (so dist/bin.js etc. exist)
- *   2. pnpm -r build                         (server + worker + channels + packages)
- *   3. copy channels/shared (plain-JS helper) to cli/dist/server/channels/shared
+ *   2. pnpm -r build                         (server + worker + plugins + packages)
  *   4. SPA builds                            (build:ide / build:web)
  *   5. clear aggregated subdirs and copy server dist (preserve CLI's own dist/)
  *   6. copy SPA public to cli/dist/server/public
  *   7. copy worker dist to cli/dist/worker
- *   8. copy channels + manifest to cli/dist/server/channels
- *   9. scan channels package.json deps and merge into cli/package.json
+ *   8. (retired) channels/manifest — IM 已下沉为插件，随包只带 `plugins/im`，零渠道
+ *   9. (retired) 渠道依赖扫描 —— 渠道不再随包
  *  10. pnpm pack (produce tarball, runs inside cli dir)
  */
 
@@ -37,8 +36,6 @@ const CLI_DIST = path.join(CLI_DIR, 'dist');
 const SERVER_DIST = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'dist');
 const SERVER_PUBLIC = path.join(PLATFORM_DIR, 'apps', 'pi-agent-server', 'public');
 const WORKER_DIST = path.join(PLATFORM_DIR, 'workers', 'session-worker', 'dist');
-const CHANNELS_DIR = path.join(PLATFORM_DIR, 'channels');
-const MANIFEST = path.join(CHANNELS_DIR, 'manifest.json');
 /** bundled 插件：目录存在即生效，随包分发（不进 registry）。 */
 const BUNDLED_PLUGINS_DIR = path.join(PLATFORM_DIR, 'plugins');
 
@@ -152,7 +149,7 @@ async function main() {
   }
   await run('pnpm', ['--filter', 'pi-server', 'build']);
 
-  log('step 2/10: pnpm -r build (compile server + worker + channels + packages)');
+  log('step 2/10: pnpm -r build (compile server + worker + plugins + packages)');
   // 编译前先清掉 server / worker 的 dist：tsc 不会删除"源文件已删"的旧产物，
   // 不清就会把搬迁前留下的死文件一起打进 tarball（曾把 dist/server/worker-pool.js、
   // dist/server/capabilities/* 这类移动走的模块残留装进包里）。
@@ -161,27 +158,13 @@ async function main() {
   }
   await run('pnpm', ['-r', 'build']);
 
-  log('step 3/10: copy channels/shared (plain-JS helper module imported by channels)');
-  // channels/shared/ is plain .js (no TS, no workspace-internal imports) so it
-  // doesn't need compiling — just copy the directory as-is.
-  const sharedSrc = path.join(CHANNELS_DIR, 'shared');
-  const sharedOutDir = path.join(CLI_DIST, 'server', 'channels', 'shared');
-  rmSync(sharedOutDir, { recursive: true, force: true });
-  if (existsSync(sharedSrc)) {
-    mkdirSync(sharedOutDir, { recursive: true });
-    cpSync(sharedSrc, sharedOutDir, { recursive: true });
-    log(`  copied ${sharedSrc} → ${sharedOutDir}`);
-  } else {
-    log(`  skip (not found): ${sharedSrc}`);
-  }
-
   log('step 4/10: SPA builds (build:ide / build:web — copy into server/public)');
   await run('pnpm', ['build:ide']);
   await run('pnpm', ['build:web']);
 
   log('step 5/10: clear aggregated subdirs and copy server dist');
   // Clear subdirs that will be re-created, but NOT CLI's own dist/ (step 1 compiled bin.js)
-  for (const sub of ['server', 'worker', 'vendor', 'channels', 'node_modules']) {
+  for (const sub of ['server', 'worker', 'vendor', 'node_modules']) {
     const dir = path.join(CLI_DIST, sub);
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true });
@@ -199,22 +182,9 @@ async function main() {
       const base = path.basename(src);
       if (base === 'public') return false;       // copied separately in step 6
       if (base.startsWith('data.db')) return false; // dev DB never ships
-      // Don't overwrite the channels/ subdir we already populated in step 3 / 8.
-      // Compute the path relative to SERVER_DIST and check if it's a top-level dir.
-      const rel = path.relative(SERVER_DIST, src);
-      if (rel && !rel.startsWith('..') && rel.split(path.sep)[0] === 'channels') {
-        return false;
-      }
       return true;
     },
   });
-
-  // Re-copy channels/shared after server dist (it was cleared in step 5)
-  log('step 5b/10: re-copy channels/shared (cleared by step 5)');
-  if (existsSync(sharedSrc)) {
-    mkdirSync(sharedOutDir, { recursive: true });
-    cpSync(sharedSrc, sharedOutDir, { recursive: true });
-  }
 
   log('step 5c/10: package workspace runtime packages into dist/node_modules');
   await copyWorkspaceRuntimePackages();
@@ -238,41 +208,6 @@ async function main() {
     process.exit(1);
   }
   cpSync(WORKER_DIST, path.join(CLI_DIST, 'worker'), { recursive: true });
-
-  log('step 8/10: copy channels + manifest to cli/dist/server/channels');
-  const channelsOut = path.join(CLI_DIST, 'server', 'channels');
-  mkdirSync(channelsOut, { recursive: true });
-
-  if (!existsSync(MANIFEST)) {
-    process.stderr.write(`[build-cli] channel manifest not found at ${MANIFEST}\n`);
-    process.exit(1);
-  }
-  cpSync(MANIFEST, path.join(channelsOut, 'manifest.json'));
-
-  const manifestRaw = JSON.parse(await readFile(MANIFEST, 'utf8'));
-  const channelNames = Array.isArray(manifestRaw.channels) ? manifestRaw.channels : [];
-  // 渠道包 dist 里有两类东西运行期用不到：
-  //  - admin/    web 前端半部（Vite 从 src 打包进 SPA），server 从不 import
-  //  - __tests__ / *.d.ts / *.map
-  // 它们进了 tarball 不但白占体积，还会让静态自检把「admin 引 .vue」误判成断裂。
-  const skipChannelArtifact = (srcPath) => {
-    const segments = srcPath.split(/[\\/]/);
-    if (segments.includes('__tests__') || segments.includes('admin')) return false;
-    return !/\.(d\.ts|map)$/.test(srcPath);
-  };
-  for (const name of channelNames) {
-    const src = path.join(CHANNELS_DIR, name, 'dist');
-    const dst = path.join(channelsOut, name, 'dist');
-    if (existsSync(src)) {
-      cpSync(src, dst, { recursive: true, filter: (p) => skipChannelArtifact(p) });
-      log(`  copied ${src} → ${dst}`);
-    } else {
-      process.stderr.write(`[build-cli] channel dist not found: ${src}\n`);
-      process.exit(1);
-    }
-  }
-  // Note: channels/shared/ is copied separately in step 3 and already lives at
-  // <CLI_DIST>/server/channels/shared/.
 
   log('step 8b/10: build bundled plugin web facets + copy plugins to cli/dist/server/plugins');
   // web facet 的 TS 源码要编译成浏览器可直接加载的 ESM（平台只替**随包**插件编译）。
@@ -310,29 +245,8 @@ async function main() {
     process.exit(1);
   }
 
-  log('step 9/10: scan channels package.json deps and merge into cli/package.json');
-  const cliPkgPath = path.join(CLI_DIR, 'package.json');
-  const cliPkg = JSON.parse(readFileSync(cliPkgPath, 'utf8'));
-  const mergedDeps = { ...(cliPkg.dependencies ?? {}) };
-
-  for (const name of channelNames) {
-    const channelPkgPath = path.join(CHANNELS_DIR, name, 'package.json');
-    if (!existsSync(channelPkgPath)) continue;
-    const channelPkg = JSON.parse(readFileSync(channelPkgPath, 'utf8'));
-    for (const [dep, ver] of Object.entries(channelPkg.dependencies ?? {})) {
-      // Skip workspace-internal deps — they are bundled as source files, not npm deps.
-      if (typeof ver === 'string' && ver.startsWith('workspace:')) continue;
-      // If CLI already declares this dep, keep the CLI's version (don't downgrade).
-      if (mergedDeps[dep]) continue;
-      mergedDeps[dep] = ver;
-    }
-  }
-
-  // Sort keys for stable diffs.
-  const sortedDeps = Object.fromEntries(Object.entries(mergedDeps).sort(([a], [b]) => a.localeCompare(b)));
-  cliPkg.dependencies = sortedDeps;
-  writeFileSync(cliPkgPath, JSON.stringify(cliPkg, null, 2) + '\n', 'utf8');
-  log(`  updated ${cliPkgPath} (${Object.keys(sortedDeps).length} deps)`);
+  // 渠道不再随包 → 依赖清单不再需要扫描合并；`pnpm pack` 仍要读 cli/package.json 的版本号。
+  const cliPkg = JSON.parse(readFileSync(path.join(CLI_DIR, 'package.json'), 'utf8'));
 
   log('step 9b/10: static packaged check（产物自洽性，失败则不产 tgz）');
   try {

@@ -6,8 +6,8 @@
  * older toasts auto-dismiss after their durationMs.
  */
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import type { ToastOptions } from '@pi-agent-platform/channel-types';
-import AppIcon from '../../../components/ui/AppIcon.vue';
+import type { ToastOptions } from './types';
+import AppIcon from '../ui/AppIcon.vue';
 
 interface ActiveToast extends Required<Pick<ToastOptions, 'variant' | 'durationMs'>> {
   id: number;

@@ -16,12 +16,49 @@ export const PLUGIN_API_VERSION = '1' as const;
 export const PLUGIN_FACET_NAMES = ['server', 'worker', 'extension', 'web'] as const;
 
 /**
- * 插件可以挂载的 UI 槽位。
+ * **平台空间**的槽位名：平台自己渲染 chrome 的挂载点。
  *
- * 一个槽位 = **一个完整的界面入口**：`chat.rail.right` 是会话页右侧 icon 轨道上的
- * 一个按钮及其抽屉面板。槽位名由平台硬编码 —— 插件不能新造槽位，加槽位要改 UI 并发版。
+ * 一个槽位 = 一个完整界面入口：`chat.rail.right` 是会话页右侧 icon 轨道上的
+ * 按钮及其抽屉面板。平台空间是**闭合枚举** —— 加一个要改平台 UI 并发版。
  */
-export const PLUGIN_SLOT_NAMES = ['chat.rail.right'] as const;
+export const PLATFORM_SLOT_NAMES = ['chat.rail.right'] as const;
+
+/** 兼容旧名（会话级 surfaces 仍按这个清单过滤）。 */
+export const PLUGIN_SLOT_NAMES = PLATFORM_SLOT_NAMES;
+
+/**
+ * **插件空间**槽位名的形态：`<pluginId>.<name…>`。
+ *
+ * 语义由"某个插件当宿主"定义（例如 IM 页的 `im.channel.create`）。平台只校验形态，
+ * **不校验**前缀插件是否存在、也不校验注册者是不是那个插件 —— 判据与 services 的
+ * namespace 完全一样：靠约定，不靠闸门。
+ */
+const PLUGIN_SLOT_NAME_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9.-]*$/;
+
+/**
+ * 平台 chrome 的保留命名空间：这些前缀下的槽位只能由平台自己定义。
+ *
+ * 不加这条的话插件空间会变成后门 —— 注册 `chat.rail.left` 就能冒充平台挂载点。
+ * 名单很短（只有真正由平台渲染 chrome 的命名空间），不等于"平台定义所有槽位"。
+ */
+export const RESERVED_SLOT_NAMESPACES = ['chat', '__core__'] as const;
+
+/** 是平台空间已定义的槽位名吗？ */
+export function isPlatformSlotName(name: unknown): name is (typeof PLATFORM_SLOT_NAMES)[number] {
+  return typeof name === 'string' && (PLATFORM_SLOT_NAMES as readonly string[]).includes(name);
+}
+
+/** 是合法的插件空间槽位名吗（形态 + 不落在平台保留命名空间）？ */
+export function isPluginNamespaceSlotName(name: unknown): name is string {
+  if (typeof name !== 'string' || !PLUGIN_SLOT_NAME_RE.test(name)) return false;
+  const head = name.slice(0, name.indexOf('.'));
+  return !(RESERVED_SLOT_NAMESPACES as readonly string[]).includes(head);
+}
+
+/** 两空间任一合法即可注册。 */
+export function isKnownSlotName(name: unknown): name is string {
+  return isPlatformSlotName(name) || isPluginNamespaceSlotName(name);
+}
 
 /**
  * facet 在当前平台的装载支持度。

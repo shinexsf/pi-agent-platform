@@ -7,8 +7,8 @@
  * ERR_MODULE_NOT_FOUND"是结构性必然，只有静态扫产物才能提前发现。
  *
  * 覆盖范围（不做隔离安装/启动，那属于部署测试）：
- *   A. 必需产物存在（bin / server / worker / channels / SPA / workspace 包）
- *   B. 动态装载契约：channels/manifest.json → 渠道目录 → 入口文件
+ *   A. 必需产物存在（bin / server / worker / bundled 插件 / SPA / workspace 包）
+ *   B. 渠道已退役：产物里**不得**再出现 `server/channels/`（零渠道随包）
  *   C. manifest 指向：cli 的 bin/main、workspace 包的 main/exports 目标文件必须存在
  *   D. 模块说明符：相对路径存在、node: 内建、@pi-agent-platform/* 必须在产物内、第三方必须已声明
  *   E. 空跑防护：扫描文件数/说明符总数低于阈值直接失败（防正则失效导致静默通过）
@@ -83,7 +83,6 @@ function checkArtifacts() {
     ['dist/bin.js', 'CLI 编译入口（package.json main）'],
     ['dist/server/index.js', 'server 入口'],
     ['dist/worker/index.js', 'worker 入口（否则 session 无法 spawn）'],
-    ['dist/server/channels/manifest.json', '渠道清单'],
     ['dist/server/public/web/index.html', 'web SPA'],
     ['dist/server/public/ide/index.html', 'ide SPA'],
   ];
@@ -94,7 +93,12 @@ function checkArtifacts() {
     ['scheduler', 'scheduler'],
     ['webhook', 'webhook'],
   ];
-  const requiredPluginSkillAssets = ['plugins/plugin-authoring/skills/pi-plugin-authoring/examples/kitchen-sink/package.json'];
+  const requiredPluginSkillAssets = [
+    'plugins/plugin-authoring/skills/pi-plugin-authoring/examples/kitchen-sink/package.json',
+    // 渠道参考实现：新增连接槽位的示例组件（目录在、文件不在时打包照样成功，装完才发现示例是残的）
+    'plugins/plugin-authoring/skills/pi-plugin-authoring/examples/channel-mock/package.json',
+    'plugins/plugin-authoring/skills/pi-plugin-authoring/examples/channel-mock/web/create.js',
+  ];
   // dist/ 自身在 distRoot 下时，上面的路径要相对 CLI_DIR 解析
   const base = distRoot.endsWith(`${path.sep}dist`) ? path.dirname(distRoot) : distRoot;
   for (const [file, hint] of required) {
@@ -159,30 +163,26 @@ function checkArtifacts() {
   }
 }
 
-// ── B. 动态装载契约：渠道清单 → 目录 → 入口 ──────────────────────────────────
+// ── B. 零渠道随包（IM 已下沉为插件；渠道由用户自己装）────────────────────────
 
-function checkChannels() {
-  const manifestPath = path.join(distRoot, 'server', 'channels', 'manifest.json');
-  if (!existsSync(manifestPath)) return; // 已由 A 报出
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  } catch (e) {
-    fail('B.channel', { file: 'server/channels/manifest.json', detail: `JSON 解析失败：${e.message}` });
-    return;
+/**
+ * 语义：tgz 里 MUST NOT 出现任何渠道实现。
+ *
+ * 为什么这条要静态断言：IM 网关是 bundled 插件，渠道是**非 bundle** 插件（装在人自己的
+ * 桶里）。如果哪天打包脚本又把 `channels/` 复制回来，dev 态看不出来（dev 从来读源码），
+ * 但用户会拿到一个"平台自带 QQ/微信"的产品 —— 而那份代码里的契约早已被删。
+ */
+function checkNoChannels() {
+  const legacy = path.join(distRoot, 'server', 'channels');
+  if (existsSync(legacy)) {
+    fail('B.channel', {
+      file: 'server/channels',
+      detail: '产物里仍有 channels/ —— 渠道已下沉为插件，不应随包分发',
+    });
   }
-  const listed = Array.isArray(manifest.channels) ? manifest.channels : [];
-  if (listed.length === 0) {
-    warn('B.channel', { file: 'server/channels/manifest.json', detail: '渠道清单为空' });
-  }
-  for (const name of listed) {
-    const entry = path.join(distRoot, 'server', 'channels', name, 'dist', 'index.js');
-    if (!existsSync(entry)) {
-      fail('B.channel', {
-        file: `server/channels/${name}/dist/index.js`,
-        detail: `manifest 声明了 ${name}，但产物中没有它的入口（动态 import 会运行时失败）`,
-      });
-    }
+  const manifest = path.join(distRoot, 'server', 'channels', 'manifest.json');
+  if (existsSync(manifest)) {
+    fail('B.channel', { file: 'server/channels/manifest.json', detail: '渠道清单已退役，不应再出现' });
   }
 }
 
@@ -448,7 +448,7 @@ function main() {
   }
 
   checkArtifacts();
-  checkChannels();
+  checkNoChannels();
   const bundledPlugins = checkBundledPlugins();
   const cliManifest = checkCliManifest();
   const stats = checkSpecifiers(cliManifest);

@@ -11,7 +11,6 @@
  *   - WORKER_DIST_DIR              (where worker dist lives)
  *   - PI_DATA_DIR                  (sqlite dir)
  *   - PI_ATTACHMENTS_ROOT          (user uploads dir)
- *   - CHANNELS_DIR                 (bundled channels dir)
  *   - PUBLIC_DIR                   (bundled SPA dir)
  */
 
@@ -21,7 +20,6 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import {
-  channelsDir,
   consoleLogFile,
   dataRoot,
   logFile,
@@ -134,7 +132,6 @@ export function startServer(): StartResult {
     WORKER_DIST_DIR: path.dirname(workerEntry()),
     PI_DATA_DIR: path.join(dataRoot(), 'data'),
     PI_ATTACHMENTS_ROOT: path.join(dataRoot(), 'attachments'),
-    CHANNELS_DIR: channelsDir(),
     PUBLIC_DIR: publicDir(),
   };
 

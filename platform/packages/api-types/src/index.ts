@@ -404,7 +404,28 @@ export interface RegistryPageDTO extends PageRegistration {
   label?: string;
   icon?: string;
   order?: number;
-  parent?: 'config';
+  /** 父页面路径（`/im`）或旧的静态父模块名（`config`）。 */
+  parent?: string;
+}
+
+/**
+ * 槽位注册项（带来源插件与服务端生成的装载地址）。
+ *
+ * `url` 由服务端给出：`/plugins/<pluginId>/web/<component>.js[?v=<rev>]`。
+ * 消费方（宿主插件的 web facet）MUST 直接 `import(url)`，不要自己拼路径 ——
+ * 否则 URL 规则会在平台与每个宿主插件里各存一份。
+ */
+export interface RegistrySurfaceDTO {
+  pluginId: string;
+  slot: string;
+  id: string;
+  title?: string;
+  icon?: string;
+  order?: number;
+  /** `web/<component>.js` 的文件名（不含扩展名）。 */
+  component: string;
+  /** 服务端生成的装载地址。 */
+  url: string;
 }
 
 /** 顶栏动作（R11，带来源插件）。 */
@@ -417,6 +438,11 @@ export interface GlobalExtensionsResponse {
   pages: RegistryPageDTO[];
   /** 顶栏图标按钮区（平铺 / 移动端收起由前端决定）。 */
   headerActions: RegistryHeaderActionDTO[];
+  /**
+   * 插件空间槽位（`<pluginId>.<name>`）：由**宿主插件自己**装载（平台不渲染）。
+   * 例：IM 页消费 `im.channel.create` 来渲染各渠道的新增连接弹窗。
+   */
+  surfaces: RegistrySurfaceDTO[];
   /**
    * 旧字段，保留一个版本。前端不再读它；第三方若读过，等移除时一起清。
    */

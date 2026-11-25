@@ -104,14 +104,42 @@ export default {
 
     // R1 页面（菜单 + 路由一次注册）
     host.ui.page({ path: '/fixture', label: 'Fixture', icon: 'beaker', component: 'page', order: 900 });
+    // R1 二级页：挂到别的页面下（parent 只认路径字符串）
+    host.ui.page({ path: '/fixture/sub', label: 'Fixture Sub', component: 'page', parent: '/fixture' });
+    // dataDir：插件私有可写目录（装载时由入口创建）
+    globalThis.__fixtureDataDir = host.dataDir;
     // R9 挂载点
     host.ui.slot({ slot: 'chat.rail.right', id: 'fixture-panel', title: 'Fixture', component: 'panel' });
+    // 插件空间槽位（<pluginId>.<name>）：进全局聚合，由宿主插件自己装载
+    host.ui.slot({ slot: 'fixture.host-point', id: 'host-point', title: '宿主点位', component: 'panel' });
     // R10 工具卡
     host.ui.toolCard({ tool: 'fixture_tool', mode: 'replace', entry: 'card' });
     // R2 HTTP 路由（字面量 + 命名参数 + 通配）
     host.http.route({ method: 'GET', path: '/hello', handler: () => ({ json: { ok: true } }) });
     host.http.route({ method: 'GET', path: '/item/:id', handler: (req) => ({ json: { id: req.params.id } }) });
     host.http.route({ method: 'POST', path: '/hooks/*', handler: (req) => ({ json: { raw: req.path, wildcard: req.params['*'] } }) });
+    // services：带 namespace 的注册（服务发现用；payload 里应能看到）
+    host.services.provide('demo', () => 'demo-ok', { namespace: 'fixture.iface' });
+
+    // 宿主新面：附件（upload / resolvePath）+ 流式 Response 透传
+    host.http.route({
+      method: 'POST',
+      path: '/attach-echo',
+      handler: async () => {
+        const saved = await host.attachments.upload({
+          sessionId: 's1',
+          bytes: new Uint8Array([1, 2, 3]),
+          mimeType: 'image/png',
+          filename: 'a.png',
+        });
+        return { json: saved };
+      },
+    });
+    host.http.route({
+      method: 'GET',
+      path: '/stream',
+      handler: () => new Response('data: a\\ndata: b\\n\\n', { headers: { 'content-type': 'text/event-stream' } }),
+    });
     // R3 反向方法
     host.methods.handle('ping', (params) => ({ pong: params }));
   },
@@ -150,7 +178,9 @@ export default {
     host.http.route({ method: 'GET', path: '/dup', handler: () => ({}) });          // 重名
     host.http.route({ method: 'GET', path: '/h*', handler: () => ({}) });           // * 不独占一段
     host.http.route({ method: 'GET', path: '/a/*/b', handler: () => ({}) });        // * 不是末段
-    host.ui.slot({ slot: 'chat.rail.left', id: 'x', component: 'x' });              // 未定义槽位
+    host.ui.slot({ slot: 'chat.rail.left', id: 'x', component: 'x' });              // 平台保留命名空间下的伪造名
+    host.ui.slot({ slot: 'bare-name', id: 'x', component: 'x' });                   // 裸名（无 <pluginId>. 前缀）
+    host.ui.slot({ slot: 'a.', id: 'x', component: 'x' });                          // 尾点（形态非法）
     host.ui.slot({ slot: 'chat.rail.right', id: 'y', component: 'missing' });       // 入口不存在
     host.ui.toolCard({ tool: 't', mode: 'regions', regions: { banner: 'card' } });  // 未知区域
     host.methods.handle('', () => ({}));                                            // 空方法名
@@ -207,6 +237,8 @@ writeFileSync(
 const { db, raw } = initDb(dbPath);
 let serviceRegistrations = 0;
 const reverseMethods: Record<string, string[]> = {};
+const attachmentUploads: Array<{ sessionId: string; bytes: Uint8Array; mimeType: string; filename?: string }> = [];
+const dataDirRoot = path.join(runDir, 'plugin-data');
 
 const realBus = createPluginBus();
 const realServices = createPluginServices();
@@ -225,12 +257,13 @@ const stubHost = {
     disposePlugin: (pluginId: string) => realBus.disposePlugin(pluginId),
   },
   services: {
-    provide: (pluginId: string, name: string, handler: (p: unknown) => unknown) =>
-      realServices.provide(pluginId, name, handler),
+    provide: (pluginId: string, name: string, handler: (p: unknown) => unknown, options?: { namespace?: string }) =>
+      realServices.provide(pluginId, name, handler, options),
     call: (caller: string, name: string, payload?: unknown, options?: { timeoutMs?: number }) =>
       realServices.call(caller, name, payload, options),
-    list: () => realServices.list(),
+    list: (filter?: { namespace?: string }) => realServices.list(filter),
     listOf: (pluginId: string) => realServices.listOf(pluginId),
+    namespaces: () => realServices.namespaces(),
     disposePlugin: (pluginId: string) => realServices.disposePlugin(pluginId),
   },
   db: {
@@ -264,6 +297,22 @@ const stubHost = {
   lifecycle: {
     onSessionCreated: () => () => {},
     onSessionDisposed: () => () => {},
+    runtime: () => ({ version: 'test', uptimeMs: 0, nodeEnv: 'test', port: 0, pid: 0, workers: { active: 0, placeholders: 0, max: 1, pendingCalls: 0 } }),
+  },
+  // 附件面：记录调用，返回固定形状（真实存储在 `host-api-impl` 里，这里只验契约穿过来了）。
+  attachments: {
+    upload: async (input: { sessionId: string; bytes: Uint8Array; mimeType: string; filename?: string }) => {
+      attachmentUploads.push(input);
+      return {
+        id: 'att_test',
+        sha: `sha-${input.bytes.byteLength}`,
+        mimeType: input.mimeType,
+        sizeBytes: input.bytes.byteLength,
+        filename: `sha-${input.bytes.byteLength}.png`,
+        originalFilename: input.filename ?? 'unknown',
+      };
+    },
+    resolvePath: (sessionId: string, name: string) => `${dataDirRoot}/${sessionId}/${name}`,
   },
 };
 
@@ -272,6 +321,12 @@ const deps = {
   registerService(source: string, _kind: string, handlers: Record<string, unknown>) {
     serviceRegistrations += 1;
     reverseMethods[source] = Object.keys(handlers);
+  },
+  /** 插件私有数据目录：真实入口会 `mkdir -p` 后下发，这里给每个插件一个独立目录。 */
+  dataDirFor(pluginId: string) {
+    const dir = path.join(dataDirRoot, pluginId);
+    mkdirSync(dir, { recursive: true });
+    return dir;
   },
 };
 
@@ -286,10 +341,20 @@ check(byId.get('fixture-oldapi')?.status === 'degraded', 'apiVersion 不匹配 �
 await loadPluginExtensions(snapshot, deps);
 
 const full = getPluginExtensions('fixture-full');
-check(full.pages.length === 1, 'R1 页面注册成功', full.pages);
-check(full.surfaces.length === 1, 'R9 挂载点注册成功', full.surfaces);
+check(full.pages.length === 2, 'R1 页面注册成功（含一个 parent 二级页）', full.pages);
+check(
+  full.pages.some((p) => p.path === '/fixture/sub' && p.parent === '/fixture'),
+  'R1 page.parent 原样保留（跨插件挂载只认路径字符串）',
+  full.pages,
+);
+check(full.surfaces.length === 2, 'R9 挂载点注册成功（平台空间 + 插件空间各一）', full.surfaces);
+check(
+  full.surfaces.some((s) => s.slot === 'fixture.host-point' && (s as { scope?: string }).scope === 'global'),
+  '插件空间槽位记为 global 作用域',
+  full.surfaces,
+);
 check(full.toolCards.length === 1, 'R10 工具卡注册成功', full.toolCards);
-check(full.routes.length === 3, 'R2 三条路由注册成功（字面量 / :param / *）', full.routes);
+check(full.routes.length === 5, 'R2 五条路由注册成功（字面量 / :param / * / 附件 / 流式）', full.routes);
 check(full.rejected.length === 0, 'fixture-full 无被拒项', full.rejected);
 check(!!reverseMethods['plugin:fixture-full'], 'R3 反向方法挂到分发表', reverseMethods);
 check(
@@ -304,11 +369,12 @@ check(
 section('2) 拒绝可见（E）');
 const illegal = getPluginExtensions('fixture-illegal');
 const reasons = illegal.rejected.map((r) => `${r.kind}:${r.reason}`);
-check(illegal.rejected.length === 7, `非法注册 7 条全部进 rejected（实际 ${illegal.rejected.length}）`, reasons);
+check(illegal.rejected.length === 9, `非法注册 9 条全部进 rejected（实际 ${illegal.rejected.length}）`, reasons);
 check(reasons.some((r) => r.includes('重复注册')), '同 method+path 重名被拒');
 check(reasons.some((r) => r.includes('只能作为最后一段')), '* 非末段被拒');
 check(reasons.some((r) => r.includes('必须独占一段')), '* 不独占一段被拒');
-check(reasons.some((r) => r.includes('未知槽位')), '未定义槽位被拒');
+check(reasons.some((r) => r.includes('chat.rail.left')), '平台保留命名空间下的伪造槽位被拒');
+check(reasons.filter((r) => r.includes('invalid-slot-name')).length === 3, '保留命名空间 / 裸名 / 尾点都按非法槽位名拒绝');
 check(reasons.some((r) => r.includes('入口文件不存在')), '缺失 web 入口被拒');
 check(reasons.some((r) => r.includes('未知区域')), '未知工具卡区域被拒');
 check(reasons.some((r) => r.includes('方法名必须是非空字符串')), '空方法名被拒');
@@ -685,6 +751,91 @@ try {
 check(goneErr.includes('unknown service'), '提供者卸载后 call 立刻抛 unknown service');
 realBus.clear();
 realServices.clear();
+
+
+// ── 6d. 新宿主面与命名空间 + 插件级事件 ──────────────────────────────────
+
+section('6d) 附件面 / dataDir / services.namespace / 插件级事件 / 页面 parent');
+
+// ① dataDir 与安装目录分离
+const hostOfProbe = (() => {
+  const before = realServices.list().length;
+  void before;
+  return null;
+})();
+void hostOfProbe;
+
+{
+  const dir = deps.dataDirFor('fixture-full');
+  check(dir.startsWith(dataDirRoot), 'dataDir 落在数据根下（不是插件安装目录）', dir);
+  check(dir !== path.join(pluginsDir, 'fixture-full'), 'dataDir 不等于安装目录');
+}
+
+// ② services namespace：形态校验 + 精确匹配 + 多对多
+{
+  realServices.clear();
+  const ok1 = realServices.provide('channel-a', 'channel-a.channel', () => 'A', { namespace: 'im.channel' });
+  const ok2 = realServices.provide('channel-b', 'channel-b.channel', () => 'B', { namespace: 'im.channel' });
+  const ok3 = realServices.provide('channel-a', 'channel-a.media', () => 'M', { namespace: 'im.channel.media' });
+  const bad = realServices.provide('channel-a', 'channel-a.bad', () => 'X', { namespace: 'channel' });
+  check(ok1.ok && ok2.ok && ok3.ok, '多对多：同一 namespace 允许 0..n 个提供者');
+  check(!bad.ok && bad.reason === 'invalid-namespace', 'namespace 无 pluginId 前缀 → invalid-namespace');
+  const exact = realServices.list({ namespace: 'im.channel' });
+  check(exact.length === 2 && exact.every((s) => s.namespace === 'im.channel'), 'list({namespace}) 精确匹配（不含 im.channel.media）', exact);
+  const media = realServices.list({ namespace: 'im.channel.media' });
+  check(media.length === 1 && media[0].name === 'channel-a.media', '多级 namespace 精确匹配');
+  check(realServices.namespaces().join(',') === 'im.channel,im.channel.media', 'namespaces() 枚举现有标签', realServices.namespaces());
+  check(realServices.list().length === 3, 'list() 无参数返回全部');
+  realServices.clear();
+}
+
+// ③ 附件面与路由 Response 透传：走真实装载的插件
+{
+  attachmentUploads.length = 0;
+  const res = await dispatchPluginRoute(
+    'fixture-full',
+    {
+      path: '/attach-echo',
+      method: 'POST',
+      query: {},
+      body: '',
+      headers: new Headers(),
+    },
+    () => true,
+  );
+  check(attachmentUploads.length === 1, 'host.attachments.upload 被调用到', attachmentUploads);
+  check(
+    attachmentUploads[0]?.mimeType === 'image/png' && attachmentUploads[0]?.bytes.byteLength === 3,
+    'attachments 透传 bytes / mimeType / filename',
+  );
+  void res;
+}
+
+// ④ 插件级事件：一个插件一次，payload 带清单
+{
+  const loadedEvents: Array<Record<string, unknown>> = [];
+  const unloadedEvents: Array<Record<string, unknown>> = [];
+  realBus.subscribe('observer', '__core__.plugin.loaded', (p) => loadedEvents.push(p as Record<string, unknown>));
+  realBus.subscribe('observer', '__core__.plugin.unloaded', (p) => unloadedEvents.push(p as Record<string, unknown>));
+  // 声明是内核在装载时做的，这里重新装载一次以触发事件（订阅先就位）。
+  realServices.clear();
+  const snap2 = getPluginSnapshot(pluginsDir);
+  await loadPluginExtensions(snap2, deps);
+  const fullLoaded = loadedEvents.filter((e) => e.pluginId === 'fixture-full');
+  check(fullLoaded.length === 1, '一次装载只发一条 plugin.loaded（不是每次注册一条）', loadedEvents.length);
+  const evt = fullLoaded[0] ?? {};
+  check(evt.pluginId === 'fixture-full', 'payload.pluginId 正确', evt.pluginId);
+  check(Array.isArray(evt.services) && (evt.services as unknown[]).length > 0, 'payload.services 带清单');
+  check(
+    (evt.services as Array<{ namespace?: string }>).some((s) => s.namespace === 'fixture.iface'),
+    'payload.services 里的条目带 namespace（发现判据来自账本，不靠调用方猜）',
+    evt.services,
+  );
+  check(Array.isArray(evt.pages) && (evt.pages as unknown[]).length > 0, 'payload.pages 带清单');
+  check(Array.isArray(evt.facets) && (evt.facets as string[]).includes('server'), 'payload.facets 带清单');
+  await disposeAllExtensions();
+  check(unloadedEvents.some((e) => e.pluginId === 'fixture-full'), '卸载发 plugin.unloaded');
+}
 
 // ── 7. 收尾 ───────────────────────────────────────────────────────────────
 

@@ -232,6 +232,39 @@ export function checkPluginDir(dir: string): PluginCheckResult {
     }
   }
 
+
+  // ── IM 渠道插件：注册了 `im.channel` 就必须真的实现那四个回调 ──
+  //
+  // 为什么要有这条：渠道与网关是**两个插件**，只有 namespace 这一个字符串把它们连起来。
+  // 名字写错 / 只注册不实现，运行期表现是"装上了但消息永远不来"——静默且难查。
+  const serverDir = path.join(absDir, 'server');
+  if (existsSync(serverDir)) {
+    const files = readdirSync(serverDir).filter((n) => n.endsWith('.js'));
+    const code = files.map((n) => readFileSync(path.join(serverDir, n), 'utf8')).join('\n');
+    // 只在"这个插件向 im.channel **注册**"时才检查实现（网关自己是消费方，不该被这条误伤）。
+    const providesService = /services\s*\.\s*provide\s*\(/.test(code) || /\.provide\s*\(/.test(code);
+    const mentionsChannel = /im\.channel/.test(code);
+    const registersChannel = providesService && mentionsChannel && /namespace/.test(code);
+    if (registersChannel) {
+      for (const [needle, hint] of [
+        ['onInbound', 'uplink.onInbound(...)（入站消息交给网关）'],
+        ['declare', 'uplink.declare({ id, label })（装载时登记连接）'],
+        ['apiVersion', 'driver.apiVersion（网关按它拒绝不兼容渠道）'],
+      ] as const) {
+        if (!code.includes(needle)) {
+          push('warning', 'im-channel-incomplete', `注册了 im.channel，但没有出现 ${hint}`, 'server');
+        }
+      }
+    } else if (providesService && mentionsChannel) {
+      push(
+        'warning',
+        'im-channel-namespace-typo',
+        "server 里出现了 im.channel，但不是 `namespace: 'im.channel'` 的形式 —— 网关会看不到这个渠道",
+        'server',
+      );
+    }
+  }
+
   return { ok: !issues.some((i) => i.level === 'error'), id, dir: absDir, facets, issues };
 }
 

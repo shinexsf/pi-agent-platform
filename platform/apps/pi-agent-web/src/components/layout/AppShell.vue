@@ -16,8 +16,8 @@ import { useIsCompact, useIsDesktop, BP } from '../../composables/useMediaQuery'
 import AppIcon from '../ui/AppIcon.vue';
 import AppBreadcrumb from './AppBreadcrumb.vue';
 import AppDrawer from './AppDrawer.vue';
-import ToastHost from '../../modules/im-gateway/components/ToastHost.vue';
-import ConfirmDialogHost from '../../modules/im-gateway/components/ConfirmDialogHost.vue';
+import ToastHost from '../feedback/ToastHost.vue';
+import ConfirmDialogHost from '../feedback/ConfirmDialogHost.vue';
 import { useHeaderActions } from '../../plugins/headerActions';
 
 const DRAWER_STORAGE_KEY = 'pi-web-drawer-open';

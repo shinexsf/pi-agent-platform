@@ -46,6 +46,8 @@ export interface ActionRecord {
   reverse: boolean;
   reach: ActionReach;
   service: boolean;
+  /** service 投影的发现标签（`<定义方 pluginId>.<接口名>`），缺省不带。 */
+  namespace?: string;
   tool?: ActionToolSpec;
   /** 已推导好的子路径（含前导 `/`）。 */
   httpPath?: string;
@@ -278,6 +280,7 @@ export function createPluginActions(): PluginActions {
           reverse: def.reverse !== false,
           reach: def.scope === 'public' ? 'public' : 'own',
           service: def.service === true,
+          ...(def.namespace ? { namespace: def.namespace } : {}),
           tool: toolDef
             ? {
                 name: toolDef.name ?? defaultToolName(pluginId, action),

@@ -54,7 +54,13 @@ export function setPluginDisabled(pluginId: string, disabled: boolean): void {
 
 // ---------- 注册表拉取 ----------
 
-const EMPTY_GLOBAL: GlobalExtensionsResponse = { menus: [], pages: [], headerActions: [], disabledByFlag: false }
+const EMPTY_GLOBAL: GlobalExtensionsResponse = {
+  menus: [],
+  pages: [],
+  headerActions: [],
+  surfaces: [],
+  disabledByFlag: false,
+}
 const EMPTY_SESSION: SessionExtensionsResponse = {
   surfaces: [],
   toolCards: [],

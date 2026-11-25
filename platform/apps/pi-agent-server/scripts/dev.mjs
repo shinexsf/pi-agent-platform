@@ -7,7 +7,7 @@
  *   - PORT               — `PI_DEV_PORT`, default 3000; matches scripts/stop-server.mjs default
  *                          (WSL boxes that also run the packaged instance use PI_DEV_PORT=3200)
  *   - strips ALL packaged-mode env (PI_SERVER_CLI, WORKER_DIST_DIR, PI_DATA_DIR,
- *     PI_ATTACHMENTS_ROOT, PI_LOG_FILE, CHANNELS_DIR, PUBLIC_DIR) — agent/CI
+ *     PI_ATTACHMENTS_ROOT, PI_LOG_FILE, PUBLIC_DIR) — agent/CI
  *     shells may carry them (pointing at the installed pi-server), which would
  *     silently swap in the packaged worker/channels/DB and disable debug routes.
  *
@@ -22,7 +22,6 @@ delete process.env.WORKER_DIST_DIR;
 delete process.env.PI_DATA_DIR;
 delete process.env.PI_ATTACHMENTS_ROOT;
 delete process.env.PI_LOG_FILE;
-delete process.env.CHANNELS_DIR;
 delete process.env.PUBLIC_DIR;
 
 // ── 插件目录必须 pin 到仓库内 ──────────────────────────────────────────────
@@ -39,6 +38,8 @@ const devPluginsDir = path.join(platformRoot, '.dev-data', 'plugins');
 mkdirSync(devPluginsDir, { recursive: true });
 
 process.env.PI_SERVER_PLUGINS_DIR = devPluginsDir;
+// 插件私有数据根也落在 dev 数据目录里（`rm -rf .dev-data` 即归零，不污染 ~/.pi）。
+process.env.PI_SERVER_PLUGIN_DATA_DIR = path.join(platformRoot, '.dev-data', 'plugin-data');
 process.env.PI_PLUGIN_REGISTRY = path.join(devPluginsDir, 'registry.json');
 // bundled 插件就是仓库里的 platform/plugins（目录存在即生效，不需要 registry）
 process.env.PI_SERVER_BUNDLED_PLUGINS_DIR = path.join(platformRoot, 'plugins');

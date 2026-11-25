@@ -2,10 +2,10 @@
  * useFeedback — 全局提示 / 确认的统一入口。
  *
  * 复用 `AppShell` 已挂载的 `ToastHost` / `ConfirmDialogHost`（事件驱动契约见
- * `modules/im-gateway/components/*Host.vue`），不新增第二套提示基础设施，
+ * `components/feedback/*Host.vue`），不新增第二套提示基础设施，
  * 并彻底替代 `window.alert` / `window.confirm`（spec route-based-modals）。
  */
-import type { ConfirmDialogOptions, ToastOptions } from '@pi-agent-platform/channel-types';
+import type { ConfirmDialogOptions, ToastOptions } from '../components/feedback/types';
 
 export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
 

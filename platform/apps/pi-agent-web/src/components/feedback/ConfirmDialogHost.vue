@@ -9,8 +9,8 @@
  *   3. User clicks → calls respond(confirmed) → invokes resolver
  */
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import type { ConfirmDialogOptions } from '@pi-agent-platform/channel-types';
-import AppIcon from '../../../components/ui/AppIcon.vue';
+import type { ConfirmDialogOptions } from './types';
+import AppIcon from '../ui/AppIcon.vue';
 
 interface Pending {
   opts: ConfirmDialogOptions;

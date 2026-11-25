@@ -17,7 +17,8 @@
     "typecheck": "pnpm -r typecheck",
     "verify:sdk": "pnpm --filter @pi-agent-platform/server exec tsx ../../scripts/verify-sdk.mts",
     "verify:plugins": "pnpm --filter @pi-agent-platform/server exec tsx ../../scripts/verify-plugins.mts",
-    "build:plugins": "node scripts/build-plugins.mjs"
+    "build:plugins": "node scripts/build-plugins.mjs",
+    "build:plugins:local": "node scripts/build-local-plugins.mjs"
   },
   "engines": {
     "node": ">=22.19.0",

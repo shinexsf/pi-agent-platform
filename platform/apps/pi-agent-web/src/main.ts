@@ -20,11 +20,6 @@ const routerRef: { router: import('vue-router').Router | null } = { router: null
 import AgentsListView from './views/AgentsListView.vue';
 import SessionsListView from './views/SessionsListView.vue';
 
-import {
-  channelAdminRegistry,
-  loadChannelManifest,
-} from './modules/im-gateway';
-import ChannelsView from './views/im/ChannelsView.vue';
 import ConfigView from './views/config/ConfigView.vue';
 import ModelsConfig from './views/config/ModelsConfig.vue';
 import DefaultSettings from './views/config/DefaultSettings.vue';
@@ -91,11 +86,6 @@ const baseRoutes = [
       fullWidth: true,
       mobileHidden: true,
     },
-  },
-  {
-    path: '/im/:channelType?',
-    component: ChannelsView,
-    meta: { navLabel: 'IM', navOrder: 30, navIcon: 'im', fullWidth: true },
   },
   {
     path: '/config',
@@ -195,81 +185,8 @@ installRouteTransitions(router);
 // 插件页面（导航 + 路由）来自 server 注册表，启动时拉一次（失败就空导航，不阻塞启动）。
 void refreshPluginPages().then(() => syncPluginRoutes(router));
 
-// Set up the global ChannelAdminHost object so channel admin pages can use
-// window.__channelAdminHost.apiFetch() etc. The current channel type is
-// derived from the route meta, falling back to URL parsing.
-import type { ChannelAdminHost, ChannelLogEvent, ToastOptions, ConfirmDialogOptions } from '@pi-agent-platform/channel-types';
-
-// (routerRef is forward-declared above to be visible to function closures
-//  created before the router is constructed.)
-
-function currentChannelType(): string {
-  // 优先使用 ChannelsView 设置的全局 channelType
-  const global = (window as any).__currentChannelType;
-  if (global) return global;
-  // 从 URL 解析
-  const path = window.location.pathname;
-  const segments = path.split('/').filter(Boolean);
-  return segments[1] || 'wechat';
-}
-
-const globalHost: ChannelAdminHost = {
-  apiFetch: async (method, path, body) => {
-    const channelType = currentChannelType();
-    const url = `/api/im/${channelType}${path.startsWith('/') ? path : '/' + path}`;
-    const init: RequestInit = { method, headers: { 'content-type': 'application/json' } };
-    if (body !== undefined) init.body = JSON.stringify(body);
-    const res = await fetch(url, init);
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`${method} ${url} → ${res.status} ${text}`);
-    }
-    const ct = res.headers.get('content-type') ?? '';
-    if (ct.includes('application/json')) return await res.json();
-    return await res.text();
-  },
-  showToast: (opts: ToastOptions) => {
-    window.dispatchEvent(new CustomEvent('im-gateway:toast', { detail: opts }));
-  },
-  showConfirmDialog: (opts: ConfirmDialogOptions): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const w = window as unknown as { __imConfirmResolver?: (v: boolean) => void };
-      w.__imConfirmResolver = resolve;
-      window.dispatchEvent(new CustomEvent('im-gateway:confirm', { detail: opts }));
-    });
-  },
-  useI18n: () => {
-    const cache = new Map<string, string>();
-    return {
-      t: (key: string, params?: Record<string, unknown>) => {
-        const cached = cache.get(key);
-        if (cached) return interpolate(cached, params);
-        cache.set(key, key);
-        return interpolate(key, params);
-      },
-    };
-  },
-};
-
-function interpolate(template: string, params?: Record<string, unknown>): string {
-  if (!params) return template;
-  return template.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`));
-}
-
-(window as unknown as { __channelAdminHost?: ChannelAdminHost }).__channelAdminHost = globalHost;
-(window as unknown as { __channelAdminRegistry?: unknown }).__channelAdminRegistry = channelAdminRegistry;
-
 const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 app.mount('#app');
 
-// Async: log manifest mismatch (filtered vs total)
-loadChannelManifest().then((filtered) => {
-  if (filtered.length !== channelAdminRegistry.length) {
-    console.info(`[im-gateway] ${filtered.length}/${channelAdminRegistry.length} channels enabled`);
-  }
-});
-
-// Re-export so the import isn't dead-code eliminated (used by ApiFetchProvider).
-void globalHost;

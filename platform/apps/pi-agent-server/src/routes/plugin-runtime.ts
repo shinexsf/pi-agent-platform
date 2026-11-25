@@ -39,18 +39,41 @@ export function createExtensionsRouter(deps: PluginRuntimeRouterDeps): Hono {
 
   app.get('/', (c) => {
     if (killSwitchActive()) {
-      const body: GlobalExtensionsResponse = { menus: [], pages: [], headerActions: [], disabledByFlag: true };
+      const body: GlobalExtensionsResponse = {
+        menus: [],
+        pages: [],
+        headerActions: [],
+        surfaces: [],
+        disabledByFlag: true,
+      };
       return c.json(body);
     }
-    const { menus, headerActions } = listGlobalExtensions();
+    const { menus, headerActions, surfaces } = listGlobalExtensions();
+    const revs = pluginWebRevisions(deps.pluginsDir);
     const body: GlobalExtensionsResponse = {
+      // 插件空间槽位：宿主插件自己装载（平台不渲染）。装载地址由服务端给 ——
+      // 消费方不该重复实现 "/plugins/<id>/web/<file>.js" 这条规则。
+      surfaces: surfaces.map(({ pluginId, def }) => {
+        const base = `/plugins/${encodeURIComponent(pluginId)}/web/${encodeURIComponent(def.entry)}.js`;
+        const rev = revs[pluginId];
+        return {
+          pluginId,
+          slot: def.slot,
+          id: def.id,
+          title: def.title,
+          icon: def.icon,
+          order: def.order,
+          component: def.entry,
+          url: rev ? `${base}?v=${encodeURIComponent(rev)}` : base,
+        };
+      }),
       // 合一列表：页面自带导航字段，前端一次读够（不再 join menus/pages）。
       pages: listGlobalPageItems(),
       // R11 顶栏动作（平铺 / 移动端收起由前端决定）
       headerActions: headerActions.map(({ pluginId, def }) => ({ pluginId, ...def })),
       menus: menus.map(({ pluginId, def }) => ({ pluginId, ...def })),
       disabledByFlag: false,
-      revs: pluginWebRevisions(deps.pluginsDir),
+      revs,
     };
     return c.json(body);
   });
@@ -151,6 +174,12 @@ export function createPluginDispatcherRouter(deps: PluginRuntimeRouterDeps): Hon
       }
       if (result === 'not-found') {
         return c.json({ error: 'no such plugin route', pluginId, path }, 404);
+      }
+
+      // 标准 `Response` 原样透传：流式响应（SSE）与自定义状态码由此成立。
+      // 平台不看它里面是什么 —— 状态码 / headers 由插件自己负责。
+      if (result instanceof Response) {
+        return result;
       }
 
       const status = result.status ?? 200;

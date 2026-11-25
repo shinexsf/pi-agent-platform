@@ -49,10 +49,6 @@ export function workerEntry(): string {
 }
 
 /** Path to the bundled IM channels directory. */
-export function channelsDir(): string {
-  return path.join(cliRoot(), 'dist', 'server', 'channels');
-}
-
 /** Path to the bundled SPA public directory. */
 export function publicDir(): string {
   return path.join(cliRoot(), 'dist', 'server', 'public');

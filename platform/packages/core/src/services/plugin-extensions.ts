@@ -41,7 +41,7 @@ import {
   type PluginSessionsApi,
 } from '@pi-agent-platform/plugin-types';
 import type { HostApi } from '../host-api.js';
-import { PLUGIN_SLOT_NAMES } from '../plugins/constants.js';
+import { PLUGIN_SLOT_NAMES, isPlatformSlotName, isPluginNamespaceSlotName } from '../plugins/constants.js';
 import { childLogger } from '../logger.js';
 import { validateParams } from '@pi-agent-platform/ipc-protocol';
 import { getPluginSnapshot } from './plugins.js';
@@ -91,6 +91,13 @@ export interface PluginRuntimeDeps {
    * 存储方式由入口决定（内核不管表结构），默认不记。
    */
   recordMigration?(pluginId: string, name: string): void;
+  /**
+   * 插件私有**可写**目录（绝对路径）。装载前由入口创建。
+   *
+   * 为什么不复用 `entry.dir`：bundled 插件装在 `dist/server/plugins/`，升级即被替换 ——
+   * 状态文件写在那里等于每次升级都丢。入口负责把它指到数据根下。
+   */
+  dataDirFor(pluginId: string): string;
 }
 
 interface PluginRuntimeEntry {
@@ -114,6 +121,57 @@ const pageIds = new Set<string>();
 const surfaceIds = new Set<string>();
 
 const noopDisposer: Disposer = () => {};
+
+/** 内核自己的命名空间（与 `__core__.` 方法名同源）：系统事件由内核发，插件自由订阅。 */
+const CORE_ID = '__core__';
+const TOPIC_PLUGIN_LOADED = `${CORE_ID}.plugin.loaded`;
+const TOPIC_PLUGIN_UNLOADED = `${CORE_ID}.plugin.unloaded`;
+
+/**
+ * 声明内核固有 topic。
+ *
+ * `declaredBy: 'publisher'` → 只有内核能发（防冒名），任何插件都能订阅 —— 这正是
+ * 「系统动作发生了」该有的语义。声明是幂等的（同 owner 同名覆盖），每次装载都调一遍。
+ */
+function declareCoreTopics(): void {
+  const { host } = requireDeps();
+  host.bus.declare(CORE_ID, TOPIC_PLUGIN_LOADED, { declaredBy: 'publisher' });
+  host.bus.declare(CORE_ID, TOPIC_PLUGIN_UNLOADED, { declaredBy: 'publisher' });
+}
+
+/**
+ * 发一条插件级事件（**一个插件一次**，不是每次注册一条）。
+ *
+ * payload 全部从既有账本汇总，不新增状态：插件带来了哪些 service / 页面 / 路由 / topic / 动作。
+ * 消费者（例如 IM 网关）据此决定"要不要重新发现"，不需要轮询。
+ */
+function emitPluginLoaded(id: string, facets: Record<string, boolean | undefined>): void {
+  try {
+    const { host, actions } = requireDeps();
+    const entry = store.get(id);
+    host.bus.publish(CORE_ID, TOPIC_PLUGIN_LOADED, {
+      pluginId: id,
+      facets: Object.entries(facets)
+        .filter(([, on]) => on === true)
+        .map(([name]) => name),
+      services: host.services.listOf(id).map((s) => (s.namespace ? { name: s.name, namespace: s.namespace } : { name: s.name })),
+      pages: (entry?.extensions.pages ?? []).map((p) => p.path ?? p.id),
+      routes: (entry?.extensions.routes ?? []).map((r) => `${r.method} ${r.path}`),
+      topics: host.bus.topicsOf(id).map((topic) => topic.topic),
+      actions: (actions?.listOf?.(id) ?? []).map((a) => a.name),
+    });
+  } catch (err) {
+    logger.warn({ pluginId: id, err: String(err) }, 'plugin.loaded 事件发送失败');
+  }
+}
+
+function emitPluginUnloaded(id: string): void {
+  try {
+    requireDeps().host.bus.publish(CORE_ID, TOPIC_PLUGIN_UNLOADED, { pluginId: id });
+  } catch (err) {
+    logger.warn({ pluginId: id, err: String(err) }, 'plugin.unloaded 事件发送失败');
+  }
+}
 
 function emptyExtensions(): PluginExtensions {
   return { menus: [], pages: [], headerActions: [], routes: [], surfaces: [], toolCards: [], rejected: [] };
@@ -267,12 +325,16 @@ function registerHeaderAction(pluginId: string, dir: string, def: HeaderActionDe
 function registerSurface(pluginId: string, dir: string, def: SurfaceRegistration): Disposer {
   const entry = entryFor(pluginId).extensions;
   if (!def || typeof def.id !== 'string' || !def.id) return reject(pluginId, 'surface', '?', 'id 必须是非空字符串');
-  if (typeof def.slot !== 'string' || !PLUGIN_SLOT_NAMES.includes(def.slot)) {
+  // 槽位名两空间：平台空间（闭合枚举，平台渲染 chrome）与插件空间（`<pluginId>.<name>`，
+  // 由某个插件当宿主时定义语义）。插件空间只判形态，不判前缀插件是否存在。
+  const platformSlot = isPlatformSlotName(def.slot);
+  const pluginSlot = isPluginNamespaceSlotName(def.slot);
+  if (!platformSlot && !pluginSlot) {
     return reject(
       pluginId,
       'surface',
       def.id,
-      `未知槽位 ${String(def.slot)}，可用：${PLUGIN_SLOT_NAMES.join(', ')}`,
+      `invalid-slot-name：槽位名 ${String(def.slot)} 既不是平台空间（${PLUGIN_SLOT_NAMES.join(', ')}），也不是插件空间的 <pluginId>.<name>`,
     );
   }
   if (typeof def.entry !== 'string' || !def.entry) return reject(pluginId, 'surface', def.id, 'entry 必须是文件名');
@@ -283,7 +345,7 @@ function registerSurface(pluginId: string, dir: string, def: SurfaceRegistration
     return reject(pluginId, 'surface', def.id, `入口文件不存在：${path.relative(dir, file)}`);
   }
   surfaceIds.add(key);
-  entry.surfaces.push({ ...def });
+  entry.surfaces.push({ ...def, scope: platformSlot ? 'session' : 'global' });
   return track(pluginId, () => {
     surfaceIds.delete(key);
     entry.surfaces = entry.surfaces.filter((s) => !(s.slot === def.slot && s.id === def.id));
@@ -455,6 +517,22 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
   http: { route(def: RouteRegistration): Disposer };
   methods: { handle(name: string, handler: ReverseMethodHandlerWithoutSession): Disposer };
   actions: { define(defs: Record<string, PluginActionDefinition>): void };
+  attachments: {
+    upload(input: {
+      sessionId: string;
+      bytes: Uint8Array;
+      mimeType: string;
+      filename?: string;
+    }): Promise<{
+      id: string;
+      sha: string;
+      mimeType: string;
+      sizeBytes: number;
+      filename: string;
+      originalFilename: string;
+    }>;
+    resolvePath(sessionId: string, name: string): string;
+  };
   bus: {
     declare(topic: string, options: { declaredBy: 'publisher' | 'subscriber' }): { ok: boolean; reason?: string };
     publish(topic: string, payload?: unknown): { ok: boolean; delivered: number; reason?: string };
@@ -470,9 +548,14 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
     topics(): unknown[];
   };
   services: {
-    provide(name: string, handler: (payload: unknown) => unknown | Promise<unknown>): { ok: boolean; reason?: string };
+    provide(
+      name: string,
+      handler: (payload: unknown) => unknown | Promise<unknown>,
+      options?: { namespace?: string },
+    ): { ok: boolean; reason?: string };
     call(name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
-    list(): Array<{ name: string; owner: string }>;
+    list(filter?: { namespace?: string }): Array<{ name: string; owner: string; namespace?: string }>;
+    namespaces(): string[];
   };
 } {
   const id = plugin.entry.id;
@@ -487,7 +570,12 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       }
       // 组件名即页面 id：`/im/channels` → 页面 id 由插件包名 + 路径派生，避免跨插件撞车。
       const pageId = `${id}${def.path}`;
-      const pageDisposer = registerPage(id, { id: pageId, entry: def.component, path: def.path });
+      const pageDisposer = registerPage(id, {
+        id: pageId,
+        entry: def.component,
+        path: def.path,
+        ...(typeof def.parent === 'string' && def.parent ? { parent: def.parent } : {}),
+      });
       if (pageDisposer === noopDisposer) return pageDisposer;
       // `nav: false` = 只登记路由，不占导航项（入口在别处，例如顶栏动作面板里的「查看全部」）
       if (def.nav === false) return pageDisposer;
@@ -521,6 +609,8 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
   return {
     id,
     dir,
+    // 插件私有可写目录：状态文件写这里（`dir` 在打包态会被升级覆盖）。
+    dataDir: requireDeps().dataDirFor(id),
     // ── 能力面（真接口）──
     sessions: {
       call: (sessionId, name, args) => host.sessions.call(sessionId, name, args ?? []),
@@ -598,16 +688,22 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
       // `services` = 发给**别的插件**的定向调用（无会话上下文、返回业务数据）。
       // 短名（`task.list`）由宿主补全成 `<pluginId>.task.list` —— 与反向方法同一条约定，
       // 作者不该手写自己的 id（写错就是"前缀不符被拒"，而且 reload 时容易漂移）。
-      provide: (name, handler) => {
+      provide: (name, handler, options) => {
         const full = name.startsWith(`${id}.`) ? name : `${id}.${name}`;
-        const res = host.services.provide(id, full, handler);
+        const res = host.services.provide(id, full, handler, options);
         if (res.ok) {
           track(id, () => host.services.disposePlugin(id));
         }
         return res;
       },
       call: (name, payload, options) => host.services.call(id, name, payload, options),
-      list: () => host.services.list(),
+      list: (filter) => host.services.list(filter),
+      namespaces: () => host.services.namespaces(),
+    },
+    // 附件面：只给两个动作，不给 `AttachmentStore` 句柄（那会让人能绕过引用计数删文件）。
+    attachments: {
+      upload: (input) => host.attachments.upload(input),
+      resolvePath: (sessionId, name) => host.attachments.resolvePath(sessionId, name),
     },
     // ── 注册面 ──
     ui,
@@ -661,8 +757,11 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
           }
 
           if (rec.service) {
-            const provided = host.services.provide(id, rec.name, (payload, meta: { pluginId: string }) =>
-              run(payload, { caller: { pluginId: meta.pluginId, kind: 'plugin' } }),
+            const provided = host.services.provide(
+              id,
+              rec.name,
+              (payload, meta: { pluginId: string }) => run(payload, { caller: { pluginId: meta.pluginId, kind: 'plugin' } }),
+              rec.namespace ? { namespace: rec.namespace } : undefined,
             );
             if (!provided.ok) {
               throw new Error(`动作『${rec.action}』的 service 注册被拒（${provided.reason}）`);
@@ -862,6 +961,7 @@ export async function disposePlugin(id: string): Promise<void> {
   for (const page of entry.extensions.pages) pageIds.delete(page.id);
   for (const surface of entry.extensions.surfaces) surfaceIds.delete(`${surface.slot}::${surface.id}`);
   store.delete(id);
+  emitPluginUnloaded(id);
 }
 
 /**
@@ -894,6 +994,7 @@ export async function loadPluginExtensions(snapshot: PluginSnapshot, deps: Plugi
     logger.info('plugin extensions skipped (PI_PLUGINS flag)');
     return;
   }
+  declareCoreTopics();
 
   for (const plugin of snapshot.plugins) {
     if (plugin.status !== 'active') continue;
@@ -911,6 +1012,8 @@ export async function loadPluginExtensions(snapshot: PluginSnapshot, deps: Plugi
 
     finalizeMenus(id);
     flushMethods(plugin);
+    // 插件级事件：一个插件一次（不是每次 service / page / action 注册一条）。
+    emitPluginLoaded(id, plugin.facets as unknown as Record<string, boolean | undefined>);
   }
 
   logger.info(
@@ -1019,15 +1122,27 @@ export function listGlobalExtensions(): {
   menus: GlobalExtensionItem<MenuRegistration>[];
   pages: GlobalExtensionItem<PageRegistration>[];
   headerActions: GlobalExtensionItem<HeaderActionDefinition>[];
+  /** 插件空间槽位（`<pluginId>.<name>`）：宿主插件自己装载，与页面同级全局可见。 */
+  surfaces: GlobalExtensionItem<SurfaceRegistration>[];
 } {
   const menus: GlobalExtensionItem<MenuRegistration>[] = [];
   const pages: GlobalExtensionItem<PageRegistration>[] = [];
   const headerActions: GlobalExtensionItem<HeaderActionDefinition>[] = [];
+  const surfaces: GlobalExtensionItem<SurfaceRegistration>[] = [];
   for (const [pluginId, entry] of store) {
     for (const def of entry.extensions.menus) menus.push({ pluginId, def });
     for (const def of entry.extensions.pages) pages.push({ pluginId, def });
     for (const def of entry.extensions.headerActions) headerActions.push({ pluginId, def });
+    for (const def of entry.extensions.surfaces) {
+      if ((def as SurfaceRegistration & { scope?: string }).scope === 'global') surfaces.push({ pluginId, def });
+    }
   }
+  surfaces.sort(
+    (a, b) =>
+      (a.def.order ?? Number.MAX_SAFE_INTEGER) - (b.def.order ?? Number.MAX_SAFE_INTEGER) ||
+      a.pluginId.localeCompare(b.pluginId) ||
+      a.def.id.localeCompare(b.def.id),
+  );
   headerActions.sort(
     (a, b) =>
       (a.def.order ?? Number.MAX_SAFE_INTEGER) - (b.def.order ?? Number.MAX_SAFE_INTEGER) ||
@@ -1035,7 +1150,7 @@ export function listGlobalExtensions(): {
   );
   // 排序：显式 order 优先，其次 pluginId+id（稳定输出）
   menus.sort((a, b) => (a.def.order ?? Number.MAX_SAFE_INTEGER) - (b.def.order ?? Number.MAX_SAFE_INTEGER) || a.def.id.localeCompare(b.def.id));
-  return { menus, pages, headerActions };
+  return { menus, pages, headerActions, surfaces };
 }
 
 /**
@@ -1052,7 +1167,8 @@ export interface GlobalPageItem extends PageRegistration {
   label?: string;
   icon?: string;
   order?: number;
-  parent?: 'config';
+  /** 父页面路径（`/im`）或静态父模块名（`config`）。 */
+  parent?: string;
 }
 
 export function listGlobalPageItems(): GlobalPageItem[] {
@@ -1067,7 +1183,13 @@ export function listGlobalPageItems(): GlobalPageItem[] {
         ...page,
         pluginId,
         ...(menu
-          ? { label: menu.label, icon: menu.icon, order: menu.order, parent: menu.parent }
+          ? {
+              label: menu.label,
+              icon: menu.icon,
+              order: menu.order,
+              // 页面上声明的 `parent` 是跨插件挂载（`/im`）；菜单上的 `parent` 是旧的静态父模块。
+              parent: menu.parent ?? page.parent,
+            }
           : {}),
       });
     }
@@ -1118,12 +1240,16 @@ export function hasRoutes(id: string): boolean {
   return (store.get(id)?.routes.length ?? 0) > 0;
 }
 
-/** 执行一次插件端点调用；未匹配返回 `null`。 */
+/**
+ * 执行一次插件端点调用；未匹配返回 `null`。
+ *
+ * 返回标准 `Response` 时调用方 MUST 原样透传（流式响应 / 自定义状态码）。
+ */
 export async function dispatchPluginRoute(
   id: string,
   ctx: DispatchContext,
   isEnabled: (pluginId: string) => boolean,
-): Promise<PluginRouteResponse | 'not-enabled' | 'not-found' | null> {
+): Promise<PluginRouteResponse | Response | 'not-enabled' | 'not-found' | null> {
   if (!isEnabled(id)) return 'not-enabled';
   const routes = store.get(id)?.routes;
   if (!routes || routes.length === 0) return null;

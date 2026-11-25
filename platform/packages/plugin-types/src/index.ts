@@ -47,18 +47,24 @@ export type PluginFacetName = 'server' | 'worker' | 'extension' | 'web';
  */
 export type PluginStatus = 'active' | 'degraded' | 'disabled' | 'pending' | 'orphan';
 
-/** UI 槽位名。宿主实现这些槽位，插件向其中注册。 */
 /**
- * 插件可以挂载的 UI 槽位。
+ * **平台空间**的槽位名：平台自己渲染 chrome 的挂载点（闭合枚举）。
  *
- * 一个槽位 = **一个完整的界面入口**，不是“一个渲染位置”：
  * - `chat.rail.right` —— 会话页右侧 icon 轨道上的一个按钮 **及其抽屉面板**：
  *   声明一次，宿主渲染按钮，点开就是用该 surface 的 `entry` 加载的面板内容。
- *
- * 目前只有右侧轨道。未来若加左侧轨道，命名沿用同一规则（`chat.rail.left`），
- * 并且抽屉同样是槽位的一部分，不需要再单独声明 `chat.drawer.*`。
  */
-export type PluginSlotName = 'chat.rail.right';
+export type PlatformSlotName = 'chat.rail.right';
+
+/**
+ * 槽位名两空间：
+ *
+ * - 平台空间（`chat.rail.right`）：平台定义、平台渲染 chrome
+ * - 插件空间（`<pluginId>.<name>`，如 `im.channel.create`）：**由某个插件当宿主**时定义的挂载点
+ *
+ * 插件空间只校验形态（前缀是合法 pluginId 形态），不校验前缀插件是否存在 ——
+ * 与 `services` 的 namespace 同一套判据：靠约定，不靠闸门。
+ */
+export type PluginSlotName = PlatformSlotName | `${string}.${string}`;
 
 /**
  * facet 在当前平台的装载支持度。
@@ -169,6 +175,12 @@ export interface SurfaceRegistration {
   icon?: string;
   /** 同一槽位内的排序，小者靠前。 */
   order?: number;
+  /**
+   * 作用域（内核记账用，插件不用填）：
+   * - `session` 平台空间槽位（平台渲染 chrome，进会话扩展点）
+   * - `global`  插件空间槽位（`<pluginId>.<name>`，进全局扩展点，由宿主插件自己装载）
+   */
+  scope?: 'global' | 'session';
 }
 
 /** 插件注册的一级菜单项。 */
@@ -186,6 +198,8 @@ export interface MenuRegistration {
 
 export type PluginMenuParent = 'config';
 
+/** 页面挂载的父路径（`/im` 这类）；页面 DTO 原样透传给浏览器。 */
+
 /** 插件页面：菜单点击后渲染的内容。 */
 export interface PageRegistration {
   id: string;
@@ -196,6 +210,12 @@ export interface PageRegistration {
    * `/plugin-page/<pluginId>/<pageId>` —— 两条路由都由前端登记。
    */
   path?: string;
+  /**
+   * 挂到哪个页面之下当二级项（父页面的路径，如 `/im`）。
+   *
+   * 跨插件挂载只认这个路径字符串：父页不存在时前端把本页降级为一级项，不静默隐藏入口。
+   */
+  parent?: string;
 }
 
 /** 插件 HTTP 端点的请求视图（`path` 已剥掉 `/api/p/<pluginId>` 前缀）。 */
@@ -220,9 +240,23 @@ export interface PluginRouteResponse {
   body?: string | Uint8Array;
 }
 
+/**
+ * 插件 HTTP 端点的响应（结构化形态）。缺省为 200 + JSON 空对象。
+ *
+ * handler 也可以直接返回**标准 `Response`**：平台原样透传（不解析、不改头、不缓冲），
+ * 用于流式响应（SSE）与自定义状态码 —— 此时状态码与 headers 由插件自己负责。
+ */
+export interface PluginRouteResponse {
+  status?: number;
+  headers?: Record<string, string>;
+  /** 与 `body` 二选一；同时给出时 `body` 优先。 */
+  json?: unknown;
+  body?: string | Uint8Array;
+}
+
 export type PluginRouteHandler = (
   req: PluginRouteRequest,
-) => PluginRouteResponse | void | Promise<PluginRouteResponse | void>;
+) => PluginRouteResponse | Response | void | Promise<PluginRouteResponse | Response | void>;
 
 /** 插件注册的 HTTP 端点（挂在 `/api/p/<pluginId>/` 下）。 */
 export interface RouteRegistration {
@@ -566,14 +600,20 @@ export interface PluginMethodsApi {
 /**
  * 插件拿到的宿主对象 —— 插件访问平台的**唯一**通道。
  *
- * 五个能力面：`sessions` / `agents` / `db` / `lifecycle` / `events`。
- * 注册面按 facet 暴露：server 侧重 `ui` / `http` / `methods`+`db.migrate`，
- * worker 侧重 `methods` + `events`。
+ * 八个能力面：`sessions` / `agents` / `db` / `lifecycle` / `events` / `bus` / `services` / `attachments`，
+ * 外加一个**可写目录** `dataDir`。
+ * 注册面按 facet 暴露：server 侧重 `ui` / `http` / `actions`+`db.migrate`，worker 侧重 `methods` + `events`。
  */
 export interface PluginHost {
   readonly id: string;
-  /** 插件安装目录（绝对路径）。 */
+  /** 插件安装目录（绝对路径）。**只读**：打包态在 `dist/` 下，升级即覆盖。 */
   readonly dir: string;
+  /**
+   * 插件私有**可写**目录（绝对路径，已创建）。
+   *
+   * 状态文件放这里，不要写 `dir` —— bundled 插件装在 `dist/server/plugins/`，升级会把它们替换掉。
+   */
+  readonly dataDir: string;
   readonly sessions: PluginSessionsApi;
   readonly agents: PluginAgentsApi;
   readonly db: PluginDbApi;
@@ -581,7 +621,37 @@ export interface PluginHost {
   readonly events: PluginEventsApi;
   readonly bus: PluginBusApi;
   readonly services: PluginServicesApi;
+  /** 会话附件存取（收图/收文件、把名字解析成绝对路径）。 */
+  readonly attachments: PluginAttachmentsApi;
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void;
+}
+
+/**
+ * 附件面 —— 把字节写进会话附件库，把名字解析成绝对路径。
+ *
+ * 为什么不给 `AttachmentStore` 句柄：那个对象有 `delete` / `prune` / 目录布局等内部细节，
+ * 一旦给出去，插件就能绕过引用计数把附件的文件删掉。这里只给两个动作。
+ */
+export interface PluginAttachmentsApi {
+  /** 写入附件（按 sha 去重）并返回归属信息。支持所有 MIME 类型。 */
+  upload(input: {
+    sessionId: string;
+    bytes: Uint8Array;
+    mimeType: string;
+    filename?: string;
+  }): Promise<{
+    /** 客户端可见 id（`att_xxx`）。 */
+    id: string;
+    /** 内容哈希（占位符与磁盘文件名用它）。 */
+    sha: string;
+    mimeType: string;
+    sizeBytes: number;
+    /** 磁盘上的真实文件名（`<sha>.<ext>`），交给 worker 读盘用。 */
+    filename: string;
+    originalFilename: string;
+  }>;
+  /** 把 `sha.ext` 这类名字解析成会话目录下的绝对路径（用于发给外部系统）。 */
+  resolvePath(sessionId: string, name: string): string;
 }
 
 /**
@@ -592,15 +662,37 @@ export interface PluginHost {
  */
 export interface PluginServicesApi {
   /** 声明服务。名字 MUST 是 `<插件 id>.<资源>.<动作>`；同名重复注册会被拒。
-   *  `meta.pluginId` = 调用方插件 id（由宿主填，被调方无法伪造）。 */
+   *  `meta.pluginId` = 调用方插件 id（由宿主填，被调方无法伪造）。
+   *
+   *  `namespace` 是**可选的服务发现标签**（如 `im.channel`），语义完全由平台外的协议包约定：
+   *  - 前缀 MUST 是某个插件 id（namespace 必然有定义方），平台只校验形态
+   *  - 平台**不**校验该 id 是否声明过、**不**做所有权/抢注保护 —— 因为是自由标签，不是身份
+   *  - 缺省 = 不参与按接口发现（仍可按名字定向调用）
+   */
   provide(
     name: string,
     handler: (payload: unknown, meta: { pluginId: string }) => unknown | Promise<unknown>,
+    options?: { namespace?: string },
   ): { ok: boolean; reason?: string };
   /** 定向调用：返回业务数据；无提供者/超时/提供者抛错都会抛给调用方。 */
   call(name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
-  /** 目录：全部已提供的服务（其他插件可据此发现能力）。 */
-  list(): Array<{ name: string; owner: string }>;
+  /**
+   * 服务目录（其他插件据此发现能力）。
+   *
+   * 传 `namespace` 时**精确匹配**（不做前缀包含：`im.channel` 不匹配 `im.channel.media`）。
+   * 返回的是**地址条目**，不是可调用对象：调用仍走 `call(entry.name, …)`。
+   */
+  list(filter?: { namespace?: string }): ServiceListItem[];
+  /** 现有 namespace 清单（排错用：拼错的 namespace 在这里一眼可见）。 */
+  namespaces(): string[];
+}
+
+/** 服务目录条目。 */
+export interface ServiceListItem {
+  name: string;
+  owner: string;
+  /** 注册时声明的发现标签；未声明则不含该字段。 */
+  namespace?: string;
 }
 
 /**
@@ -676,6 +768,13 @@ export interface PluginActionDefinition {
   reverse?: boolean;
   scope?: 'own' | 'public';
   service?: boolean;
+  /**
+   * 服务发现标签（`service: true` 时生效），形如 `<定义方 pluginId>.<接口名>`。
+   *
+   * 语义与 `services.provide` 的 `namespace` 完全一致（自由标签、只校验形态）。
+   * 注意与 `tool.namespace`（pi 的工具命名空间）不是一回事：那个在 `tool` 子对象里。
+   */
+  namespace?: string;
   tool?: PluginActionToolExposure | null;
   http?: PluginActionHttpExposure | null;
 }
@@ -712,6 +811,13 @@ export interface PageDefinition {
   icon?: string;
   /** 排序，小者靠前。 */
   order?: number;
+  /**
+   * 挂到哪个页面之下当**二级项**（父页面的路径，如 `/im`）。
+   *
+   * 跨插件挂载只认这个路径字符串：父页不存在（父插件没启用）时，宿主把本页**降级为一级项**，
+   * 不静默隐藏入口。不引入"菜单槽"这类第二层概念。
+   */
+  parent?: string;
   /** 浏览器组件名，对应 `web/<component>.js` 的 `mount`。 */
   component: string;
   /**
@@ -724,7 +830,7 @@ export interface PageDefinition {
   nav?: boolean;
 }
 
-/** R9 挂载点声明：槽位名只能取平台已定义的。 */
+/** 挂载点声明：槽位名取平台空间已定义的名字，或插件空间的 `<pluginId>.<name>`。 */
 export interface SlotDefinition {
   slot: PluginSlotName;
   /** 同槽位内唯一。 */

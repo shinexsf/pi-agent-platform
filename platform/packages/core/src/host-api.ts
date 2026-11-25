@@ -174,6 +174,7 @@ export interface HostServicesApi {
     pluginId: string,
     name: string,
     handler: (payload: unknown, meta: { pluginId: string }) => unknown | Promise<unknown>,
+    options?: { namespace?: string },
   ): { ok: boolean; reason?: string };
   call(
     callerPluginId: string,
@@ -181,9 +182,38 @@ export interface HostServicesApi {
     payload?: unknown,
     options?: { timeoutMs?: number },
   ): Promise<unknown>;
-  list(): ServiceInfo[];
+  /** 目录；`filter.namespace` 精确匹配（服务发现用）。 */
+  list(filter?: { namespace?: string }): ServiceInfo[];
   listOf(pluginId: string): ServiceInfo[];
+  /** 现有 namespace 清单（排错用）。 */
+  namespaces(): string[];
   disposePlugin(pluginId: string): void;
+}
+
+/**
+ * 附件面 —— 只给两个动作，不给存储句柄。
+ *
+ * 为什么不暴露 `AttachmentStore`：那个对象带 `delete` / 目录布局，给出去等于让插件能绕过
+ * 引用计数删文件。插件需要的只有"存一份字节"和"把名字换成绝对路径"。
+ */
+export interface HostAttachmentsApi {
+  upload(input: {
+    sessionId: string;
+    bytes: Uint8Array;
+    mimeType: string;
+    filename?: string;
+  }): Promise<{
+    /** 客户端可见 id（`att_xxx`）。 */
+    id: string;
+    /** 内容哈希（占位符与磁盘文件名用它）。 */
+    sha: string;
+    mimeType: string;
+    sizeBytes: number;
+    /** 磁盘上的真实文件名（`<sha>.<ext>`），交给 worker 读盘用。 */
+    filename: string;
+    originalFilename: string;
+  }>;
+  resolvePath(sessionId: string, name: string): string;
 }
 
 /**
@@ -271,4 +301,6 @@ export interface HostApi {
   readonly services: HostServicesApi;
   /** 动作登记表：一份 handler → 反向 / service / tool / http 四个投影。 */
   readonly actions: HostActionsApi;
+  /** 会话附件存取（收图收文件 / 名字换路径）。 */
+  readonly attachments: HostAttachmentsApi;
 }

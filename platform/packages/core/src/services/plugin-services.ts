@@ -22,11 +22,18 @@ import { childLogger } from '../logger.js';
 
 const logger = childLogger('plugin-services');
 
-export type ServiceFailure = 'not-owner' | 'duplicate';
+export type ServiceFailure = 'not-owner' | 'duplicate' | 'invalid-namespace';
 
 export interface ServiceInfo {
   name: string;
   owner: string;
+  /** 注册时声明的发现标签（可缺省）。 */
+  namespace?: string;
+}
+
+/** `list()` 的过滤条件。`namespace` 为**精确匹配**（不做前缀包含）。 */
+export interface ServiceListFilter {
+  namespace?: string;
 }
 
 /** 调用方信息：`services.call` 时由宿主填，提供者只读。 */
@@ -43,15 +50,28 @@ interface ProviderEntry {
   name: string;
   owner: string;
   handler: ServiceHandler;
+  namespace?: string;
 }
 
 export interface PluginServices {
-  /** 声明一个服务。前缀不符 → `not-owner`；同名已存在 → `duplicate`。 */
-  provide(pluginId: string, name: string, handler: ServiceHandler): { ok: boolean; reason?: ServiceFailure };
+  /**
+   * 声明一个服务。名字前缀不符 → `not-owner`；同名已存在 → `duplicate`。
+   *
+   * `namespace` 是可选发现标签：只校验形态（`<pluginId>.<...>`），**不校验该 pluginId 是否
+   * 存在/声明过**，也不做所有权或抢注保护 —— 它是自由标签，不是身份。
+   */
+  provide(
+    pluginId: string,
+    name: string,
+    handler: ServiceHandler,
+    options?: { namespace?: string },
+  ): { ok: boolean; reason?: ServiceFailure };
   /** 定向调用：返回业务数据；缺失/超时/提供者抛错都会抛给调用方。 */
   call(callerPluginId: string, name: string, payload?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
-  /** 目录：全部已提供的服务。 */
-  list(): ServiceInfo[];
+  /** 目录：全部已提供的服务；`filter.namespace` 精确匹配。 */
+  list(filter?: ServiceListFilter): ServiceInfo[];
+  /** 现有 namespace 清单（排错用）。 */
+  namespaces(): string[];
   /** 某插件提供的服务（查询面用）。 */
   listOf(pluginId: string): ServiceInfo[];
   /** 卸载兜底：撤销该插件的全部服务。 */
@@ -66,11 +86,23 @@ function hasOwnerPrefix(pluginId: string, name: string): boolean {
   return name.startsWith(`${pluginId}.`) && name.length > pluginId.length + 1;
 }
 
+/**
+ * namespace 只校验**形态**：`<某个 pluginId>.<至少一段>`。
+ *
+ * 不校验那个 pluginId 是否存在/声明过 —— namespace 是"协议标签"（第三方可以自组织一份协议包
+ * 定义它），平台不认领、不防抢注。`name` 的前缀才是簿记约束（卸载记账与排障）。
+ */
+function isValidNamespace(ns: string): boolean {
+  if (typeof ns !== 'string' || ns.length < 3 || ns.length > 128) return false;
+  if (!/^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)+$/.test(ns)) return false;
+  return true;
+}
+
 export function createPluginServices(): PluginServices {
   const providers = new Map<string, ProviderEntry>();
 
   return {
-    provide(pluginId, name, handler) {
+    provide(pluginId, name, handler, options) {
       if (!hasOwnerPrefix(pluginId, name)) {
         logger.error({ pluginId, name }, 'services.provide rejected: 名字必须以「插件 id.」为前缀');
         return { ok: false, reason: 'not-owner' };
@@ -79,12 +111,17 @@ export function createPluginServices(): PluginServices {
         logger.error({ pluginId, name }, 'services.provide rejected: handler 必须是函数');
         return { ok: false, reason: 'not-owner' };
       }
+      const namespace = options?.namespace;
+      if (namespace !== undefined && !isValidNamespace(namespace)) {
+        logger.error({ pluginId, name, namespace }, 'services.provide rejected: namespace 形态非法（MUST 形如 <pluginId>.<接口名>）');
+        return { ok: false, reason: 'invalid-namespace' };
+      }
       const existing = providers.get(name);
       if (existing) {
         logger.error({ pluginId, name, owner: existing.owner }, 'services.provide rejected: 同名服务已存在');
         return { ok: false, reason: 'duplicate' };
       }
-      providers.set(name, { name, owner: pluginId, handler });
+      providers.set(name, { name, owner: pluginId, handler, namespace });
       return { ok: true };
     },
 
@@ -110,14 +147,22 @@ export function createPluginServices(): PluginServices {
       return result;
     },
 
-    list() {
+    list(filter) {
+      const ns = filter?.namespace;
       return [...providers.values()]
-        .map(({ name, owner }) => ({ name, owner }))
+        .filter((entry) => (ns === undefined ? true : entry.namespace === ns))
+        .map(({ name, owner, namespace }) => (namespace ? { name, owner, namespace } : { name, owner }))
         .sort((a, b) => a.name.localeCompare(b.name));
     },
 
     listOf(pluginId) {
       return this.list().filter((s) => s.owner === pluginId);
+    },
+
+    namespaces() {
+      const set = new Set<string>();
+      for (const entry of providers.values()) if (entry.namespace) set.add(entry.namespace);
+      return [...set].sort();
     },
 
     disposePlugin(pluginId) {

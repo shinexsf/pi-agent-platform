@@ -33,7 +33,6 @@ import { createServerLogsRouter } from './routes/server-logs.js';
 import { createRuntimeMethodsRouter } from './routes/runtime-methods.js';
 import { AttachmentStore } from '@pi-agent-platform/core';
 import { startTimeoutScanner } from '@pi-agent-platform/core';
-import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { printStartupBanner } from './startup-banner.js';
 import { initModelRegistry, listAvailableModels } from './model-registry.js';
 import { mkdir } from 'node:fs/promises';
@@ -87,7 +86,7 @@ async function main() {
   const attachmentStore = new AttachmentStore(db, config.attachmentsDir);
 
   // Session service layer (core-session-refactor) — SOLE entry for spawn/revive.
-  // Must init BEFORE any consumer (routes / im-gateway / plugins) handles a request.
+  // Must init BEFORE any consumer (routes / plugins) handles a request.
   initSessionRegistry({ sessionRepo, agentRepo, workerPool });
 
   // 动作归属校验（change: plugin-actions-contract）：反向调用带 `source`，
@@ -105,6 +104,7 @@ async function main() {
     nodeEnv: config.nodeEnv,
     port: config.port,
     maxWorkers: config.maxWorkers,
+    attachmentStore,
   });
   logger.info({ faces: Object.keys(hostApi) }, 'host api ready');
 

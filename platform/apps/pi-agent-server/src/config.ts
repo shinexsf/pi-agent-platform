@@ -30,6 +30,8 @@ export interface ServerConfig {
   workerStopTimeoutMs: number;
   workspaceRoot: string;
   agentDir: string;
+  /** 插件私有数据根（`plugin-data/<pluginId>/` 的父目录）。 */
+  pluginDataDir: string;
   /**
    * Platform MCP catalog `~/.pi/server/mcp.json` (change: platform-mcp-catalog).
    * Server definitions live ONLY here — the DB stores just the names an agent selected.
@@ -121,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     workerStopTimeoutMs: 5_000,   // invariants: SIGTERM → 5s → SIGKILL
     workspaceRoot: env.WORKSPACE_ROOT ?? process.cwd(),
     agentDir,
+    pluginDataDir: env.PI_SERVER_PLUGIN_DATA_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugin-data'),
     mcpConfigPath: env.PI_SERVER_MCP_CONFIG ?? path.join(path.dirname(agentDir), 'server', 'mcp.json'),
     pluginsDir: env.PI_SERVER_PLUGINS_DIR ?? path.join(path.dirname(agentDir), 'server', 'plugins'),
     bundledPluginsDir: resolveBundledPluginsDir(env),

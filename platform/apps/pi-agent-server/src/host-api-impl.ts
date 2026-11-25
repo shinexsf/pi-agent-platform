@@ -33,6 +33,8 @@ export interface HostApiDeps {
   maxWorkers: number;
   sessionRepo: SessionRepo;
   workerPool: WorkerPool;
+  /** 附件存取（`host.attachments` 的数据源；插件只拿到 upload / resolvePath）。 */
+  attachmentStore: import('@pi-agent-platform/core').AttachmentStore;
   agentRepo: {
     list(): import('@pi-agent-platform/shared-types').AgentDTO[];
     get(id: string): import('@pi-agent-platform/shared-types').AgentDTO | undefined;
@@ -297,11 +299,35 @@ export function createHostApi(deps: HostApiDeps): HostApi {
     },
 
     services: {
-      provide: (pluginId, name, handler) => pluginServices.provide(pluginId, name, handler),
+      provide: (pluginId, name, handler, options) => pluginServices.provide(pluginId, name, handler, options),
       call: (callerPluginId, name, payload, options) => pluginServices.call(callerPluginId, name, payload, options),
-      list: () => pluginServices.list(),
+      list: (filter) => pluginServices.list(filter),
       listOf: (pluginId) => pluginServices.listOf(pluginId),
+      namespaces: () => pluginServices.namespaces(),
       disposePlugin: (pluginId) => pluginServices.disposePlugin(pluginId),
+    },
+
+    // 附件面：只给两个动作（`upload` / `resolvePath`），不给 store 句柄 ——
+    // 那个对象带 `delete` / 目录布局，给出去等于让插件能绕过引用计数删文件。
+    attachments: {
+      async upload(input) {
+        const record = await deps.attachmentStore.upsert({
+          sessionId: input.sessionId,
+          bytes: input.bytes,
+          mimeType: input.mimeType,
+          originalFilename: input.filename,
+        });
+        // 全量归还 row 的对外字段：worker 的 promptOptions 需要 sha/filename 才能读盘。
+        return {
+          id: record.row.id,
+          sha: record.row.sha,
+          mimeType: record.row.mimeType,
+          sizeBytes: record.row.sizeBytes,
+          filename: record.row.filename,
+          originalFilename: record.row.originalFilename,
+        };
+      },
+      resolvePath: (sessionId, name) => deps.attachmentStore.resolvePath(sessionId, name),
     },
 
     agents: {

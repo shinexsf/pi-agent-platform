@@ -11,6 +11,7 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import path from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { logger } from '@pi-agent-platform/core';
 import { createAgentsRouter } from './routes/agents.js';
 import { createSessionsRouter } from './routes/sessions.js';
@@ -27,7 +28,6 @@ import { startPluginRuntime } from '@pi-agent-platform/core';
 import { createServerLogsRouter } from './routes/server-logs.js';
 import { createActionsRouter, createInteropRouter, createRuntimeMethodsRouter } from './routes/runtime-methods.js';
 import { startTimeoutScanner } from '@pi-agent-platform/core';
-import { startImGateway, type ImGatewayHandle } from './im-gateway/index.js';
 import { existsSync } from 'node:fs';
 import { createSpaFallback } from './static-spa.js';
 import { listAvailableModels } from './model-registry.js';
@@ -114,6 +114,12 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
     registerService: (source, kind, handlers) => workerPool.registerService(source, { kind }, handlers),
     // R4：迁移台账（卸载时提示"留下的表"）。
     recordMigration: (pluginId, name) => recordPluginMigration(raw, pluginId, name),
+    // 插件私有可写目录（装载前创建）：bundled 插件装在 dist/ 下，升级会覆盖，状态必须另处存放。
+    dataDirFor: (pluginId) => {
+      const dir = path.join(config.pluginDataDir, pluginId);
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    },
   });
   void pluginRuntime.catch((err) => logger.error({ err: String(err) }, 'plugin runtime start failed'));
   // 系统日志查看（读活跃日志文件，路径由 logger.ts 的 serverLogFile 唯一决定）
@@ -139,22 +145,14 @@ export async function createServerApp(deps: ServerAppDeps): Promise<ServerApp> {
   // Start placeholder timeout scanner (active sessions are never auto-killed)
   const scanner = startTimeoutScanner(workerPool, config.placeholderTimeoutMs);
 
-  // Start IM gateway BEFORE any serve() so its router can be mounted while
-  // Hono's matcher is still mutable.
-  let imGatewayHandle: ImGatewayHandle | undefined;
-  try {
-    imGatewayHandle = await startImGateway({ agentRepo, sessionRepo, workerPool, rawDb: raw, attachmentStore });
-    app.route('/api/im', imGatewayHandle.imRouter);
-    logger.info({ channels: imGatewayHandle.loadedTypes }, 'im-gateway started');
-  } catch (err) {
-    logger.warn({ err }, 'im-gateway failed to start');
-  }
+  // IM 已下沉为 bundled 插件 `im`（change: im-as-plugin）：
+  // 连接注册表 / 会话绑定 / 回复聚合 / IM 页都在它那里，入口零 IM 知识。
+  // 渠道（QQ / 微信 / 探针）是**非 bundle** 插件，通过 `im.channel` namespace 接入。
 
   return {
     app,
     async dispose() {
       scanner.stop();
-      if (imGatewayHandle) await imGatewayHandle.shutdown();
       logger.info('server app disposed');
     },
   };

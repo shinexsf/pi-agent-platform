@@ -13,7 +13,6 @@
  */
 export const RUNTIME_PACKAGES = [
   'shared-types',
-  'channel-types',
   'api-types',
   'ipc-protocol',
   'sdk-integration',
