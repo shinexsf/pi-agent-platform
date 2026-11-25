@@ -1,6 +1,6 @@
 ---
 name: pi-plugin-authoring
-description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约 + 动作契约：目录约定、四个装载点 + 顶栏动作的默认导出写法、七个能力面（含 bus / services / **actions**）、插件自带 skill、web 主题变量、vendored 类型、`plugin check` 自查、产物硬约束（原生 ESM、无裸说明符）、常见坑。
+description: 给 pi-agent-platform 写插件时读这份。讲 v2 契约 + 动作契约：目录约定、四个装载点 + 顶栏动作的默认导出写法、八个能力面（含 bus / services / **actions** / **attachments**，外加可写目录 `dataDir`）、插件自带 skill、web 主题变量、vendored 类型、`plugin check` 自查、产物硬约束（原生 ESM、无裸说明符）、常见坑。
 ---
 
 # 给平台写插件
@@ -119,11 +119,14 @@ export default {
 | `db` | `migrate` / `query` | 读写都开放，走审计日志；只建自己的表 |
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` | 返回退订函数 |
 | `bus` | `declare(topic, {declaredBy})` · `publish` · `publishAndWait` · `subscribe` · `topics()` | 插件间**广播**（0..n）：topic 必须先声明、前缀是本插件 id；`declaredBy:'publisher'` 只有你能发、谁都能订阅；**handler 返回值被丢弃**。别叫它 `events` —— `events` 是发给浏览器的出口 |
-| `services` | `provide(name, fn)` · `call(name, payload)` · `list()` | 插件间**定向调用**：恰好一个提供者、返回业务数据、错误外抛、无 `sessionId`。要拿数据就用它，不要试图从 `bus` 里取 |
+| `services` | `provide(name, fn, { namespace? })` · `call(name, payload)` · `list({ namespace? })` · `namespaces()` | 插件间**定向调用**：恰好一个提供者、返回业务数据、错误外抛、无 `sessionId`。要拿数据就用它，不要试图从 `bus` 里取。`namespace` 是**可选发现标签**（形如 `<定义方 id>.<接口名>`）：给"网关要找齐所有渠道插件"这类场景用 —— 平台只校验形态，不校验那个 id 是否存在、不防抢注 |
 | `actions` | `define({ '<action>': { params, handler, reverse?, scope?, service?, tool?, http? } })` | **仅 server 侧**。一份 handler + 五个独立暴露字段，见 §4.2。默认 `reverse:true / scope:'own'`，其余默认关 |
+| `attachments` | `upload({ sessionId, bytes, mimeType, filename? })` · `resolvePath(sessionId, name)` | 会话附件存取。只给两个动作、**不给 store 句柄**（那个对象能删文件）。`upload` 返回 `{ id, sha, mimeType, sizeBytes, filename, originalFilename }` —— `sha`/`filename` 是 worker 读盘要的 |
+| `dataDir` | 插件私有**可写**目录（绝对路径，已创建） | 状态文件写这里。**不要写 `dir`** —— bundled 插件装在 `dist/` 下，升级即覆盖 |
 | `lifecycle.runtime()` | 运行态快照 | 版本 / uptime / 端口 / worker 池统计。**数据不是句柄**（平台不给 `workerPool`）|
 | `events` | `emit` | **仅 worker 侧**有效；server 侧调用会 warn |
-| `ui` / `http` / `methods` | 注册面 | 都返回退订函数，卸载时平台也会统一撤 |
+| `ui` / `http` / `methods` | 注册面 | 都返回退订函数，卸载时平台也会统一撤。`http.route` 的 handler 可以**返回标准 `Response`**（平台原样透传）→ SSE 流式响应由此成立 |
+| `ui.page({ parent })` | 挂到别的页面下当二级项 | 父页不存在（父插件没启用）时**降级为一级项**，不静默隐藏 |
 
 ## 4.2 一份 handler，四个暴露面（`actions`）
 
@@ -223,6 +226,133 @@ const n = await host.services.call('notifications.unread', {});
 - **`services.call` 到没提供的名字会抛错**（`unknown service`），必须自己 try/catch 决定降级
 - **事件处理器里不要等待**：`publishAndWait` 等最慢的订阅者，重型工作请在订阅方自己起异步
 
+## 4.3 插件之间怎么连（装载无序 → 只有一种写法）
+
+插件装载**不保证顺序**，热加载又是单个插件重来一遍。所以：
+
+- ❌ **不要在启动时 `services.call` 别人**（对方后装载 → `unknown service`，你只能写重试）
+- ✅ **让"需要多方"的那一方当调用方**：它扫 `services.list({ namespace })`（目录是现成快照），
+  再订阅 `__core__.plugin.loaded` / `__core__.plugin.unloaded` 重扫（**插件级**事件，一个插件一条）
+
+现成例子：IM 渠道
+
+```js
+// 渠道侧（只提供，不调任何人）
+host.services.provide('channel-qq.channel', async ({ uplink }) => driver, { namespace: 'im.channel' });
+
+// 网关侧（唯一调用方）
+bus.subscribe('__core__.plugin.loaded', () => rescan());
+bus.subscribe('__core__.plugin.unloaded', () => rescan());
+rescan();   // 初始快照：services.list({ namespace: 'im.channel' })
+```
+
+完整参考实现见 `examples/channel-mock/`（一个不连任何平台的假渠道，含"注入消息 / 看投递结果"的探针端点）。
+
+- `services.list()` 返回的是**地址条目**（`{ name, owner, namespace }`），不是可调用对象 —— 调用仍走 `services.call(entry.name, …)`
+- 注册项**本质是 service**：平台不约束 handler 返回什么（"返回一个 driver 对象"是协议包的事，类比 JDBC）
+- 能力用**对象上的可选方法**表达（`driver.sendFile?`），不要为每个能力开一个 namespace
+
+## 4.5 当宿主：把一块区域交给别的插件（插件空间槽位）
+
+槽位名有两空间：平台空间（`chat.rail.right`，平台渲染 chrome）与**插件空间**
+（`<pluginId>.<name>`，例如 `im.channel.create` —— 你自己当宿主时定义的点位）。
+平台只校验形态（`chat` / `__core__` 是保留前缀），不校验提供方、也不要求你预先声明。
+
+宿主页自己装载，不需要任何新 API：
+
+```js
+const exts = await (await fetch('/api/extensions')).json();
+for (const s of (exts.surfaces ?? []).filter((x) => x.slot === 'my-page.create')) {
+  try {
+    const mod = await import(s.url);   // url 由服务端给，别自己拼 /plugins/<id>/web/...
+    const dispose = mod.mount(container, { done() {}, cancel() {} });
+  } catch (err) {
+    container.textContent = `加载失败：${err.message}`;  // 一个提供方崩，不能打白宿主页
+  }
+}
+```
+
+三条硬约定：**只用 `url`** 装载（路由规则只许存在服务端）、**失败隔离**、**卸载调 dispose**。
+
+反模式：`import('/plugins/' + id + '/web/' + name + '.js')` —— 等于把平台路由规则复制一份，
+平台改路径时坏在别人仓库里。
+
+## 4.4 web facet 想要 npm 依赖怎么办
+
+**结论：server facet 随便用（Node 解析），web facet 一个都不行。** 这不是限制没做好，是浏览器的硬边界：
+
+| | server / worker / extension facet | web facet |
+|---|---|---|
+| 运行环境 | Node | 浏览器（平台只给一个 `<script type="module">` 的加载点） |
+| 裸说明符 | ✅ `import QRCode from 'qrcode'`（`plugin add` 会 npm install 到插件目录） | ❌ 没有 import map —— `import 'qrcode'` 直接 `Failed to resolve module specifier` |
+| Node 内建 | ✅ | ❌ |
+| 平台怎么办 | 不管 | `plugin check` 直接报错（`web-bare-specifier` / `web-node-builtin` / `web-cjs`），`plugin add` 也会拦 |
+
+三条可行路线，按推荐顺序：
+
+**① 把活挪到服务端（最省事，也最不容易踩坑）**
+插件自己的 HTTP 端点做重活，web facet 只拿结果。例：二维码是**扫描 URL**不是图，SDK 不渲染；
+原渠道页在前端用 `qrcode` 库渲染 —— 现在改成渠道 server facet 渲染成 PNG data URL，页面只 `<img src>`。
+
+```js
+// server/index.js（Node，直接用依赖）
+const QRCode = (await import('qrcode')).default;
+const dataUrl = await QRCode.toDataURL(url, { width: 280, margin: 1 });
+// web/channels.js（浏览器，零依赖）
+const { image } = await (await fetch('/api/p/<id>/qr')).json();
+img.src = image;
+```
+
+**② 自己打包 web 产物**（要真在浏览器跑库时，例如 ECharts）
+
+契约是**产物形状**，不是工具链：`web/` 下只要是"能直接 `import()` 的 ESM、无裸说明符、无 node 内建、非 CJS"就行 ——
+在哪编、用什么编，平台不管（它**不替你编**：`build-plugins.mjs` 只扫 `platform/plugins/`，
+第三方插件自带产物；`web/` 下放 `.ts` 会被 `plugin check` 直接判错）。
+
+推荐布局：
+
+```
+plugins/channel-x/
+├── package.json          ← 只写 **server 侧** 依赖（plugin add 会 npm install 到这里）
+├── server/index.js
+└── web/                  ← 全部是构建产物，递归受 check 扫描
+    ├── channels.js       ← 入口（平台 import，带 ?v=<mtime>）
+    └── vendor/
+        ├── echarts-5.5.0.js   ← 大库，文件名带版本
+        └── chart.js           ← 你的图表逻辑，内部 import './echarts-5.5.0.js'
+```
+
+构建放在**插件目录的 `web-src/` 子项目**里（有自己的 `package.json`，别把 esbuild 塞进插件根的
+`package.json` —— `plugin add` 会把它装进插件目录）。本机桶的插件可以一条命令编全部：
+
+```bash
+pnpm build:plugins:local            # platform/ 下；= node scripts/build-local-plugins.mjs
+pnpm build:plugins:local channel-qq # 只编一个
+```
+
+脚本只认一个约定：`web-src/package.json` 里有 `build` script，且它把产物写进 `../web/`。
+工具链随意（esbuild / vite / rollup），平台只消费 `web/` 里的产物。手动也是一样的：
+
+```bash
+npx esbuild web-src/chart.ts --bundle --format=esm --minify \
+  --outfile=plugins/channel-x/web/vendor/chart.js
+```
+
+三条注意：
+
+- **`web/**/*.js` 是递归校验的**（实测：`web/vendor/x.js` 里出现 `import 'echarts'` 会被 `web-bare-specifier` 拦下）——
+  所以拷进 `web/` 的每个文件都必须是已 bundle 的产物，不能放"库的源码副本"
+- **`?v=` 只加在入口文件上**：懒加载进来的 `vendor/*.js` 不带版本查询串，所以大库文件名建议带版本号（`echarts-5.5.0.js`），
+  否则 `plugin reload` 后用户可能拿到旧缓存
+- **构建工具别写进插件 `package.json` 的 dependencies**：`plugin add` 会在插件目录里 `npm install`，
+  esbuild/vite 会被一起装进去（几十 MB 的无用体积）；构建依赖留在你的构建项目里
+
+**③ 拆成同目录的相对模块**
+`web/` 下的多个 `.js` 之间可以互相 `import './shared.js'` —— 相对路径永远是允许的。
+适合"几个页面共用一点工具函数"，但解决不了"要一个 npm 库"。
+
+❌ **不要指望平台给 import map**：那等于把 Vue / 各种库的版本塞进平台契约，插件之间会开始依赖同一份实例，升级一个牵动一片。
+
 ## 5. 插件自带 skill（给 agent 的技能）
 
 插件可以带 agent 技能：`skills/<name>/SKILL.md`，装载时被扫进 `skillPaths` 一并下发
@@ -287,6 +417,8 @@ pi-server plugin reload              # 不重启 server 重装（server facet �
 - **一个行为写三遍**（`host.methods.handle` + `host.services.provide` + 手写工具）：用 `host.actions.define` 一次搞定，行为只有一份
 - **给 `deferred` 工具写 `promptSnippet`**：会破前缀缓存，平台直接拒
 - **在 server facet 里 `host.events.emit`**：`events` 是 worker 发给浏览器的出口，server 侧调用只会 warn
+- **在 `init()` 里 `services.call` 另一个插件**：装载顺序不定，对方没起来就是 `unknown service`；改成"你当调用方 + `list({namespace})` + 订阅 `__core__.plugin.loaded`"（见 §4.3）
+- **为每个能力开一个 namespace**：能力用实现对象上的可选方法表达；namespace 只标识"我们说的是同一个接口"
 
 | 反模式 | 为什么错 | 正解 |
 |---|---|---|

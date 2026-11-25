@@ -1,0 +1,8 @@
+{
+  "name": "im",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "IM 网关：连接注册表 / 会话绑定 / 会话订阅管理 / 回复过滤与聚合 / IM 页 / sendFileToUser（对具体渠道零知识）",
+  "piServer": { "apiVersion": "1" }
+}

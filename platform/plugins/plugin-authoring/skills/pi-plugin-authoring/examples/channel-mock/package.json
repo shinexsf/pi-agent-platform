@@ -1,0 +1,8 @@
+{
+  "name": "channel-mock",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "渠道插件参考实现：im.channel 服务 + 新增连接槽位（im.channel.create）+ 探针端点",
+  "piServer": { "apiVersion": "1" }
+}

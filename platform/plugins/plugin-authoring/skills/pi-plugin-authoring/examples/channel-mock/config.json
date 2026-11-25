@@ -1,0 +1,5 @@
+{
+  "connections": [
+    { "id": "probe-1", "label": "Probe 1" }
+  ]
+}

@@ -1,0 +1,6 @@
+const CHANNEL_NAMESPACE = "im.channel";
+const CHANNEL_API_VERSION = 1;
+export {
+  CHANNEL_API_VERSION,
+  CHANNEL_NAMESPACE
+};
