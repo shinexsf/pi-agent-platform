@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "内核边界：内核 / 入口 / 插件三分",
+    "subtitle": "判据：把任一只 bundled 插件 enabled:false，平台仍能建 agent、开会话、聊完一轮",
+    "locale": "zh-CN",
+    "output": "assets/kernel-boundary.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "用户客户端",
+      "sublabel": "Web / IDEA(JCEF) / IM",
+      "pos": [
+        40,
+        150
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-web/src/main.ts",
+          "line": 40,
+          "label": "SPA 路由入口"
+        }
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "backend",
+      "label": "入口应用",
+      "sublabel": "pi-agent-server · Hono",
+      "pos": [
+        300,
+        140
+      ],
+      "size": [
+        160,
+        72
+      ],
+      "tag": "createServerApp",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/app.ts",
+          "line": 64,
+          "label": "组合根：装配路由与宿主"
+        }
+      ]
+    },
+    {
+      "id": "projection",
+      "type": "backend",
+      "label": "事件投影",
+      "sublabel": "@pi-agent-platform/event-projection",
+      "pos": [
+        300,
+        330
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/event-projection/src/index.ts",
+          "line": 165,
+          "label": "createSessionProjector"
+        }
+      ]
+    },
+    {
+      "id": "kernel",
+      "type": "backend",
+      "label": "会话内核",
+      "sublabel": "@pi-agent-platform/core",
+      "pos": [
+        600,
+        60
+      ],
+      "size": [
+        180,
+        76
+      ],
+      "tag": "会话 / 配置 / 插件宿主",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/index.ts",
+          "line": 27,
+          "label": "内核对外出口（只导出内核对象）"
+        }
+      ]
+    },
+    {
+      "id": "plugins-host",
+      "type": "backend",
+      "label": "插件宿主",
+      "sublabel": "startPluginRuntime · 装载 / 账本",
+      "pos": [
+        600,
+        320
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugins.ts",
+          "line": 513,
+          "label": "运行期装载入口"
+        }
+      ]
+    },
+    {
+      "id": "pool",
+      "type": "backend",
+      "label": "WorkerPool",
+      "sublabel": "进程域 · 每个会话一个 worker",
+      "pos": [
+        900,
+        60
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/worker-pool.ts",
+          "line": 126,
+          "label": "WorkerPool（spawn / IPC 分发）"
+        }
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "agents / sessions / attachments",
+      "pos": [
+        900,
+        210
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/db/init.ts",
+          "line": 25,
+          "label": "内核只建内核对象的表"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "会话 worker",
+      "sublabel": "session-worker 子进程",
+      "pos": [
+        1180,
+        60
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 580,
+          "label": "装配工具 / 动作 / 扩展"
+        }
+      ]
+    },
+    {
+      "id": "pi",
+      "type": "external",
+      "label": "pi SDK",
+      "sublabel": "@earendil-works/pi-coding-agent",
+      "pos": [
+        1180,
+        250
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/sdk-integration/src/index.ts",
+          "line": 1,
+          "label": "适配层（worker ↔ pi）"
+        }
+      ]
+    },
+    {
+      "id": "bundled",
+      "type": "backend",
+      "label": "bundled 插件 ×7",
+      "sublabel": "admin / im / notifications / scheduler / webhook +2",
+      "pos": [
+        40,
+        470
+      ],
+      "size": [
+        300,
+        84
+      ],
+      "sources": [
+        {
+          "path": "platform/plugins/im/server/src/index.ts",
+          "line": 1,
+          "label": "IM 网关也是插件"
+        }
+      ]
+    },
+    {
+      "id": "userplugins",
+      "type": "backend",
+      "label": "用户插件",
+      "sublabel": "registry.json 台账 · 目录即装载点",
+      "pos": [
+        40,
+        610
+      ],
+      "size": [
+        300,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/plugins/registry.ts",
+          "line": 1,
+          "label": "registry 读写（bundled 不进台账）"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "内核：只负责会话管理 / 配置 / 插件宿主",
+      "wraps": [
+        "kernel",
+        "plugins-host",
+        "pool",
+        "sqlite"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "插件层：代码即契约，停用不影响平台运转",
+      "wraps": [
+        "bundled",
+        "userplugins"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "clients-entry",
+      "from": "clients",
+      "to": "entry",
+      "label": "HTTP / SSE"
+    },
+    {
+      "id": "entry-kernel",
+      "from": "entry",
+      "to": "kernel",
+      "label": "服务层调用"
+    },
+    {
+      "id": "entry-subscribe",
+      "from": "entry",
+      "to": "projection",
+      "label": "订阅事件",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "kernel-pool",
+      "from": "kernel",
+      "to": "pool",
+      "label": "ensure",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "pool-worker",
+      "from": "pool",
+      "to": "worker",
+      "label": "IPC",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-pi",
+      "from": "worker",
+      "to": "pi",
+      "label": "SDK 调用",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "kernel-sqlite",
+      "from": "kernel",
+      "to": "sqlite",
+      "label": "仓储读写",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "plugins-host-init",
+      "from": "bundled",
+      "to": "plugins-host",
+      "label": "init(host) 注册"
+    },
+    {
+      "id": "userplugs-host-init",
+      "from": "userplugins",
+      "to": "plugins-host",
+      "label": "init(host) 注册"
+    },
+    {
+      "id": "plugins-kernel",
+      "from": "plugins-host",
+      "to": "kernel",
+      "label": "8 个能力面",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "worker-events",
+      "from": "worker",
+      "to": "entry",
+      "label": "session_event",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "内核只留四件事",
+      "items": [
+        "会话管理（SessionRegistry / WorkerPool / 附件库）",
+        "agent 与 session 配置（唯一开关是 AgentConfig.plugins）",
+        "插件宿主（装载点 + 11 个注册扩展点 + 卸载账本）",
+        "基础设施（pino 日志 / SQLite / 路径归一）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "一切的归属判据",
+      "items": [
+        "插件停用 → 它提供的工具 / 页面 / 路由 / skill 一起消失",
+        "平台仍能建 agent、开会话、聊完一轮才算真插件",
+        "内核里没有 HTTP 框架、没有渠道实现、没有业务表"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "入口与内核的缝",
+      "items": [
+        "入口只做装配：路由、SSE、静态托管、debug 端点",
+        "插件拿到的 host 由入口实现（HostApi 是唯一稳定缝）",
+        "event-projection 是独立包，worker 事件 → 会话 DTO"
+      ]
+    }
+  ]
+}

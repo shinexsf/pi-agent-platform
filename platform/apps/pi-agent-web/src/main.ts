@@ -79,15 +79,6 @@ const baseRoutes = [
     meta: { crumbTitleFromParam: 'id', crumbTitle: 'Edit Session' },
   },
   {
-    path: '/architecture',
-    component: () => import('./views/ArchitectureView.vue'),
-    // mobileHidden：架构图是撑满视口的 iframe，紧凑断点下不出现在抽屉里
-    meta: {
-      fullWidth: true,
-      mobileHidden: true,
-    },
-  },
-  {
     path: '/config',
     component: ConfigView,
     meta: { navLabel: '配置', navOrder: 50, navIcon: 'settings', fullWidth: true },

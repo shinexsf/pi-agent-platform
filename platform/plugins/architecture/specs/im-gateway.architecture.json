@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "IM 网关：网关是插件，渠道也是插件",
+    "subtitle": "网关对具体渠道零知识；渠道把自己的能力注册成 im.channel service，反向依赖由网关调用",
+    "locale": "zh-CN",
+    "output": "assets/im-gateway.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "components": [
+    {
+      "id": "imnet",
+      "type": "external",
+      "label": "QQ / 微信",
+      "sublabel": "IM 平台侧",
+      "pos": [
+        40,
+        150
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "doc/architecture/pi-agent-server_im-gateway.md",
+          "line": 1,
+          "label": "IM 网关架构文档"
+        }
+      ]
+    },
+    {
+      "id": "chqq",
+      "type": "backend",
+      "label": "channel-qq",
+      "sublabel": "QQ Bot 协议适配",
+      "pos": [
+        240,
+        70
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 1,
+          "label": "渠道驱动契约（channel-types 已退役）"
+        }
+      ]
+    },
+    {
+      "id": "chwx",
+      "type": "backend",
+      "label": "channel-wechat",
+      "sublabel": "微信 iLink 登录态",
+      "pos": [
+        240,
+        190
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 1,
+          "label": "同一份驱动契约的另一实现"
+        }
+      ]
+    },
+    {
+      "id": "im",
+      "type": "backend",
+      "label": "im 插件（网关）",
+      "sublabel": "连接注册表 · 绑定路由 · 动作",
+      "pos": [
+        540,
+        120
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "对渠道零知识",
+      "sources": [
+        {
+          "path": "platform/plugins/im/server/src/gateway.ts",
+          "line": 330,
+          "label": "三级路由：显式绑定 → 连接默认 → 自动新建"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "state.json",
+      "sublabel": "连接 + 聊天绑定（原子写）",
+      "pos": [
+        540,
+        320
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/plugins/im/server/src/state.ts",
+          "line": 1,
+          "label": "单写队列 + 损坏降级"
+        }
+      ]
+    },
+    {
+      "id": "kernel",
+      "type": "backend",
+      "label": "内核会话",
+      "sublabel": "host.sessions.ensure / prompt",
+      "pos": [
+        830,
+        60
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/host-api.ts",
+          "line": 294,
+          "label": "宿主能力面（sessions 等 8 个）"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "会话 worker",
+      "sublabel": "一轮对话",
+      "pos": [
+        1090,
+        60
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/worker-pool.ts",
+          "line": 126,
+          "label": "进程域（spawn / 回收）"
+        }
+      ]
+    },
+    {
+      "id": "page",
+      "type": "frontend",
+      "label": "IM 管理页",
+      "sublabel": "/im（配置 › IM）",
+      "pos": [
+        830,
+        300
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/plugins/im/web/src/gateway.ts",
+          "line": 1,
+          "label": "渠道分组卡片 + 连接编辑 + SSE 日志"
+        }
+      ]
+    },
+    {
+      "id": "slot",
+      "type": "frontend",
+      "label": "渠道创建组件",
+      "sublabel": "槽位 im.channel.create",
+      "pos": [
+        830,
+        460
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/plugins/constants.ts",
+          "line": 27,
+          "label": "插件空间槽位名（<pluginId>.<name>）"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "渠道插件：非 bundle，装在使用者本机",
+      "wraps": [
+        "chqq",
+        "chwx"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "qq-in",
+      "from": "imnet",
+      "to": "chqq",
+      "label": "消息",
+      "variant": "emphasis"
+    },
+    {
+      "id": "wx-in",
+      "from": "imnet",
+      "to": "chwx",
+      "label": "消息",
+      "variant": "emphasis"
+    },
+    {
+      "id": "chqq-declare",
+      "from": "chqq",
+      "to": "im",
+      "label": "注册 im.channel"
+    },
+    {
+      "id": "chwx-declare",
+      "from": "chwx",
+      "to": "im",
+      "label": "注册 im.channel"
+    },
+    {
+      "id": "im-send",
+      "from": "im",
+      "to": "chqq",
+      "label": "driver.send",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "right"
+    },
+    {
+      "id": "im-state",
+      "from": "im",
+      "to": "state",
+      "label": "读写绑定",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "im-kernel",
+      "from": "im",
+      "to": "kernel",
+      "label": "ensure"
+    },
+    {
+      "id": "kernel-worker",
+      "from": "kernel",
+      "to": "worker",
+      "label": "spawn"
+    },
+    {
+      "id": "kernel-im-events",
+      "from": "kernel",
+      "to": "im",
+      "label": "订阅事件",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "im-page",
+      "from": "im",
+      "to": "page",
+      "label": "SSE 日志",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "page-im",
+      "from": "page",
+      "to": "im",
+      "label": "PATCH 连接/绑定",
+      "variant": "default",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "page-slot",
+      "from": "page",
+      "to": "slot",
+      "label": "装载创建组件",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "chwx-slot",
+      "from": "chwx",
+      "to": "slot",
+      "label": "注册槽位",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "依赖倒置怎么解耦",
+      "items": [
+        "网关只声明 namespace：im.channel（不认 qq / wechat）",
+        "渠道把自己的 driver 注册成 service，网关按 provider 拉取",
+        "加载无序靠两条兜底：目录快照 + __core__.plugin.loaded 广播"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "绑定三级路由",
+      "items": [
+        "显式 chat 绑定 → 连接默认会话 → 自动新建",
+        "走默认会话后会落显式绑定：改默认不改道已进过的聊天",
+        "换 agent 清空绑定与 defaultSessionId"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "渠道自己的 UI",
+      "items": [
+        "新增连接流程由渠道提供（QQ 扫码/手填、微信扫码）",
+        "网关只负责把槽位里的组件装进弹窗（失败隔离）",
+        "凭据与登录态写 host.dataDir/state/<id>/（升级不覆盖）"
+      ]
+    }
+  ]
+}

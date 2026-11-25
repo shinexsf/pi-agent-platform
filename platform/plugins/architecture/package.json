@@ -1,0 +1,10 @@
+{
+  "name": "architecture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "架构图：顶栏入口 + 整页 iframe 宿主 + archify 产物（server 侧清单与静态资源都由本插件给）",
+  "piServer": {
+    "apiVersion": "1"
+  }
+}

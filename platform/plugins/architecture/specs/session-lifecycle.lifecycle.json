@@ -1,0 +1,229 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "会话状态机：从占位到终态",
+    "subtitle": "会话对象 = worker 生命周期；有 DB 行才是真会话，占位超时会被回收，崩溃后可从历史恢复",
+    "locale": "zh-CN",
+    "output": "assets/session-lifecycle.lifecycle.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "mainPath": [
+    "none",
+    "placeholder",
+    "active",
+    "idle",
+    "archived"
+  ],
+  "states": [
+    {
+      "id": "none",
+      "type": "start",
+      "label": "无会话",
+      "sublabel": "只有 agent + 工作区",
+      "tag": "起点",
+      "step": "01",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/routes/sessions.ts",
+          "line": 1,
+          "label": "POST /api/sessions/agents/:agentId 占位"
+        }
+      ]
+    },
+    {
+      "id": "placeholder",
+      "type": "waiting",
+      "label": "占位会话",
+      "sublabel": "worker 已起，尚无 DB 行",
+      "tag": "超时回收",
+      "step": "02",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/session-timeout-scanner.ts",
+          "line": 1,
+          "label": "占位超时扫描（只看无 DB 行）"
+        }
+      ]
+    },
+    {
+      "id": "active",
+      "type": "active",
+      "label": "活跃",
+      "sublabel": "有 DB 行 + worker 存活",
+      "tag": "永不自动杀",
+      "step": "03",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/session.ts",
+          "line": 722,
+          "label": "getOrCreate / spawn"
+        }
+      ]
+    },
+    {
+      "id": "idle",
+      "type": "decision",
+      "label": "空闲",
+      "sublabel": "worker 在、turn 未进行",
+      "tag": "可并发",
+      "step": "04"
+    },
+    {
+      "id": "archived",
+      "type": "success",
+      "label": "归档",
+      "sublabel": "DB status=archived，可从历史重开",
+      "tag": "软删除",
+      "step": "05",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/repos/session.repo.ts",
+          "line": 152,
+          "label": "archive（status 已标注 deprecated）"
+        }
+      ]
+    },
+    {
+      "id": "restoring",
+      "type": "waiting",
+      "label": "恢复中",
+      "sublabel": "重开 pi session 文件",
+      "tag": "复用历史"
+    },
+    {
+      "id": "disposed",
+      "type": "neutral",
+      "label": "已销毁",
+      "sublabel": "worker 退出 / 显式 close",
+      "tag": "终态事件"
+    },
+    {
+      "id": "crashed",
+      "type": "failure",
+      "label": "崩溃",
+      "sublabel": "worker 异常退出",
+      "tag": "可恢复"
+    },
+    {
+      "id": "deleted",
+      "type": "neutral",
+      "label": "硬删除",
+      "sublabel": "行 + pi 文件 + 附件一起清",
+      "tag": "不可逆"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-none-placeholder",
+      "from": "none",
+      "to": "placeholder",
+      "label": "建占位"
+    },
+    {
+      "id": "t-placeholder-active",
+      "from": "placeholder",
+      "to": "active",
+      "label": "首条消息"
+    },
+    {
+      "id": "t-placeholder-disposed",
+      "from": "placeholder",
+      "to": "disposed",
+      "label": "超时回收",
+      "variant": "security"
+    },
+    {
+      "id": "t-active-idle",
+      "from": "active",
+      "to": "idle",
+      "label": "turn 结束"
+    },
+    {
+      "id": "t-idle-active",
+      "from": "idle",
+      "to": "active",
+      "label": "新消息"
+    },
+    {
+      "id": "t-idle-archived",
+      "from": "idle",
+      "to": "archived",
+      "label": "归档"
+    },
+    {
+      "id": "t-archived-restoring",
+      "from": "archived",
+      "to": "restoring",
+      "label": "从历史重开"
+    },
+    {
+      "id": "t-restoring-active",
+      "from": "restoring",
+      "to": "active",
+      "label": "会话行配置优先"
+    },
+    {
+      "id": "t-active-disposed",
+      "from": "active",
+      "to": "disposed",
+      "label": "close / 重启"
+    },
+    {
+      "id": "t-active-crashed",
+      "from": "active",
+      "to": "crashed",
+      "label": "worker 退出",
+      "variant": "security"
+    },
+    {
+      "id": "t-crashed-restoring",
+      "from": "crashed",
+      "to": "restoring",
+      "label": "下条消息重开",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-archived-deleted",
+      "from": "archived",
+      "to": "deleted",
+      "label": "硬删除",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "对象 = 进程",
+      "items": [
+        "Session 对象存在即 worker 存活，没有独立的状态字段要同步",
+        "占位会话被超时扫描回收，活跃会话永不自动杀（有 DB 行就有人管）",
+        "重启 worker 复用历史：会话行里的配置优先于 agent 默认值"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "三个终态语义",
+      "items": [
+        "disposed：worker 没了（事件 session_disposed，SSE 关流可重连）",
+        "crashed：异常退出，下条消息自动重开而不是丢会话",
+        "deleted：行 + pi 会话文件 + 附件目录级联清掉"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "谁在改状态",
+      "items": [
+        "status 字段已 deprecated：存活判据是 worker 状态，不是 DB 字段",
+        "busy 由 Session 自己记（streamingBehavior 决定排队还是插队）",
+        "IM 渠道绑定与默认会话都是插件侧的 state.json，不进 sessions 表"
+      ]
+    }
+  ]
+}

@@ -57,7 +57,6 @@ function fallbackIcon(path: string): string {
   if (path.includes('/config')) return 'settings';
   if (path.includes('/im')) return 'im';
   if (path.includes('/sessions')) return 'sessions';
-  if (path.includes('/architecture')) return 'architecture';
   return 'agents';
 }
 

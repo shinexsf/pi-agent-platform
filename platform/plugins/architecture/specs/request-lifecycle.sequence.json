@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "一条消息的完整往返",
+    "subtitle": "浏览器发一句 prompt，到 assistant 增量事件回到浏览器；中间谁负责什么、事件在谁的边界上被改名",
+    "locale": "zh-CN",
+    "output": "assets/request-lifecycle.sequence.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "participants": [
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "浏览器 SPA",
+      "sublabel": "useSSE 订阅",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-web/src/composables/useSSE.ts",
+          "line": 1,
+          "label": "SSE 订阅与消息拼装"
+        }
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "backend",
+      "label": "入口 HTTP",
+      "sublabel": "Hono · routes/sessions",
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-server/src/routes/sessions.ts",
+          "line": 525,
+          "label": "prompt 路由与 resolvePrompt"
+        }
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "会话内核",
+      "sublabel": "Session / SessionRegistry",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/session.ts",
+          "line": 471,
+          "label": "subscribe / deliver"
+        }
+      ]
+    },
+    {
+      "id": "pool",
+      "type": "backend",
+      "label": "WorkerPool",
+      "sublabel": "master 侧进程域",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/worker-pool.ts",
+          "line": 126,
+          "label": "IPC 分发与 session_event 转发"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "会话 worker",
+      "sublabel": "session-worker 子进程",
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 580,
+          "label": "装配会话与工具"
+        }
+      ]
+    },
+    {
+      "id": "pi",
+      "type": "external",
+      "label": "pi SDK",
+      "sublabel": "AgentSession",
+      "sources": [
+        {
+          "path": "platform/packages/sdk-integration/src/index.ts",
+          "line": 1,
+          "label": "worker ↔ pi 适配层"
+        }
+      ]
+    },
+    {
+      "id": "proj",
+      "type": "backend",
+      "label": "事件投影",
+      "sublabel": "event-projection",
+      "sources": [
+        {
+          "path": "platform/packages/event-projection/src/index.ts",
+          "line": 165,
+          "label": "createSessionProjector"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 300,
+      "label": "prompt 进入"
+    },
+    {
+      "from": 310,
+      "to": 435,
+      "label": "事件回流"
+    },
+    {
+      "from": 445,
+      "to": 552,
+      "label": "收尾与终态"
+    }
+  ],
+  "messages": [
+    {
+      "id": "post-prompt",
+      "from": "browser",
+      "to": "entry",
+      "y": 165,
+      "label": "POST /api/sessions/:id/prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "resolve",
+      "from": "entry",
+      "to": "core",
+      "y": 192,
+      "label": "resolvePrompt（斜杠 / 附件）"
+    },
+    {
+      "id": "session-prompt",
+      "from": "core",
+      "to": "pool",
+      "y": 219,
+      "label": "session.prompt"
+    },
+    {
+      "id": "ipc-prompt",
+      "from": "pool",
+      "to": "worker",
+      "y": 246,
+      "label": "IPC __core__.prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pi-prompt",
+      "from": "worker",
+      "to": "pi",
+      "y": 273,
+      "label": "pi.prompt"
+    },
+    {
+      "id": "pi-events",
+      "from": "pi",
+      "to": "worker",
+      "y": 320,
+      "label": "原生事件流（message_update / tool_use …）",
+      "variant": "return",
+      "note": "worker 只做无损 coalescing：事件名不翻译、不改写，业务解释留给投影包"
+    },
+    {
+      "id": "session-event",
+      "from": "worker",
+      "to": "pool",
+      "y": 378,
+      "label": "session_event",
+      "variant": "dashed"
+    },
+    {
+      "id": "deliver",
+      "from": "pool",
+      "to": "core",
+      "y": 405,
+      "label": "deliver(event)"
+    },
+    {
+      "id": "project",
+      "from": "core",
+      "to": "proj",
+      "y": 452,
+      "label": "project(event)"
+    },
+    {
+      "id": "dto",
+      "from": "proj",
+      "to": "entry",
+      "y": 486,
+      "label": "会话 DTO",
+      "variant": "return"
+    },
+    {
+      "id": "sse",
+      "from": "entry",
+      "to": "browser",
+      "y": 513,
+      "label": "SSE data:",
+      "variant": "emphasis"
+    },
+    {
+      "id": "turn-end",
+      "from": "pi",
+      "to": "worker",
+      "y": 540,
+      "label": "turn 结束 / 自动压缩",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "browser",
+      "from": 160,
+      "to": 519,
+      "type": "frontend"
+    },
+    {
+      "participant": "entry",
+      "from": 165,
+      "to": 519,
+      "type": "backend"
+    },
+    {
+      "participant": "core",
+      "from": 185,
+      "to": 410,
+      "type": "backend"
+    },
+    {
+      "participant": "pool",
+      "from": 210,
+      "to": 548,
+      "type": "backend"
+    },
+    {
+      "participant": "worker",
+      "from": 240,
+      "to": 548,
+      "type": "backend"
+    },
+    {
+      "participant": "pi",
+      "from": 265,
+      "to": 548,
+      "type": "external"
+    },
+    {
+      "participant": "proj",
+      "from": 445,
+      "to": 486,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三段职责",
+      "items": [
+        "worker：只负责把 pi 的原生事件无损转发（coalescing 不改语义）",
+        "projection：把原生事件投影成会话 DTO（正文增量、工具调用、用量）",
+        "入口：只做序列化与限流，SSE 一条连接对应一次订阅"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "内核在哪里出现",
+      "items": [
+        "Session 是订阅的唯一入口：多订阅者、幂等退订、终态通知",
+        "SessionRegistry 管 worker 生命周期，WorkerPool 只管进程",
+        "信封只由 buildSystemEnvelope 构造，插件只给结构化字段"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "出错与终态",
+      "items": [
+        "worker 崩溃 → 会话拿到 session_disposed 终态事件，SSE 关流后可重连",
+        "慢订阅者被丢弃而不是回压（不让前端卡住整轮生成）",
+        "busy 时按 streamingBehavior 排队或插队，内核不解释业务"
+      ]
+    }
+  ]
+}

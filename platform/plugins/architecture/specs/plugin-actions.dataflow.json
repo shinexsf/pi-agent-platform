@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "动作契约：一份 handler 的四个投影",
+    "subtitle": "声明一次 handler，按需暴露成反向方法 / service / pi 工具 / HTTP 端点；默认值判据是「漏了会不会静默坏」",
+    "locale": "zh-CN",
+    "output": "assets/plugin-actions.dataflow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "stages": [
+    { "label": "声明" },
+    { "label": "校验" },
+    { "label": "注册表" },
+    { "label": "四个投影" },
+    { "label": "消费方" }
+  ],
+  "nodes": [
+    {
+      "id": "define",
+      "type": "backend",
+      "label": "插件声明动作",
+      "sublabel": "host.actions.define({ 名: 定义 })",
+      "stage": 0,
+      "row": 1,
+      "sources": [{ "path": "platform/packages/plugin-types/src/index.ts", "line": 640, "label": "动作定义的字段与默认值" }]
+    },
+    {
+      "id": "validate",
+      "type": "security",
+      "label": "校验与推导",
+      "sublabel": "全名 / 参数 / 工具名唯一",
+      "stage": 1,
+      "row": 0,
+      "tag": "整批拒绝",
+      "sources": [{ "path": "platform/packages/core/src/services/plugin-actions.ts", "line": 133, "label": "define 的校验与错误原因" }]
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "归属校验",
+      "sublabel": "scope: own / public",
+      "stage": 1,
+      "row": 2,
+      "tag": "信封带 source",
+      "sources": [{ "path": "platform/packages/core/src/services/plugin-actions.ts", "line": 33, "label": "ActionReach（own vs public）" }]
+    },
+    {
+      "id": "entries",
+      "type": "database",
+      "label": "动作注册表",
+      "sublabel": "Map<全名, ActionRecord>",
+      "stage": 2,
+      "row": 1,
+      "sources": [{ "path": "platform/packages/core/src/services/plugin-actions.ts", "line": 219, "label": "entries 注册表唯一存放处" }]
+    },
+    {
+      "id": "reverse",
+      "type": "backend",
+      "label": "reverse 面",
+      "sublabel": "<pluginId>.<action> 反向方法",
+      "stage": 3,
+      "row": 0,
+      "sources": [{ "path": "platform/packages/core/src/services/plugin-actions.ts", "line": 39, "label": "ActionRecord：全名与暴露面" }]
+    },
+    {
+      "id": "service",
+      "type": "backend",
+      "label": "service 面",
+      "sublabel": "namespace 定向调用",
+      "stage": 3,
+      "row": 1,
+      "sources": [{ "path": "platform/packages/core/src/services/plugin-services.ts", "line": 1, "label": "services 注册表（恰好一个提供者）" }]
+    },
+    {
+      "id": "tool",
+      "type": "backend",
+      "label": "tool 面",
+      "sublabel": "pi 工具（deferred / direct）",
+      "stage": 3,
+      "row": 2,
+      "sources": [{ "path": "platform/workers/session-worker/src/action-tools.ts", "line": 55, "label": "动作 → 工具，重名显式拒绝" }]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "http 面",
+      "sublabel": "POST /api/p/<id>/<path>",
+      "stage": 3,
+      "row": 3,
+      "sources": [{ "path": "platform/apps/pi-agent-server/src/routes/plugin-runtime.ts", "line": 140, "label": "唯一分发路由" }]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "会话 worker",
+      "sublabel": "callMaster 反向调用",
+      "stage": 4,
+      "row": 0,
+      "sources": [{ "path": "platform/workers/session-worker/src/session.ts", "line": 588, "label": "动作工具装配进会话" }]
+    },
+    {
+      "id": "other",
+      "type": "backend",
+      "label": "另一个插件",
+      "sublabel": "host.services.call",
+      "stage": 4,
+      "row": 1,
+      "sources": [{ "path": "platform/packages/core/src/host-api.ts", "line": 301, "label": "host.services 能力面" }]
+    },
+    {
+      "id": "model",
+      "type": "external",
+      "label": "模型（pi）",
+      "sublabel": "tool_search → 调用工具",
+      "stage": 4,
+      "row": 2,
+      "sources": [{ "path": "platform/workers/session-worker/src/action-tools.ts", "line": 92, "label": "exposure: deferred 才走 tool_search" }]
+    },
+    {
+      "id": "client",
+      "type": "external",
+      "label": "HTTP 客户端",
+      "sublabel": "curl / 管理页",
+      "stage": 4,
+      "row": 3,
+      "sources": [{ "path": "platform/apps/pi-agent-server/src/routes/runtime-methods.ts", "line": 49, "label": "动作目录 GET /api/runtime/actions" }]
+    }
+  ],
+  "flows": [
+    { "id": "f-define-validate", "from": "define", "to": "validate", "label": "动作定义", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-define-guard", "from": "define", "to": "guard", "label": "reach 声明", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "id": "f-validate-entries", "from": "validate", "to": "entries", "label": "登记（或不登记）", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-guard-entries", "from": "guard", "to": "entries", "label": "own 归属", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "id": "f-reverse", "from": "entries", "to": "reverse", "label": "投影 1", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-service", "from": "entries", "to": "service", "label": "投影 2", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-tool", "from": "entries", "to": "tool", "label": "投影 3", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-http", "from": "entries", "to": "http", "label": "投影 4", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "f-reverse-worker", "from": "reverse", "to": "worker", "label": "worker → master", "fromSide": "right", "toSide": "left" },
+    { "id": "f-service-other", "from": "service", "to": "other", "label": "插件间调用", "fromSide": "right", "toSide": "left" },
+    { "id": "f-tool-model", "from": "tool", "to": "model", "label": "模型可见", "fromSide": "right", "toSide": "left" },
+    { "id": "f-http-client", "from": "http", "to": "client", "label": "HTTP 请求", "fromSide": "right", "toSide": "left" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "五字段与默认值",
+      "items": [
+        "reverse：默认 true（漏了会静默坏）",
+        "scope：默认 own，public 要显式声明",
+        "service / tool / http：默认关闭（漏了会明确报错）",
+        "tool 必须给 params 且 reverse 不能为 false"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "为什么收敛成一个声明",
+      "items": [
+        "以前同一件事要写四遍：工具、HTTP、service、反向方法",
+        "一份 handler 只写一次，四张投影各自推导名字与路径",
+        "工具名冲突不许静默改名：后到者拒绝并 warn"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "已经这样用的插件",
+      "items": [
+        "admin：8 个动作，四投影全开（工具 deferred + namespace admin）",
+        "im：im.sendFile 一个动作 → sendFileToUser 工具",
+        "scheduler / webhook：聚合动作各一个工具 + 细粒度 service"
+      ]
+    }
+  ]
+}

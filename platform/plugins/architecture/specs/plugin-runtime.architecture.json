@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "插件运行期：4 个装载点 × 11 个注册扩展点",
+    "subtitle": "目录存在性表达装载点，默认导出表达行为；每个注册都返回 disposer，卸载时归零",
+    "locale": "zh-CN",
+    "output": "assets/plugin-runtime.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/shinexsf/pi-agent-platform",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "5d2a3600ec6c7dbf9f1554dc835130a04edac01b"
+    }
+  },
+  "components": [
+    {
+      "id": "dir",
+      "type": "external",
+      "label": "插件目录",
+      "sublabel": "package.json + 装载点目录",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/plugins/registry.ts",
+          "line": 1,
+          "label": "目录探测与 facade 入口"
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "database",
+      "label": "registry.json",
+      "sublabel": "用户插件台账（bundled 不进）",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugins.ts",
+          "line": 148,
+          "label": "台账与 bundled 的边界"
+        }
+      ]
+    },
+    {
+      "id": "loader",
+      "type": "backend",
+      "label": "装载器",
+      "sublabel": "import(?v=rev) → 执行 init/register",
+      "pos": [
+        290,
+        150
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "tag": "零副作用断言",
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugins.ts",
+          "line": 513,
+          "label": "startPluginRuntime"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "backend",
+      "label": "UI 面",
+      "sublabel": "R1 页面 · R9 挂载点 · R10 工具卡 · R11 顶栏",
+      "pos": [
+        570,
+        40
+      ],
+      "size": [
+        230,
+        80
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 565,
+          "label": "PluginUiApi（page / headerAction / slot / toolC"
+        }
+      ]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "HTTP 面",
+      "sublabel": "R2 段级路由 → /api/p/<id>/*",
+      "pos": [
+        570,
+        160
+      ],
+      "size": [
+        230,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 262,
+          "label": "RouteRegistration（:param / * 段级模式）"
+        }
+      ]
+    },
+    {
+      "id": "ipc",
+      "type": "backend",
+      "label": "IPC 面",
+      "sublabel": "R3 反向方法 · R5 正向方法",
+      "pos": [
+        570,
+        270
+      ],
+      "size": [
+        230,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugin-extensions.ts",
+          "line": 1078,
+          "label": "拼前缀后挂进分发表"
+        }
+      ]
+    },
+    {
+      "id": "data",
+      "type": "backend",
+      "label": "数据面",
+      "sublabel": "R4 db.migrate（plugin_migrations 台账）",
+      "pos": [
+        570,
+        380
+      ],
+      "size": [
+        230,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/db/init.ts",
+          "line": 51,
+          "label": "内核只建自己的表 + 迁移台账"
+        }
+      ]
+    },
+    {
+      "id": "piext",
+      "type": "backend",
+      "label": "pi 扩展面",
+      "sublabel": "R6 工具 · R7 命令 · R8 钩子",
+      "pos": [
+        570,
+        490
+      ],
+      "size": [
+        230,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/plugin-types/src/index.ts",
+          "line": 345,
+          "label": "worker/extension 桥（注册方法 + 工具）"
+        }
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "浏览器宿主",
+      "sublabel": "GET /api/extensions（含 revs）",
+      "pos": [
+        860,
+        40
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/apps/pi-agent-web/src/plugins/host.ts",
+          "line": 1,
+          "label": "插件页面与槽位的装载"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "会话 worker",
+      "sublabel": "工具 / skill 注入（下次 spawn 生效）",
+      "pos": [
+        860,
+        160
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/workers/session-worker/src/session.ts",
+          "line": 580,
+          "label": "按 config.plugins 注入"
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "type": "backend",
+      "label": "disposer 账本",
+      "sublabel": "卸载撤除 + rejected 可见",
+      "pos": [
+        860,
+        270
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugin-extensions.ts",
+          "line": 1,
+          "label": "四条硬规则（disposer / rejected）"
+        }
+      ]
+    },
+    {
+      "id": "boundaryhot",
+      "type": "backend",
+      "label": "热加载边界",
+      "sublabel": "server / web 立即 · worker / extension 待 spawn",
+      "pos": [
+        860,
+        390
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "platform/packages/core/src/services/plugins.ts",
+          "line": 1,
+          "label": "哪些面立即生效"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "装载器：唯一执行点",
+      "wraps": [
+        "loader",
+        "ui",
+        "http",
+        "ipc",
+        "data",
+        "piext"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "dir-loader",
+      "from": "dir",
+      "to": "loader",
+      "label": "扫描目录",
+      "variant": "emphasis"
+    },
+    {
+      "id": "registry-loader",
+      "from": "registry",
+      "to": "loader",
+      "label": "台账"
+    },
+    {
+      "id": "loader-ui",
+      "from": "loader",
+      "to": "ui",
+      "label": "register(host)"
+    },
+    {
+      "id": "loader-http",
+      "from": "loader",
+      "to": "http",
+      "label": "route"
+    },
+    {
+      "id": "loader-ipc",
+      "from": "loader",
+      "to": "ipc",
+      "label": "methods"
+    },
+    {
+      "id": "loader-data",
+      "from": "loader",
+      "to": "data",
+      "label": "migrate"
+    },
+    {
+      "id": "loader-piext",
+      "from": "loader",
+      "to": "piext",
+      "label": "extend"
+    },
+    {
+      "id": "ui-browser",
+      "from": "ui",
+      "to": "browser",
+      "label": "JSON 下发"
+    },
+    {
+      "id": "ipc-worker",
+      "from": "ipc",
+      "to": "worker",
+      "label": "spawn 摘要"
+    },
+    {
+      "id": "loader-ledger",
+      "from": "loader",
+      "to": "ledger",
+      "label": "记账"
+    },
+    {
+      "id": "ledger-hot",
+      "from": "ledger",
+      "to": "boundaryhot",
+      "label": "撤除 / 生效时机"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "11 个注册扩展点",
+      "items": [
+        "R1 整页 · R2 段级路由 · R3 反向方法 · R4 迁移 · R5 正向方法",
+        "R6 工具 · R7 命令 · R8 钩子 · R9 挂载点 · R10 工具卡 · R11 顶栏动作",
+        "每个注册都返回 disposer，卸载时按插件 id 统一撤除"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "装载点 = 目录",
+      "items": [
+        "server/ worker/ extension/ web/ 存在即声明该 facet",
+        "行为由各自的默认导出表达（没有声明式配置字段）",
+        "顶层 import 必须零副作用：注册只能发生在 init() / register() 内"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "两条命名空间",
+      "items": [
+        "global.* 与会话无关（菜单 / 页面 / 路由）",
+        "session.* 只对会话有意义（挂载点 / 工具卡）",
+        "槽位名两空间：平台闭合枚举 + 插件 `<pluginId>.<name>`"
+      ]
+    }
+  ]
+}

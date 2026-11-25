@@ -1,0 +1,6 @@
+# archify 的一次性校验回执（每次 finalize 重新生成，不是产物）
+*.finalize.json
+*.finalize-summary.json
+*.browser-check.json
+*.delivery.json
+review-*/

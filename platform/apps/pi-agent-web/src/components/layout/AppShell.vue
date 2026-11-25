@@ -18,7 +18,7 @@ import AppBreadcrumb from './AppBreadcrumb.vue';
 import AppDrawer from './AppDrawer.vue';
 import ToastHost from '../feedback/ToastHost.vue';
 import ConfirmDialogHost from '../feedback/ConfirmDialogHost.vue';
-import { useHeaderActions } from '../../plugins/headerActions';
+import { closeHeaderPanel, useHeaderActions } from '../../plugins/headerActions';
 
 const DRAWER_STORAGE_KEY = 'pi-web-drawer-open';
 
@@ -77,6 +77,9 @@ watch(
   () => {
     if (!isDesktop.value) drawerOpen.value = false;
     moreOpen.value = false;
+    // 顶栏面板是"就地展开"的浮层：站内跳转（例如通知面板的「查看全部」
+    // → /notifications、架构图面板选一张 → /architecture）后它不该继续盖着新页面。
+    void closeHeaderPanel();
   },
 );
 
@@ -133,16 +136,6 @@ onMounted(() => {
             <AppIcon name="more" :size="18" />
           </button>
 
-          <router-link
-            v-if="!isCompact"
-            class="header-icon-btn"
-            to="/architecture"
-            title="架构图"
-            aria-label="架构图"
-          >
-            <AppIcon name="architecture" :size="18" />
-          </router-link>
-
           <button
             class="theme-toggle"
             type="button"
@@ -154,10 +147,6 @@ onMounted(() => {
 
           <!-- 紧凑端的「更多」菜单：收纳溢出的插件动作 + 平台动作（架构图）-->
           <div v-if="isCompact && moreOpen" class="header-more">
-            <router-link class="header-more-item" to="/architecture" @click="moreOpen = false">
-              <AppIcon name="architecture" :size="16" />
-              <span>架构图</span>
-            </router-link>
             <button
               v-for="action in compactOverflow"
               :key="`more:${action.pluginId}:${action.id}`"
