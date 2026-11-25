@@ -493,5 +493,5 @@ REST：
 - `plugins/plugin-authoring/skills/pi-plugin-authoring/examples/hello-plugin` —— 最小集（server + web）
 - `plugins/plugin-authoring/skills/pi-plugin-authoring/examples/kitchen-sink` —— 四类 facet 全景（含 `bus.declare` / `services.provide` / `actions.define`）
 
-平台自带的 inline 插件（`sendFileToUser`）见 `workers/session-worker/src/inline-plugins.ts`：它演示了"声明 → 注入"的完整形状，也是"实现方在平台代码里"时的写法。
+inline 插件通道见 `workers/session-worker/src/inline-plugins.ts`（`INLINE_PLUGINS`，目前为空 —— 唯一那条 `sendFileToUser` 已随 `im` 插件迁到动作）：它演示了"声明 → 注入"的完整形状，也是"实现方在平台代码里、且不该由 agent 开关控制"时的写法。
 `admin` 是"平台代码 + 可停用"的范例：8 个动作一份 handler，四个投影全开。

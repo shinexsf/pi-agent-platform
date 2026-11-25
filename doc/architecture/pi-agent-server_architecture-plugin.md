@@ -1,136 +1,103 @@
-# pi-agent-web architecture-diagrams
+# pi-agent-server architecture-plugin
 
-> web 端 `/architecture` 页面：**图源 spec 进仓库 + archify 编译 + 两级切换器**。
-> 本文只讲维护这套图集需要知道的事实与流程；图本身的内容是各 `*.json` spec 的事。
+> **架构图是 bundled 插件 `platform/plugins/architecture/`**：顶栏图标 → 图列表面板 → 整页 iframe。
+> 本文讲这套东西怎么运转、加图怎么加。图本身的内容是各 `*.json` spec 的事。
 
-## 定位
+## 为什么从 SPA 搬进插件
 
-一个页面承载两类图：**本平台的架构**与**原生 pi 的模块**。两者是互不隶属的知识，混在一个 tab 行里会串味（同名概念含义不同），因此数据模型里引入「集合」这一层。
+原先它在 SPA 里：`views/ArchitectureView.vue`（301 行）+ `constants/architecture-diagrams.ts`（硬编码清单）
++ `public/architecture/**`（8 张 ~840K 的自包含 HTML，共 6.7 MB）。问题不是代码多，而是**归属错了**：
 
-三处实体，各管一件事：
+| 事实 | SPA 里的代价 |
+|---|---|
+| 图是**数据**，不是前端逻辑 | 换一张图要 `pnpm build:web` 重建整个前端 |
+| 清单是**服务端事实** | 浏览器里再存一份，加图要改两个地方 |
+| 图不依赖 Vue / 路由 / 组件库 | 却占了 SPA 的路由表与打包产物体积 |
 
-| 实体 | 位置 | 角色 |
+搬进插件后：图换文件 + `plugin reload` 即可；清单只在 server facet 里有一份；SPA 里零残留。
+
+## 目录
+
+```
+platform/plugins/architecture/
+├── package.json                { piServer: { apiVersion: "1" } }（无 requires）
+├── README.md                   加图流程（含 archify 命令与 ARCHIFY_CHROME）
+├── server/src/index.ts         清单（唯一事实源）+ 两个 UI 注册点 + 两条 HTTP 路由
+├── web/src/panel.ts            R11 顶栏面板：按集合分组的图列表
+├── web/src/viewer.ts           R1 整页：集合 × 图两级切换 + iframe + ?set=&d=
+├── specs/**/*.json             archify 图源（手写，进 git，唯一事实源）
+└── assets/**/*.html            archify 产物（进 git，随包分发）
+```
+
+## 四个注册点
+
+| 注册 | 内容 | 为什么这样 |
 |---|---|---|
-| 图源 spec（手写） | `apps/pi-agent-web/architecture/**/*.json` | **唯一事实源**：节点、连线、卡片、证据 |
-| 编译产物（生成） | `apps/pi-agent-web/public/architecture/**/*.html` | 自包含单文件，被 iframe 直接加载 |
-| 前端清单（手写） | `src/constants/architecture-diagrams.ts` | 集合 + 图的目录，决定 tab 顺序与 URL |
+| `host.ui.headerAction` | `{ id: 'diagrams', icon: 'architecture', title: '架构图', component: 'panel', order: 20 }` | 复刻旧的顶栏硬编码图标位置（插件动作排在通知之后、主题切换之前） |
+| `host.ui.page` | `{ path: '/architecture', label: '架构图', component: 'viewer', nav: false }` | **`nav: false`**：入口只在顶栏，不在导航里多一个同名项（同 `notifications` 的 `/notifications`） |
+| `host.http.route` | `GET /manifest` → `{ collections }` | 浏览器侧不硬编码任何图名 |
+| `host.http.route` | `GET /diagram/:file` → `Response(html)` | 产物托管，见下 |
 
-## 文件布局
+### 为什么产物走插件路由，而不是 `web/`
 
-```
-apps/pi-agent-web/
-├── src/
-│   ├── constants/architecture-diagrams.ts     集合与图清单（唯一目录来源）
-│   └── views/ArchitectureView.vue             两级切换器 + iframe 宿主
-├── architecture/                              图源 spec（手写，进 git）
-│   ├── pi-agent-platform.architecture.json
-│   ├── session-prompt.sequence.json
-│   ├── plugin-system.architecture.json
-│   ├── plugin-map.tree.json
-│   └── pi/                                    ← 原生 pi 集合
-│       ├── pi-lifecycle.lifecycle.json
-│       ├── pi-events.sequence.json
-│       ├── pi-extension-points.tree.json
-│       └── pi-session-file.tree.json
-└── public/architecture/                       编译产物（生成，进 git 以便 server 直接托管）
-    ├── *.html
-    └── pi/*.html
-```
+`/plugins/<id>/web/*`（`routes/plugin-assets.ts`）有两条硬约束：只读 `web/` 目录，只放行少数静态类型
+（`.js` / `.css` / `.json` / 图片 / 字体）—— **`.html` 会被 415 拒掉**。而且 `web/` 的契约是「web facet 的
+编译产物」，架构图是**数据产物**。
 
-命名约定：`<slug>.<type>.html` / `<slug>.<type>.json`，`type` 是 archify 的 diagram type（`architecture` / `sequence` / `workflow` / `lifecycle` / `tree` / `erd` / `class` / `dataflow` / `timeline` / `waterfall`）。集合 `pi` 用 `pi/` 子目录隔离。
+插件自己的 HTTP 路由可以返回标准 `Response`，平台原样透传（`plugin-runtime.ts`），所以零平台改动就能托管
+静态文件。安全性由**文件名白名单**保证：`ALLOWED_FILES` 来自清单，不是任意路径读。
 
-## 数据模型
-
-```ts
-interface ArchitectureCollection { id: string; label: string; hint: string; emptyHint: string; diagrams: ArchitectureDiagram[] }
-interface ArchitectureDiagram    { slug: string; label: string; hint: string; type: ArchitectureDiagramType; file: string }
-```
-
-约束：
-
-- **`slug` 全局唯一**（跨集合也不能重名）——老链接只带 `?d=`，靠 slug 反查集合
-- **`file` 相对 `public/architecture/`**，集合 `pi` 写 `pi/xxx.html`
-- 集合 `platform` 的第一项是默认图；集合 `pi` 的顺序即 tab 顺序
-- 集合可以**为空**（渲染占位，不渲染 iframe）——加图前先占位是允许的
-
-## URL 与运行时行为
+## 前端行为
 
 ```
 /architecture?set=<collectionId>&d=<slug>
 ```
 
-| 行为 | 实现 |
-|---|---|
-| 只有 `?d=`（老链接） | `findDiagram()` 按 slug 反查集合，仍能打开 |
-| 只切集合、不带 `d` | 优先还原该集合上次看的图（`localStorage: pi-web-architecture:<collectionId>`），否则第一张 |
-| 集合为空 | 不渲染 iframe，显示 `collection.emptyHint` + 集合级说明 |
-| 未匹配 | 落到默认集合（`platform`）的第一张图 |
+- 只给 `d=` 的老链接可用：按 slug 反查集合（**slug 必须全局唯一**）
+- 每个集合记住上次看的那张图（`localStorage`），切集合时还原
+- 首屏把 URL 补齐（`history.replaceState`），刷新与分享都能复现当前这张
+- 顶栏面板选图后 `host.ui.navigate(...)`；**平台在路由变化时会关掉顶栏面板**
+  （`AppShell` 的路由 watcher → `closeHeaderPanel()`），否则浮层会盖在新页面上
 
-**为什么用集合而不是新路由**：切换器 / iframe 宿主 / 深链逻辑只该存在一份；「集合」是数据维度不是路由维度。单开 `/pi-architecture` 会把同一段代码复制两遍，第三个集合再复制一遍。
+iframe 用 `position: fixed; top: var(--app-header-h)` 撑满视口剩余高度 —— 平台给插件页的容器默认带
+padding，而这里要的是整页画布；`--app-header-h` 是 `PLATFORM_THEME_VARS` 里的承诺变量。
 
-**为什么用 iframe**：archify 产物自带 theme、样式变量、播放/导出工具与快捷键，塞进 SPA 会与应用外壳互相污染。独立 document 是唯一稳的隔离方式（代价：图内 UI 不受 app 主题控制，它自己管）。
+## 两个集合
 
-## 生产流程
+| 集合 | 内容 | 证据 |
+|---|---|---|
+| `platform` | 本平台 6 张：内核边界 / 插件运行期 / 动作四投影 / 消息链路 / IM 网关 / 会话状态机 | 每张都带 `sources`（仓库相对路径 + 行号），编译时校验在该 commit 里存在 |
+| `pi` | 原生 pi 4 张：生命周期 / 事件流 / 扩展点 / 会话文件 | 讲的是依赖的下游，不随本平台演进，随第一批移植过来未重新生成 |
 
-```mermaid
-flowchart LR
-  A["手写 spec<br/>architecture/**/*.json"] --> B["archify finalize<br/>--repo-root --quality showcase"]
-  B --> C{"四道门<br/>validate / deliver / check / browser-check"}
-  C -->|"pass"| D["public/architecture/**/*.html"]
-  C -->|"fail"| E["按诊断改 spec<br/>只改被点名的分支"]
-  E --> B
-  D --> F["constants 里登记一项"]
-  F --> G["pnpm build:web<br/>copy-spa → server/public/web"]
-```
+## 加图 / 改图
 
-命令（在**仓库根**执行，`--repo-root` 指向仓库根）：
+1. 写 `specs/<name>.<type>.json`（`type` ∈ architecture / sequence / workflow / dataflow / lifecycle /
+   erd / tree / class / timeline / waterfall）
+2. 生成产物 —— `finalize` 内含 validate + deliver + strict check + **真实浏览器视觉校验**：
 
 ```bash
-node <skill>/bin/archify.mjs finalize <type> \
-  platform/apps/pi-agent-web/architecture/<slug>.<type>.json \
-  platform/apps/pi-agent-web/public/architecture/<slug>.<type>.html \
-  --repo-root . --quality showcase --json
+cd platform/plugins/architecture
+ARCHIFY_CHROME=$HOME/.cache/ms-playwright/chromium-1194/chrome-linux/chrome \
+  node ~/.pi/agent/skills/archify/bin/archify.mjs finalize <type> \
+    specs/<name>.<type>.json assets/<name>.<type>.html \
+    --repo-root /home/shinexsf/code/pi-agent-platform --quality showcase --json
 ```
 
-要点：
+3. 在 `server/src/index.ts` 的 `COLLECTIONS` 里加一行（slug 全局唯一）
+4. `pnpm build:plugins architecture` → `pi-server plugin reload architecture`（浏览器刷新）
 
-- **`finalize` 是唯一入口**：它一次跑完 `validate` → `deliver` → strict `check` → 真浏览器 `browser-check`，任一失败即停并给 `supportedFixes`
-- **`browser-check` 需要真浏览器**：没有系统 Chrome 时用 `ARCHIFY_CHROME=<chrome 可执行文件>` 指到 Playwright 的 chromium，否则该门被 `skipped`、`finalize` 不算通过
-- **产物必须落在 `public/` 下**：`copy-spa.mjs` 会 `rm -rf` 目标目录再整体复制，落在别处的文件进不了发布产物
-- **改一次算一轮**：同一输出路径已经有浏览器证据时，重跑要带 `--out-dir <dir>/review-N`，否则旧证据与旧字节不匹配
+约束（archify 校验，不过不产文件）：
 
-## 证据规则（两类图不同）
+- `meta.repository` 必须写凭据无关地址 + **40 位 commit**；`sources` 的行号要在该 commit 里真实存在
+- `meta.output` 是相对工作目录的 POSIX 路径（这里固定 `assets/<name>.<type>.html`）
+- 布局规则很严（子标签宽度、标签与连线间距、边界不能套住非成员…），报错会给出 `supportedFixes`
 
-| | 本平台集合 | 原生 pi 集合 |
-|---|---|---|
-| 节点 `sources` | **每个组件都带**（仓库相对路径 + 行号） | 无——pi 在 `node_modules`（gitignored），没有可验证的仓库来源 |
-| 来源校验 | 编译时对照 `meta.repository.revision` 的**已提交字节** | 不适用 |
-| 版本锚点 | `meta.repository`（url + 40 位 revision） | 标题里钉版本（如「pi 1.3.0」） |
-| 结论沉淀 | 走 `doc/architecture/` | 走**本地 pi 源码知识库**（gitignored，不随仓库发布；维护方式见 `.pi/skills/pi-knowledge`） |
+`finalize` 会写出 `*.finalize.json` / `*.browser-check.json` 等一次性回执，插件目录的 `.gitignore` 已忽略。
 
-平台图的 `revision` 是快照：代码改了图不会自动跟着变，需要重跑 `finalize`。因此**图只反映生成时那一刻的代码**，这一点在图的标题/卡片里不重复声明，靠本条约定。
+## 平台侧的清理（这次一起删掉的）
 
-## 加一张图的 checklist
+- `apps/pi-agent-web/src/views/ArchitectureView.vue`、`src/constants/architecture-diagrams.ts`
+- `apps/pi-agent-web/public/architecture/**`（产物迁进插件 `assets/`）、`architecture/**`（图源迁进 `specs/`）
+- `main.ts` 里的 `/architecture` 路由、`AppShell.vue` 两处硬编码入口、`nav-tree.ts` 的 icon 分支
 
-1. 写 spec 到 `architecture/<slug>.<type>.json`（集合 pi 放 `architecture/pi/`），`meta.output` 指向 `public/architecture/...`
-2. 跑 `archify finalize`（带 `ARCHIFY_CHROME`），失败就按诊断改，别整体重写
-3. `constants/architecture-diagrams.ts` 里对应集合的 `diagrams` 加一项（`slugs` 不能撞）
-4. `pnpm build:web` → 刷新页面验证 tab 与深链
-5. 平台图改完顺手核对受影响的 `doc/architecture/` 文档
-
-## 已知约束与坑
-
-| 现象 | 原因 / 对策 |
-|---|---|
-| 改完 spec 页面没变 | 产物是静态文件：必须重跑 `finalize` 再 `pnpm build:web`（或直接覆盖 `server/public/web/architecture/` 下同名文件） |
-| `browser-check` 一直 `skipped` | 没系统 Chrome；`export ARCHIFY_CHROME=<path>`（Playwright chromium 在 `~/.cache/ms-playwright/chromium-*/chrome-linux/chrome`） |
-| `finalize` 报 `viewer/chrome-unavailable` 以外的 `check` 失败 | 几何门禁（走线、标签间距、节点重叠）；按 `supportedFixes` 调坐标，别删语义 |
-| 图太宽看不干净 | architecture 画布建议 ≤1240px（≥1.55 宽高比可到 1790px）；lifecycle 超 1395px 直接判失败；sequence 靠 `column_fit` / 自动高度 |
-| 图里浮动的「路径/透镜/100%」挡住内容 | 那是 archify 前端的固定浮层，会随滚动一直浮在视口右下角，不是布局错误 |
-| 页面在紧凑断点看不到入口 | 路由带 `meta.mobileHidden: true`（抽屉里不出现），且说明文字在 <860px 隐藏 |
-
-## 相关文档
-
-- 路由与其他页面：[pi-agent-web overview](pi-agent-web_overview.md)
-- 图生成工具：archify skill（`~/.pi/agent/skills/archify`），命令与门禁见其 `SKILL.md` / `references/delivery-contract.md`
-- pi 自身模块的事实来源：本地 pi 源码知识库（gitignored，不随仓库发布）
+所以现在 `/architecture` 这个路径**完全由插件提供**：插件停用 → 顶栏图标与页面一起消失，平台其余功能不受影响。

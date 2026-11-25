@@ -79,7 +79,7 @@ flowchart LR
 | ③ pi 原生扩展 | 会话 worker 内的 pi 扩展系统，`extension/index.js` | 下次创建会话 | 同上 |
 | ④ 浏览器 | SPA，`web/*.js`（`mount(el, host)`） | 浏览器下次加载 / 刷新 | `apps/pi-agent-web/src/plugins/host.ts` |
 
-**平台自身能力走同一条路**：`sendFileToUser` 是 worker 侧的 **inline 插件**（`workers/session-worker/src/inline-plugins.ts`），编译进平台、不经目录发现、不可卸载，但注册动作与目录插件完全一致。判定分界 = **实现方在不在平台代码里**。
+**平台自身能力走同一条路**：worker 侧有 **inline 插件**通道（`workers/session-worker/src/inline-plugins.ts`）—— 编译进平台、不经目录发现、不可卸载，但注册动作与目录插件完全一致。判定分界 = **实现方在不在平台代码里**。当前清单为空：最后一项 `sendFileToUser` 已随 `im` 插件迁到 `im.sendFile` 动作（工具名不变）。
 
 原 `callServer`（8 个管理能力）已改为 bundled 插件 `admin` 的**动作**：它的实现方是平台代码，但"平台管理"本身是可停用的能力，所以走插件形态 —— `enabled:false` 之后平台照样能建 agent、开会话、聊完一轮。
 
@@ -204,12 +204,13 @@ host.bus.subscribe('webhook.delivery.failed', (p) =>
 | 插件的 `extension/` facet（R6） | 纯 worker 内完成的工具（现有插件已无此类） | 插件在 `agent.config.plugins` 里 |
 | 插件的 `worker/` facet | 正向方法（agent 工具 → `bridge.call`） | 同上 |
 | 插件的 `skills/<name>/SKILL.md` | `scheduler` / `webhook` 的用法说明 | 同上 |
-| **inline 插件**（编译进平台） | `sendFileToUser` | 恒注入（不随 `config.plugins`） |
-| **动作的 `tool` 面**（平台接管注册） | `admin__*` 8 个、`postNotification`、`publishHtmlView`、`schedule_task`、`manage_webhook` | 插件在 `agent.config.plugins` 里，且动作声明了 `tool` |
+| **inline 插件**（编译进平台） | 当前为空（`sendFileToUser` 已随 `im` 插件迁走） | 恒注入（不随 `config.plugins`） |
+| **动作的 `tool` 面**（平台接管注册） | `admin__*` 8 个、`sendFileToUser`、`notifications__post`、`publishHtmlView`、`schedule_task`、`manage_webhook` | 插件在 `agent.config.plugins` 里，且动作声明了 `tool` |
 
 `inline` 与目录插件的判定分界是**实现方在不在平台代码里**，但这条只用来判断"要不要目录"；
 **能不能停用**是另一个问题 —— 管理动作的实现方是平台代码，却做成了 `admin` 插件，因为
-"平台管理"是可停用的能力。真正恒注入的只剩 `sendFileToUser`（网关侧的传输原语）。
+"平台管理"是可停用的能力。曾经唯一恒注入的 `sendFileToUser` 也已归 `im` 插件，所以
+**现在没有任何工具绕过 `config.plugins`** —— 这一栏留着是因为通道仍然是内核的一部分。
 
 ### 动作契约：一份 handler，四个独立投影
 

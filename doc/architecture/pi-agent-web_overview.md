@@ -60,7 +60,6 @@ src/views/
 ├── notifications/
 │   └── NotificationsView.vue    /notifications（header 铃铛入口，mobileHidden）
 ├── ChatView.vue                 /chat/:id（聊天页，独立于 AppShell）
-├── ArchitectureView.vue         /architecture（iframe，mobileHidden）
 ├── agents/
 │   └── AgentEditorView.vue      /agents/new | /agents/:id/edit
 ├── config/
@@ -89,7 +88,6 @@ src/views/
 /sessions                            SessionsListView
 /chat/:id                            ChatView（独立，不套 AppShell）
 /im/:channelType?                    ChannelsView
-/architecture                        ArchitectureView（mobileHidden；集合 × 图两级切换）
 /config                              ConfigView（嵌套壳）
   /config                            → redirect config-models
   /config/models                     ModelsConfig
@@ -339,7 +337,7 @@ function useTheme() {
 - [`pi-agent-server_overview.md`](pi-agent-server_overview.md) —— server 端架构
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— HTTP API 路由
 - [`pi-agent-server_im-gateway.md`](pi-agent-server_im-gateway.md) —— IM 渠道包（后端+前端一体化）
-- [`pi-agent-web_architecture-diagrams.md`](pi-agent-web_architecture-diagrams.md) —— `/architecture` 架构图集（集合 × 图切换、图源 spec 与编译产物、加图流程）
+- 架构图已搬出 SPA：见 [`pi-agent-server_architecture-plugin.md`](pi-agent-server_architecture-plugin.md)（bundled 插件，路径 `/architecture` 由它注册）
 - OpenSpec change `responsive-web-layout`（本地工作流产物，不引用路径）—— 本次重构的完整设计文档（proposal/design/tasks/specs）
 
 ## 资源配置区的收缩（2026-11-21）
