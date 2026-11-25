@@ -61,6 +61,8 @@ export interface ActionInfo {
   reverse: boolean;
   service: boolean;
   hasTool: boolean;
+  /** 暴露成工具时的工具名（`hasTool` 为 false 时为 null）。 */
+  toolName: string | null;
   http: string | null;
   hasParams: boolean;
 }
@@ -225,6 +227,7 @@ export function createPluginActions(): PluginActions {
     reverse: r.reverse,
     service: r.service,
     hasTool: r.tool !== undefined,
+    toolName: r.tool?.name ?? null,
     http: r.httpPath ?? null,
     hasParams: r.params !== undefined,
   });

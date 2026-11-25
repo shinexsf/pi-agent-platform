@@ -1,5 +1,5 @@
 /**
- * prompt-resolver — unified prompt resolution for both HTTP and IM paths.
+ * prompt-resolver — HTTP 入口的 prompt 预解析（斜杠命令 / 附件占位符 / streamingBehavior）。
  *
  * Pipeline:
  *   1. Slash command check (short-circuit with `intercepted` response)
@@ -7,8 +7,9 @@
  *   3. Agent config loading (from session table, fallback to opts.agentId)
  *   4. StreamingBehavior determination
  *
- * Both `routes/sessions.ts` (HTTP) and `im-gateway/routing.ts` (IM) call
- * this function, ensuring identical behavior across channels.
+ * 目前唯一的调用者是 `apps/pi-agent-server/src/routes/sessions.ts`。IM 那条路径已经
+ * 随网关下沉为插件，走 `host.sessions.ensure/prompt`，不再经过这里 —— 所以下面
+ * `allowSteer` 分支目前没有生产调用者（保留是因为"IM 侧默认 steer"仍是一条有效语义）。
  */
 
 import path from 'node:path';

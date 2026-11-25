@@ -580,8 +580,8 @@ export async function createSession(
       })()
     : undefined;
 
-  // Server-side tools come from inline plugins (sendFileToUser) with no per-agent
-  // allowlist anymore — plugin effectiveness decides.
+  // Server-side tools come from inline plugins（当前为空：sendFileToUser 已随 im 插件迁走），
+  // 没有逐 agent 白名单 —— plugin effectiveness decides。
   const customTools = createServerTools(sessionId, callMaster);
 
   // 动作工具：插件声明 `tool` 的动作由平台统一注册（作者不再手抄 registerTool）。

@@ -2,7 +2,10 @@
  * 内核（@pi-agent-platform/core）。
  *
  * 只放会话内核与它的直接依赖：内核对象的仓储、会话生命周期、worker 进程域、
- * 能力控制面、插件宿主、宿主 API 与基础设施（日志 / 路径 / 配置注入）。
+ * 插件宿主、宿主 API 与基础设施（日志 / 路径 / 配置注入）。
+ *
+ * 曾经有一个「能力控制面」（capabilities/，`serverBuiltinTools` 逐 agent 白名单）
+ * 已经完全下沉为 bundled 插件 `admin` —— 这里不再有任何授权/白名单代码。
  *
  * 依赖方向单向：入口应用（HTTP server / 未来的桌面端）依赖本包，本包不依赖任何
  * 入口应用。平台功能（通知、配置模板、渠道网关、静态托管）留在入口侧。
@@ -34,8 +37,6 @@ export * from './services/extension-utils.js';
 export * from './services/plugins.js';
 export * from './prompt-resolver.js';
 export * from './slash-commands.js';
-
-// ── 能力控制面 ──
 
 // ── 插件宿主 ──
 export * from './services/plugin-extensions.js';

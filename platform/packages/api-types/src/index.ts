@@ -494,6 +494,8 @@ export interface PluginActionDTO {
   service: boolean;
   /** 是否暴露成 pi 工具（模型可见，取决于 `tool_search` / exposure）。 */
   hasTool: boolean;
+  /** 工具名（暴露为工具时才有，否则 null）。 */
+  toolName: string | null;
   /** HTTP 子路径（相对 `/api/p/<owner>`），未暴露为 null。 */
   http: string | null;
   /** 是否带 JSON Schema（tool / http 面必然有）。 */

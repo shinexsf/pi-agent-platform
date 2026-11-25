@@ -527,7 +527,7 @@ section('5b) 会话级插件启用列表（agent.config.plugins）');
   );
 }
 
-section('6) inline 插件（工具归属与自动注入）');
+section('6) inline 插件通道（工具归属与自动注入）');
 const { createServerTools } = (await import(
   path.join(platformRoot, 'workers/session-worker/src/tools.js') as string
 )) as {
@@ -540,8 +540,13 @@ const { createServerTools } = (await import(
 const noopCall = async () => ({});
 
 // `callServer` 已随 capabilities 一起退役：管理动作改由 `admin` 插件声明（动作契约）。
+// `sendFileToUser` 也跟着走了：它现在是 `im` 插件的 `im.sendFile` 动作，工具名不变。
+// inline 通道本身保留（清单可以空）—— 断言改成“通道在、并且不再吐任何工具”。
 const inlineTools = createServerTools('s1', noopCall);
-check(inlineTools.some((t) => t.name === 'sendFileToUser'), 'inline 插件 sendFileToUser 自动注入（无逐 agent 白名单）');
+check(
+  !inlineTools.some((t) => t.name === 'sendFileToUser'),
+  'sendFileToUser 不再由 inline 插件提供（已归 im 插件的动作面）',
+);
 check(
   !inlineTools.some((t) => t.name === 'callServer'),
   'callServer 不再存在（管理动作迁到 admin 插件的动作面）',

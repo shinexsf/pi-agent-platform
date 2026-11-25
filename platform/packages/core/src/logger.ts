@@ -19,7 +19,7 @@
  *   - The startup banner is the only raw-stdout citizen (process.stdout.write).
  *
  * Other logger entry points (all end up on this timeline):
- *   - im-gateway/logger.ts       — child logger ({ name: 'im-gateway' }) of this instance
+ *   - 插件（server facet）      — `host.log(...)` → child logger({ pluginId })
  *   - channels/shared/logger.js  — uses globalThis.__piPlatformLogger (set below) when
  *                                  loaded in-process; own pino only as standalone fallback
  *   - workers/session-worker     — separate process: pino → stderr, re-logged line-by-line

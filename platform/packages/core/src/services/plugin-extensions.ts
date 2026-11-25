@@ -3,17 +3,23 @@
  *
  * 装载点与它们的注册动作（按 facet 落位）：
  * - `server/index.js` 的 `init(host)` —— R1 页面 / R2 HTTP 路由 / R3 反向方法 / R4 表迁移
- * - `web/index.js` 的 `register(host)` —— 旧式 UI 注册入口（过渡期保留，内部转调新面）
- * - 浏览器侧 `mount(el, host)` 与本模块无关
+ * - `web/index.js` 的 `register(host)` —— 浏览器侧的**注册**入口（由 server 进程执行，
+ *   这里没有 window / document）。它注册的是"浏览器要装什么"（页面 / 槽位 / 工具卡），
+ *   真正渲染发生在浏览器；组件本体是 `mount(el, host)`，与本模块无关。
+ * - `worker/`、`extension/` 由 worker 侧按 spawn 参数装载，也不在本模块
  *
  * 四条硬规则（本模块是它们的唯一执行点）：
  * 1. **每个注册/订阅返回 disposer**，按插件 id 记账；重载/卸载时统一撤除，撤完断言归零
- * 2. **宿主能力面真正可达**：插件拿到的 `host` 是入口实现的 `HostApi`（四个能力面）
- *    —— 这是 change: plugin-mechanism-v2 修掉的"死接口"
+ * 2. **宿主能力面真正可达**：插件拿到的 `host` 是入口实现的 `HostApi`
+ *    （八个能力面 + `events` 出口 + `dataDir` 可写目录）—— 不是声明了却没人传的空接口
  * 3. **无效注册一律进 `rejected`**，绝不静默丢弃
  * 4. 插件 HTTP 端点走唯一一条分发路由（Hono 路由表首次请求后冻结）
  *
- * 旧字段（`global.*` / `session.*`）作为别名保留一个版本，内部转调新面。
+ * **两套命名空间都是正式契约，不是过渡别名**：
+ * - `global.*`（menus / pages / routes）与会话无关，是全局 chrome
+ * - `session.*`（surfaces / toolCards）只对会话有意义
+ * 它们定义在 `@pi-agent-platform/plugin-types` 的 `PluginRegistrationHost` 上，
+ * 所有随包插件都在用（例如 `html-showcase` 注册 `host.session.surfaces`）。别当遗留删掉。
  */
 
 import { existsSync, statSync } from 'node:fs';
@@ -495,8 +501,10 @@ function warnOnce(id: string, key: string, message: string): void {
 /**
  * 构造插件拿到的 `host`。
  *
- * 新面（`sessions` / `agents` / `db` / `lifecycle` / `events` / `ui` / `http` / `methods`）
- * 是真接口；旧面（`global.*` / `session.*`）保留一个版本作为别名，内部转调新面。
+ * 两组面都是**正式契约**（都在 `plugin-types` 里声明）：
+ * - 能力面：`sessions` / `agents` / `db` / `lifecycle` / `bus` / `services` / `actions` /
+ *   `attachments` + `events` 出口 + `dataDir`
+ * - 注册面：`ui` / `http` / `methods`（v2 写法）与 `global.*` / `session.*`（同义注册入口）
  */
 function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost & {
   global: {
@@ -825,7 +833,7 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
         });
       },
     },
-    // ── 旧面别名（保留一个版本）──
+    // ── 注册面：`global.*` / `session.*`（与上面的 ui/http 同义，都是正式契约）──
     global: {
       menus: { register: (def) => registerMenu(id, def) },
       pages: { register: (def) => registerPage(id, def) },

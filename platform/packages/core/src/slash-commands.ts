@@ -1,9 +1,9 @@
 /**
- * Builtin slash commands for IM gateway + HTTP command endpoint.
+ * 内置斜杠命令（`/help` `/new` `/session` …）—— **HTTP 聊天入口那一层**的 UX。
  *
- * Core-layer module (core-session-refactor Phase A): lives at src/ root — NOT
- * under im-gateway/ — because prompt-resolver (core) and the IM gateway both
- * call it. Zero channel-types / ChannelHost dependencies.
+ * 现状：唯一调用者是 `prompt-resolver.ts`（→ `routes/sessions.ts`）。IM 网关已下沉为
+ * 插件，自己处理 `/new`（要重新绑定），不再经过这里。会话级动作（model / think /
+ * compact / name）真正落在内核的 `Session.executeCommand`，本文件只是命令分发壳。
  *
  * 8 commands: /help /new /session /model /think /compact /name /hotkeys
  * Each returns either a string response (sent back to user via adapter.sendText)
@@ -18,7 +18,7 @@ import { sessionRegistry } from './services/session.js';
 
 const logger = childLogger('slash-commands');
 
-/** Command name union (moved here from im-gateway/types.ts — only consumer). */
+/** 命令名联合（分发壳自己用；没有别的模块 import 它）。 */
 export type BuiltinCommand = 'help' | 'new' | 'session' | 'model' | 'think' | 'compact' | 'name' | 'hotkeys';
 
 export const BUILTIN_COMMAND_NAMES: BuiltinCommand[] = [

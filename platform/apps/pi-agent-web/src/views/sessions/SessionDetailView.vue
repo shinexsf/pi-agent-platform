@@ -127,6 +127,8 @@ interface PluginCandidate {
   piExtension: boolean;
   workerFacet: boolean;
   skills: string[];
+  /** 动作暴露成的工具名（运行期事实）。 */
+  tools: string[];
 }
 const availableExtensions = ref<{ names: string[]; plugins: PluginCandidate[] }>({
   names: [],
@@ -138,6 +140,7 @@ function pluginProvides(p: PluginCandidate): string {
   if (p.piExtension) parts.push('pi 扩展（工具/命令）');
   if (p.workerFacet) parts.push('worker 方法');
   if (p.skills.length) parts.push(`skill: ${p.skills.join(', ')}`);
+  if (p.tools?.length) parts.push(`工具: ${p.tools.join(', ')}`);
   return parts.join(' · ') || '无会话内能力';
 }
 const skillNames = computed(() => availableSkills.value.map(i => i.name));

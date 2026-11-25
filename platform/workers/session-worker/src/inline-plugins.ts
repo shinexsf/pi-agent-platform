@@ -9,11 +9,13 @@
  * 禁用谁会让它消失"这类问题无法回答。改成 inline 声明后，归属是数据（`id`）。
  *
  * 判定分界（design D16）：**实现方在不在平台代码里**。
- * - 在（`sendFileToUser` 的网关侧）→ inline，随平台走
+ * - 在（`callServer` 这类直接操作平台内部的）→ inline，随平台走
  * - 不在（`postNotification` 的收件箱、im 渠道能力、平台管理动作）→ 随**那个插件**走，
  *   插件停用 → 工具消失（`admin` 插件就是这样接管了原 `callServer` 的 8 个能力）
  *
- * 没有逐 agent 白名单了（`serverBuiltinTools` 已退役）：**插件生效 → 工具自动注入**。
+ * **当前清单为空**：最后一项 `sendFileToUser` 已随 `im` 插件落地迁走（现在是 `im.sendFile`
+ * 动作，工具名不变）—— 留两份同名工具没有意义：inline 先占名、动作侧被跳过并 warn。
+ * 通道本身保留：下一个"实现方就在平台代码里"的工具仍该用它，而不是回到硬编码壳。
  */
 
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
@@ -38,70 +40,11 @@ export interface InlinePluginDefinition {
   };
 }
 
-// ── sendFileToUser（inline：实现方是 im 网关，属平台代码）─────────────────────
-// 归属：im 插件（等它落地时随 R6 迁过去，届时 inline 这一项删除）。
-// 现在没有逐 agent 开关了，所以它对所有会话可用；没有 IM 渠道时调用会得到反向方法
-// 不存在的错误 —— 那是运行期事实，不是配置问题。
+// ── sendFileToUser（已迁走 → im 插件）───────────────────────────────────────────
+// 它曾经是这里的 inline 插件（当时的 im 网关在平台代码里）。im 下沉为插件后，工具随
+// `im.sendFile` 动作走 —— 两份同名工具没意义（inline 先占名、动作侧被跳过并 warn），
+// 所以删掉。归属台账见 `doc/architecture/pi-agent-server_plugins-runtime.md`。
 
-const sendFileToUserSchema = {
-  type: 'object',
-  properties: {
-    filePath: { type: 'string', description: 'Absolute path to the file to send' },
-    fileName: {
-      type: 'string',
-      description: 'Friendly display name without extension (system auto-appends the correct extension from the actual file)',
-    },
-  },
-  required: ['filePath'],
-  additionalProperties: false,
-} as const;
 
-interface SendFileToUserParams {
-  filePath: string;
-  fileName?: string;
-}
-
-function createSendFileToUserTool(sessionId: string, callMaster: CallMasterFn): ToolDefinition {
-  return {
-    name: 'sendFileToUser',
-    label: 'Send File To User',
-    description:
-      'Send a file to the user through the active IM channel (QQ / WeChat). Use absolute paths inside the workspace.',
-    promptSnippet: 'Send a file to the user via IM',
-    parameters: sendFileToUserSchema as any,
-    execute: async (
-      _toolCallId: string,
-      params: SendFileToUserParams,
-      _signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown,
-    ) => {
-      try {
-        const result = await callMaster('im.sendFile', [
-          { sessionId, filePath: params.filePath, fileName: params.fileName },
-        ]);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result ?? { ok: true }) }],
-          details: result ?? { ok: true },
-        };
-      } catch (err) {
-        const errorMsg = `Failed to send file: ${(err as Error).message}`;
-        return {
-          content: [{ type: 'text' as const, text: errorMsg }],
-          details: { error: errorMsg },
-        };
-      }
-    },
-  };
-}
-
-/** 平台自带的 inline 插件清单。新增一个 = 在这里加一项（不需要目录、不需要 registry）。 */
-export const INLINE_PLUGINS: readonly InlinePluginDefinition[] = [
-  {
-    id: 'sendFileToUser',
-    apiVersion: '1',
-    extension: {
-      tools: ({ sessionId, callMaster }) => [createSendFileToUserTool(sessionId, callMaster)],
-    },
-  },
-];
+/** 平台自带的 inline 插件清单（当前为空；见上面 sendFileToUser 的迁移说明）。 */
+export const INLINE_PLUGINS: readonly InlinePluginDefinition[] = [];

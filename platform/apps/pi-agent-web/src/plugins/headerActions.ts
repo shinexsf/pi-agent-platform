@@ -73,6 +73,11 @@ const openPanel: ShallowRef<OpenPanel | null> = shallowRef(null);
 /** 当前打开的面板 key（`<pluginId>:<actionId>`），没有则 null。 */
 export const activePanelKey = openPanel;
 
+/** 关掉当前面板（宿主用：站内跳转后面板不该继续浮在新页面上）。 */
+export async function closeHeaderPanel(): Promise<void> {
+  await closePanel();
+}
+
 async function closePanel(): Promise<void> {
   const current = openPanel.value;
   if (!current) return;

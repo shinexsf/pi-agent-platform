@@ -5,8 +5,8 @@
  * 曾经的"硬编码壳 + `serverBuiltinTools` 逐 agent 白名单"已经退役：
  * 工具归属谁，就该由谁的开关决定 —— **插件生效 → 工具自动注入**。
  *
- * - `sendFileToUser`：inline 插件（实现方是 im 网关，随 im 插件落地后迁走）
- * - `postNotification`：notifications 插件的 extension facet（插件停用 → 工具消失）
+ * 现在清单是空的（`sendFileToUser` 已随 `im` 插件迁到动作，工具名不变）。
+ * 模板与会话仍走这条聚合，以便下一个 inline 工具直接接入。
  */
 
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';

@@ -1,20 +1,17 @@
 /**
- * services/session — shared spawn helpers used by both routes/sessions.ts (web/IDE)
- * and im-gateway/routing.ts (IM channels).
+ * services/session — 会话内核（Session 领域对象 + SessionRegistry 单入口）。
  *
- * Extracted from routes/sessions.ts (then im-gateway/session-bridge) and moved
- * core-ward: IM gateway re-uses the exact same session lifecycle (placeholder →
- * first prompt → active) without going through HTTP, but the CORE owns it — this
- * file must not live under im-gateway/ (core must never import im-gateway).
+ * 谁会用到它：HTTP 路由（web / IDE）与插件（IM 网关走 `host.sessions.*`，
+ * 不经过 HTTP）。两边复用**同一套**生命周期（占位 → 首条消息 → 活跃），
+ * 所以它必须在内核里 —— 内核不得反向依赖任何入口或插件。
  *
- * Phase A of core-session-refactor: file relocated + SessionRegistry facade
- * (getOrCreate / createFromAgent / dispose / list) — spawnPlaceholder /
- * spawnAndCreate are now MODULE-PRIVATE; all consumers must go through the
- * registry (sole entry). Phase B: domain state (hasRow / model /
- * thinkingLevel / sessionName / systemPrompt / piSessionPath / agentId)
- * migrated OFF WorkerEntry ONTO Session; event subscription + dispose live
- * here too; worker-pool only forwards (`session_event` emitter) and asks the
- * registry via injected hasRowQuery (LRU / list() semantics preserved).
+ * 结构：
+ * - `SessionRegistry` 是唯一入口（getOrCreate / createFromAgent / ensure / dispose / list）；
+ *   `spawnPlaceholder` / `spawnAndCreate` 是模块私有，外部只能经 registry。
+ * - 领域状态（hasRow / model / thinkingLevel / sessionName / systemPrompt /
+ *   piSessionPath / agentId）在 `Session` 上，**不在 WorkerEntry 上**；
+ *   事件订阅与销毁也在这里；worker-pool 只转发 `session_event`，
+ *   并通过注入的 hasRowQuery 反过来问 registry（LRU / list() 语义保持不变）。
  */
 
 import type { RuntimeConfig, AgentConfig } from '@pi-agent-platform/shared-types';

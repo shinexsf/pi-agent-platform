@@ -1,13 +1,13 @@
 /**
- * 插件加载与会话级闸门（change: plugin-mechanism，骨架）。
+ * 插件加载与会话级闸门。
  *
  * 职责：
  * - 读 `registry.json` + 扫安装目录（孤儿检测），算出每个插件的运行时状态
  * - 按会话解析可用插件集合（`requires.plugins` 校验，**绝不代勾**）
- * - 监听注册表变化（server / web facet 立即生效；worker / extension 待下次 spawn）
+ * - 监听注册表变化并驱动 `reload()`（server / web facet 立即生效；worker / extension 待下次 spawn）
  *
- * 不负责：facet 的实际装载（server facet 装载不在本 change 范围；extension/worker
- * 由 worker 侧按 spawn 参数装载）。
+ * 与本文件的分工：**`startPluginRuntime()`（在 `services/plugin-extensions.ts`）负责
+ * 真正 import 并在四个装载点执行注册**；本文件只负责"目录 → 快照/状态"与按会话裁剪。
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';

@@ -1,8 +1,9 @@
 /**
- * session-ops — shared session mutation helpers used by BOTH the HTTP routes
- * and the callServer capability control plane (capabilities/).
+ * session-ops — shared session mutation helpers used by the HTTP routes and by
+ * 插件动作（`admin` 的 `session.update` 走同一条实现）。
  *
- * Extraction rationale (callserver-control-plane, task 2.1): rename semantics
+ * Extraction rationale（原本是 capabilities 控制面与 HTTP 路由共用；控制面已下沉
+ * 为 admin 插件，但"改名语义只写一遍"这个理由仍然成立）: rename semantics
  * (worker alive → setSessionName IPC + session_info_changed event回流; dead →
  * direct DB write + heal on next load) must have a SINGLE implementation —
  * otherwise the control plane would re-implement the branch logic and the two

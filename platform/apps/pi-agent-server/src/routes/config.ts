@@ -16,6 +16,7 @@ import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 import type { ServerConfig } from '../config.js';
 import { getPluginSnapshot, uploadSingleExtension, extractExtensionNames, readSettings } from '@pi-agent-platform/core';
+import { pluginActionSnapshot } from '../host-api-impl.js';
 import { initModelRegistry, getInitializedRuntime } from '../model-registry.js';
 import { childLogger } from '@pi-agent-platform/core';
 import {
@@ -152,6 +153,8 @@ interface ExtensionInfo {
   pluginId?: string;
   /** true = 由平台插件自动装载，不在 agent 的 extensions 白名单里控制。 */
   auto?: boolean;
+  /** `source === 'plugin'` 时：这个插件往会话里塞了什么（人话清单，如 `工具: sendFileToUser`）。 */
+  provides?: string[];
 }
 
 /**
@@ -159,6 +162,12 @@ interface ExtensionInfo {
  *
  * 判定依据是插件快照：`facets.extension === true` 且插件本身 active。
  * 名字用 `plugin:<id>` —— 与装载时 inline factory 的命名一致，便于日志对照。
+ *
+ * **会话内能力有四个来源，一个都不能漏**：`extension` facet（工具/命令/钩子）、
+ * `worker` facet（正向方法）、插件自带 skill、以及**动作工具**（`actions` 里带 `tool` 的）。
+ * 前三个是静态的（看得见的目录），第四个是运行期的（admin / im / notifications 的
+ * 工具全走这条），只看 facets 会让这三只从候选里消失 —— 在 agent / session 编辑页
+ * 表现为“该插件在当前环境中不存在”，而实际上它一直在给会话注入工具。
  */
 function pluginSessionCandidates(pluginsDir: string): Array<{
   id: string;
@@ -169,18 +178,34 @@ function pluginSessionCandidates(pluginsDir: string): Array<{
   workerFacet: boolean;
   /** 插件自带的 skill 名（`skills/<name>/SKILL.md`）。 */
   skills: string[];
+  /** 动作暴露成的工具名（运行期事实）。 */
+  tools: string[];
 }> {
   try {
+    const toolsByOwner = new Map<string, string[]>();
+    for (const action of pluginActionSnapshot()) {
+      if (!action.hasTool || !action.toolName) continue;
+      const list = toolsByOwner.get(action.owner) ?? [];
+      list.push(action.toolName);
+      toolsByOwner.set(action.owner, list);
+    }
     const snapshot = getPluginSnapshot(pluginsDir);
     return snapshot.plugins
       .filter((p) => p.status === 'active')
-      .filter((p) => p.facets.extension || p.facets.worker || (p.skillPaths?.length ?? 0) > 0)
+      .filter(
+        (p) =>
+          p.facets.extension ||
+          p.facets.worker ||
+          (p.skillPaths?.length ?? 0) > 0 ||
+          toolsByOwner.has(p.entry.id),
+      )
       .map((p) => ({
         id: p.entry.id,
         dir: p.entry.dir,
         piExtension: Boolean(p.facets.extension),
         workerFacet: Boolean(p.facets.worker),
         skills: (p.skillPaths ?? []).map((dir) => path.basename(dir)),
+        tools: (toolsByOwner.get(p.entry.id) ?? []).sort(),
       }));
   } catch {
     return [];
@@ -783,7 +808,16 @@ export function createConfigRouter(config: ServerConfig) {
       }
     }
 
+    // 这一页要回答"我装了哪些插件、它们往会话里塞了什么"，所以**不能只看 `extension/` 目录**：
+    // 动作工具（admin / im / notifications）与插件自带 skill 也不属于 pi 原生扩展，但同样是
+    // 平台插件带进会话的东西。每条都带上 `provides`，页面上标清楚它到底是哪一类 ——
+    // 把没有 `extension/` 的插件标成“pi 扩展”是假信息。
     for (const item of pluginSessionCandidates(config.pluginsDir)) {
+      const provides: string[] = [];
+      if (item.piExtension) provides.push('pi 扩展（工具/命令/钩子）');
+      if (item.workerFacet) provides.push('worker 方法');
+      if (item.skills.length) provides.push(`skill: ${item.skills.join(', ')}`);
+      if (item.tools.length) provides.push(`工具: ${item.tools.join(', ')}`);
       extensions.push({
         name: `plugin:${item.id}`,
         source: 'plugin',
@@ -791,6 +825,7 @@ export function createConfigRouter(config: ServerConfig) {
         enabled: true,
         pluginId: item.id,
         auto: true,
+        provides,
       });
     }
 

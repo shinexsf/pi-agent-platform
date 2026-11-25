@@ -22,6 +22,8 @@ interface ExtensionInfo {
   pluginId?: string;
   /** true = 随插件自动装载，不可单独卸载。 */
   auto?: boolean;
+  /** 这个插件往会话里塞了什么（pi 扩展 / worker 方法 / skill / 动作工具）。 */
+  provides?: string[];
 }
 
 const isCompact = useIsCompact();
@@ -238,8 +240,11 @@ function getSourceLabel(source: string): string {
     <div class="extensions-section">
       <h3>已安装插件</h3>
       <p v-if="hasPluginProvided" class="extensions-hint">
-        带「平台插件」标签的是随包/已装插件自带的 pi 扩展（`&lt;plugin-dir&gt;/extension/`）：它们随插件生效，
-        不能单独卸载 —— 要关就去「平台插件」页停用那个插件。
+        带「平台插件」标签的是<b>平台插件带进会话的东西</b>（pi 扩展 / worker 方法 / skill / 动作工具）：
+        它们随插件生效，不能单独卸载 —— 要关就去「平台插件」页停用那个插件。
+        注意：<b>一个插件不一定提供 <code>&lt;plugin-dir&gt;/extension/</code></b> ——
+        <code>admin</code> / <code>im</code> / <code>notifications</code> 的工具是<b>动作</b>（看每行后面的清单），
+        并非 pi 原生扩展。
       </p>
       <div v-if="loading" class="loading">加载中...</div>
       <div v-else-if="extensions.length === 0" class="empty-state">暂无已安装的插件</div>
@@ -248,6 +253,9 @@ function getSourceLabel(source: string): string {
           <div class="extension-info">
             <span class="extension-name">{{ ext.name }}</span>
             <span :class="['extension-source', `source-${ext.source}`]">{{ getSourceLabel(ext.source) }}</span>
+            <span v-if="ext.source === 'plugin' && ext.provides?.length" class="extension-provides">
+              {{ ext.provides.join(' · ') }}
+            </span>
           </div>
           <span v-if="ext.source === 'plugin'" class="extension-plugin-note" :title="`由平台插件 ${ext.pluginId} 提供`">
             随插件生效
@@ -339,6 +347,12 @@ function getSourceLabel(source: string): string {
 .extension-plugin-note {
   font-size: 12px;
   color: var(--text-secondary);
+}
+.extension-provides {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  opacity: 0.85;
 }
 .extensions-section h3 {
   font-size: 1rem;
