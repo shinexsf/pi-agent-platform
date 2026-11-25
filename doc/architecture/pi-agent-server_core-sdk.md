@@ -26,7 +26,7 @@ flowchart TB
         K5["coreConfig()<br/>入口注入，内核不读 env"]
         K2["SessionRegistry · Session · repos<br/>WorkerPool · 超时回收 · 斜杠命令"]
         K1["db：只建 3 张内核表<br/>agents / sessions / attachments"]
-        K6["宿主 API 七面<br/>db · sessions · agents · lifecycle · bus · services · actions"]
+        K6["宿主 API 八面 + dataDir<br/>db · sessions · agents · lifecycle · bus · services · actions · attachments"]
         K4["插件宿主<br/>facet 注册表 · 会话级闸门"]
     end
 

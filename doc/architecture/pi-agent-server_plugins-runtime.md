@@ -12,7 +12,7 @@
 |---|---|---|
 | **装载点**（在哪跑） | 目录存在性：`server/` `worker/` `extension/` `web/` | 装载器 |
 | **扩展点**（做什么） | 代码默认导出里调的注册函数 | 内核注册表 |
-| **能力面**（能做什么） | 内核注入的 `host` 对象（七个能力面 + 一个事件出口） | 插件 |
+| **能力面**（能做什么） | 内核注入的 `host` 对象（八个能力面 + 一个事件出口） | 插件 |
 
 facet 级开关（`piServer.facets`）与声明式菜单已删除 —— 它们是"第二套真相"，会与代码漂移。
 
@@ -35,7 +35,7 @@ flowchart LR
 
   B0["② 四个装载点（各在自己的进程）<br/>server 立即 · worker 下次 spawn<br/>pi 扩展 下次建会话 · web 刷新页面"]
 
-  subgraph L3["③ 运行期说话：七个能力面 + 一个事件出口"]
+  subgraph L3["③ 运行期说话：八个能力面 + 一个事件出口"]
     C0["host<br/>db · sessions · agents · lifecycle<br/>bus · services · actions"]
     C1[("topics<br/>declare / subscribe")]
     C2[("providers<br/>provide / call")]
@@ -66,7 +66,7 @@ flowchart LR
   A5 -.-> D2
 ```
 
-读法：**① 是"装载一次"**（发现 → 闸门 → import（零副作用断言）→ `init(host)` → 注册 → 记账），**② 是"同一个插件落在几个进程"**（四个装载点各有自己的生效时机），**③ 是"运行期怎么说话"**（七个能力面 → 三张互操作表 → 其它 facet / 模型 / 外部 / 浏览器），**④ 是"怎么观察、怎么收回来"**（三个只读端点 + 按插件归零的撤销）。
+读法：**① 是"装载一次"**（发现 → 闸门 → import（零副作用断言）→ `init(host)` → 注册 → 记账），**② 是"同一个插件落在几个进程"**（四个装载点各有自己的生效时机），**③ 是"运行期怎么说话"**（八个能力面 → 三张互操作表 → 其它 facet / 模型 / 外部 / 浏览器），**④ 是"怎么观察、怎么收回来"**（三个只读端点 + 按插件归零的撤销）。
 
 三条虚线是"机制保证而不是纪律约定"的那几处：零副作用断言（import 期注册直接拒）、撤销走账本（`disposePlugin` 一起清订阅与提供者）、查询面只读。
 
@@ -116,7 +116,12 @@ flowchart LR
 
 `ui.page` 还带一个 `nav?: boolean`（默认 `true`）：`nav: false` = **只登记路由、不占导航项**，用于"入口在别处但需要一个正式页面"——例如顶栏铃铛的面板里放「查看全部」跳到 `/notifications`，这样既不用在导航里再造一个同名入口，也有正式页可分享/刷新。
 
-- 槽位名由**平台硬编码**（当前只有 `chat.rail.right`）：插件不能新造槽位，加槽位要改 UI 并发版
+- 槽位名**分两空间**：
+  - **平台空间**（闭合枚举，只有 `chat.rail.right`）：平台自己渲染 chrome，加一个要改平台 UI 并发版
+  - **插件空间**（`<pluginId>.<name>`，如 `im.channel.create`）：**由某个插件当宿主**时定义的挂载点，提供方注册。平台只校验形态（前缀是合法 pluginId 形态、且不落在保留命名空间 `chat` / `__core__`），**不校验**前缀插件是否存在
+  - 保留命名空间是必要的：不加的话注册 `chat.rail.left` 就能冒充平台挂载点
+- **宿主插件自己装载**：插件空间槽位（作用域 `global`）进 `GET /api/extensions` 的 `surfaces`，每项带**服务端生成的 `url`**（`/plugins/<pluginId>/web/<component>.js?v=<rev>`）。消费方直接 `import(url)`，平台不渲染、也不许消费方自己拼路径
+- 装载失败必须隔离：一个提供方崩了不能把宿主页打白（宿主 `try/catch` + 区块内错误），卸载时 MUST 调 `mount` 返回的清理函数
 - 与内置路由冲突时插件页**不抢**：退回到 `/plugin-page/<pluginId>/<pageId>` 兜底路径
 - 条件启用（按会话插件集过滤）只作用于 R9 / R10；R1–R8 是全局的
 
@@ -124,7 +129,7 @@ flowchart LR
 
 `:name` 匹配单段（值进 `request.params`）；`*` 只能作**最后一段**（匹配剩余全部，进 `params['*']`）。分发时**字面量永远优先于模式**（否则"注册顺序决定语义"，作者不可能猜对）。webhook 不需要专用机制：插件拿原始路径自己分发。
 
-## 七个能力面 + 一个事件出口（`host`）
+## 八个能力面 + 一个事件出口（`host`）
 
 插件访问平台的**唯一**通道 —— 不 import 内核模块，也不拿 `WorkerPool`（暴露 = 插件能杀进程）。
 
@@ -136,6 +141,7 @@ flowchart LR
 | `lifecycle` | `onSessionCreated` / `onSessionDisposed` / **`runtime()`** | 会话生命周期钩子 + 只读运行态快照（版本/uptime/端口/池统计；**数据不是句柄**） |
 | `bus` | **`declare`** / `publish` / **`publishAndWait`** / `subscribe` / **`topics`** | **插件间广播**（0..n）：topic 必须先声明，owner 双向受控，发布方拿到送达/处理状态。**handler 返回值一律丢弃** —— 要业务数据请用 `services` |
 | `services` | **`provide`** / `call` / **`list`** | **插件间定向调用**（恰好 1 个提供者）：返回业务数据、错误外抛、无会话上下文。与面 worker 的 `host.methods`（带 `sessionId`、私有）**是两套独立机制** |
+| `attachments` | 新增（`upload` / `resolvePath`）：附件存取，不给 store 句柄 |
 | `actions` | **`define`** | 一份 handler → 反向 / service / tool / http 四个投影（见下节「动作契约」）。**面向 agent / 别的插件 / 外部的同一个行为只写这一份** |
 | `events`（出口，非能力面） | `emit` | 发给**浏览器**（worker → server → SSE）；server 侧调用会 warn，明确告警而不是静默吞掉 |
 
@@ -329,8 +335,8 @@ pi-server plugin reload     # POST /api/extensions/reload
 | `GET /api/plugins` | 静态事实（含 `source: bundled\|user`、状态、facet 探测结果） |
 | `GET /api/plugins/:id` | 单插件详情（入口探测 / 依赖 / 关联台账条目） |
 | `GET /api/plugins/:id/extensions` | 该插件的全部运行期注册（含 `rejected`）+ **`interop` 切片**（该插件声明/订阅的 topic、提供的 service） |
-| `GET /api/extensions` | 全局：`pages`（**已摊平菜单字段**）+ 兼容用的 `menus` + **`revs`**（每个插件 `web/` 的 mtime 版本串，浏览器侧拼 `?v=`） |
-| `GET /api/sessions/:id/extensions` | 会话级：槽位 / 工具卡（按该会话插件集过滤） |
+| `GET /api/extensions` | 全局：`pages`（**已摊平菜单字段**）+ 兼容用的 `menus` + **`surfaces`**（插件空间槽位，每项带 `url`）+ **`revs`**（每个插件 `web/` 的 mtime 版本串） |
+| `GET /api/sessions/:id/extensions` | 会话级：`surfaces`（**平台空间**槽位）/ 工具卡（按该会话插件集过滤） |
 | `POST /api/extensions/reload` | 重装插件运行期（`plugin reload`）；**dev 实例要打自己的端口**，CLI 的 `plugin reload` 默认找打包实例 |
 | **`GET /api/runtime/interop`** | **插件互操作全表**：`topics[]`（topic / owner / declaredBy / 订阅数 / pending 数 / 末次发布）+ `services[]`（name / owner） |
 | `GET /api/p/<id>/*` | 插件 HTTP 端点（唯一分发器） |
@@ -341,7 +347,10 @@ pi-server plugin reload     # POST /api/extensions/reload
 - 每个 facet 文件 `export default { init(host), dispose?() } satisfies PluginDefinition`（纯对象；**顶层零副作用**）
 - `package.json` 只留 `piServer.apiVersion` 与 `requires.plugins`：装载器要**不执行插件代码**就判掉不兼容版本 —— 版本号若在代码里，读它就得先 `import()`，那一刻顶层已经跑完了
 - 类型是 **vendored 文件**（`plugin add` / `plugin check` 写进 `<插件>/types/plugin-types/`），不走 `peerDependencies`（`plugin-types` 是 private 包，npm 解析必然失败）
-- 产物：原生 ESM、web 产物**无裸说明符 / 无 node 内建**、`mount(el, host)` 必须导出
+- 产物：原生 ESM、web 产物**无裸说明符 / 无 node 内建 / 非 CJS**、`mount(el, host)` 必须导出
+  - `web/**` 是**编译产物目录**（递归受 `plugin check` 校验）；源码放插件根的 `web-src/` 子项目，产物写回 `web/`
+  - 需要 npm 依赖时：作者自带构建（esbuild / vite / rollup），bundled 插件由 `build:plugins` 编，本机插件 `build:plugins:local`
+  - 平台**不提供 import map**（那会把第三方库版本塞进平台契约）
 - 机械校验：`pi-server plugin check <dir>`（入口存在 / ESM / 说明符 / web 产物），`plugin add` 自动调用
 
 ## 可执行验收

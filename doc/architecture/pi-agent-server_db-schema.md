@@ -40,7 +40,7 @@ erDiagram
 
 - `sessions.config` 是 `agents.config` 的**完全快照**（创建时复制，生命周期**不回读** agent——没有例外字段）
 - `pi_session_path` 指向 pi jsonl 历史文件（master 直读，worker 死了也能查）
-- IM 渠道表（`channels_wechat` / `channels_qq`）由渠道包自管 DDL，主包零渠道 SQL（见下）
+- **IM 不再用表**（`change: im-as-plugin`）：连接信息在各渠道插件的 `config.json`，绑定与启停在网关的 `state.json`。旧 `channels_*` 表已退役（不再读写）
 
 ## agents 表
 
@@ -191,8 +191,8 @@ session 创建时**完整复制** agent 配置到 sessions.config。session 整�
 
 | 表 | 归属 | DDL 拥有者 |
 |---|---|---|
-| `channels_wechat` | `platform/channels/channel-wechat/` | 微信渠道包 |
-| `channels_qq` | `platform/channels/channel-qq/` | QQ 渠道包 |
+| ~~`channels_wechat`~~ | ~~`platform/channels/channel-wechat/`~~ | **已退役**（渠道改为非 bundle 插件，连接信息在文件里） |
+| ~~`channels_qq`~~ | ~~`platform/channels/channel-qq/`~~ | **已退役**（同上） |
 
 > **MVP 简化**:QQ 群聊 / bindings / per-route 配置推迟，`channels_qq_routes` 表 MVP **不创建**。群聊支持时再加。
 

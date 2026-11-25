@@ -72,9 +72,6 @@ importers:
       '@pi-agent-platform/api-types':
         specifier: workspace:*
         version: link:../../packages/api-types
-      '@pi-agent-platform/channel-types':
-        specifier: workspace:*
-        version: link:../../packages/channel-types
       '@pi-agent-platform/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -127,9 +124,6 @@ importers:
       '@pi-agent-platform/api-types':
         specifier: workspace:*
         version: link:../../packages/api-types
-      '@pi-agent-platform/channel-types':
-        specifier: workspace:*
-        version: link:../../packages/channel-types
       '@pi-agent-platform/plugin-types':
         specifier: workspace:*
         version: link:../../packages/plugin-types
@@ -177,86 +171,6 @@ importers:
         specifier: ^2.1.0
         version: 2.1.0(typescript@5.6.2)
 
-  channels/channel-qq:
-    dependencies:
-      '@pi-agent-platform/channel-types':
-        specifier: workspace:*
-        version: link:../../packages/channel-types
-      '@pi-agent-platform/server':
-        specifier: workspace:*
-        version: link:../../apps/pi-agent-server
-      '@tencent-connect/qqbot-connector':
-        specifier: ^1.2.0
-        version: 1.2.0
-      hono:
-        specifier: ^4.6.0
-        version: 4.13.3
-      qq-bot-sdk:
-        specifier: ^1.12.4
-        version: 1.12.4(debug@4.4.3)
-      qrcode:
-        specifier: ^1.5.4
-        version: 1.5.4
-      zod:
-        specifier: ^3.23.0
-        version: 3.23.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.0
-        version: 5.6.2
-      vite:
-        specifier: ^5.0.0
-        version: 5.4.0(@types/node@22.20.1)(lightningcss@1.32.0)
-      vitest:
-        specifier: ^2.0.0
-        version: 2.0.0(@types/node@22.20.1)(happy-dom@15.0.0)(jsdom@30.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)
-      vue:
-        specifier: ^3.5.0
-        version: 3.5.41(typescript@5.6.2)
-
-  channels/channel-wechat:
-    dependencies:
-      '@pi-agent-platform/channel-types':
-        specifier: workspace:*
-        version: link:../../packages/channel-types
-      '@pi-agent-platform/server':
-        specifier: workspace:*
-        version: link:../../apps/pi-agent-server
-      '@wechatbot/wechatbot':
-        specifier: 2.0.1
-        version: 2.0.1
-      hono:
-        specifier: ^4.6.0
-        version: 4.13.3
-      qrcode:
-        specifier: ^1.5.4
-        version: 1.5.4
-      zod:
-        specifier: ^3.23.0
-        version: 3.23.0
-    devDependencies:
-      '@vitejs/plugin-vue':
-        specifier: ^5.0.0
-        version: 5.1.0(vite@5.4.0(@types/node@22.20.1)(lightningcss@1.32.0))(vue@3.5.41(typescript@5.6.2))
-      '@vue/test-utils':
-        specifier: ^2.4.0
-        version: 2.4.11(@vue/compiler-dom@3.5.41)(@vue/server-renderer@3.5.41)(vue@3.5.41(typescript@5.6.2))
-      happy-dom:
-        specifier: ^15.0.0
-        version: 15.0.0
-      typescript:
-        specifier: ^5.6.0
-        version: 5.6.2
-      vite:
-        specifier: ^5.0.0
-        version: 5.4.0(@types/node@22.20.1)(lightningcss@1.32.0)
-      vitest:
-        specifier: ^2.0.0
-        version: 2.0.0(@types/node@22.20.1)(happy-dom@15.0.0)(jsdom@30.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)
-      vue:
-        specifier: ^3.5.0
-        version: 3.5.41(typescript@5.6.2)
-
   packages/api-types:
     dependencies:
       '@pi-agent-platform/plugin-types':
@@ -266,15 +180,6 @@ importers:
         specifier: workspace:*
         version: link:../shared-types
     devDependencies:
-      typescript:
-        specifier: ^5.6.0
-        version: 5.6.2
-
-  packages/channel-types:
-    devDependencies:
-      hono:
-        specifier: ^4.6.0
-        version: 4.13.3
       typescript:
         specifier: ^5.6.0
         version: 5.6.2
@@ -420,6 +325,9 @@ importers:
 
   plugins:
     devDependencies:
+      '@pi-agent-platform/event-projection':
+        specifier: workspace:*
+        version: link:../packages/event-projection
       '@pi-agent-platform/plugin-types':
         specifier: workspace:*
         version: link:../packages/plugin-types
@@ -1197,9 +1105,6 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@one-ini/wasm@0.1.1':
-    resolution: {integrity: sha512-XuySG1E38YScSJoMlqovLru4KTUNSjgVTIjyh7qMX6aNN5HY5Ct5LhRJdxO79JtTzKfzV/bnWpz+zquYrISsvw==}
-
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
     engines: {node: '>=8.0.0'}
@@ -1703,22 +1608,9 @@ packages:
   '@vue/shared@3.5.41':
     resolution: {integrity: sha512-IOnwSCma8j+9xJT6b8H0dEYidC80NsYmNMlZxRsukYcSoGaDBohog5hDxzeUXdFeGWFA++vWvxqOmrr96VlqMA==}
 
-  '@vue/test-utils@2.4.11':
-    resolution: {integrity: sha512-GDqaqZsA6m2E5vNzej0aYiIb6BX8xV9pNSbbbXKOfEYwg7ZNblVX8suyqmUBThq8VIrgAJNxn+z72hVtUeiWHA==}
-    peerDependencies:
-      '@vue/compiler-dom': 3.x
-      '@vue/server-renderer': 3.x
-      vue: 3.x
-    peerDependenciesMeta:
-      '@vue/server-renderer':
-        optional: true
-
   '@wechatbot/wechatbot@2.0.1':
     resolution: {integrity: sha512-MH/jCMEgYYTADa7jKASIrby8dtjdMVAbmosgtYgfhX49mi0Si9LIDM0ecJMg/vw0Lctrgp0t6e75y/XBKScJuQ==}
     engines: {node: '>=22'}
-
-  abbrev@1.0.3:
-    resolution: {integrity: sha512-s07HMJf6O5iTLVDx9cH7c9VbOdrmzxE+AzWz9CPi94zVNBQQA3jIwIZKTrHQj4dGR1T/MdwMnVJzSpjaVEXtXw==}
 
   agent-base@7.1.2:
     resolution: {integrity: sha512-JVzqkCNRT+VfqzzgPWDPnwvDheSAUdiMUn3NoLXpDJF5lRqeJqyC9iGsAxIOAW+mzIdq+uP1TvcX6bMtrH0agg==}
@@ -1831,10 +1723,6 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
-  commander@10.0.0:
-    resolution: {integrity: sha512-zS5PnTI22FIRM6ylNW8G4Ap0IEOyk62fhLSD0+uHRT9McRCLGpkVNvao4bjimpK/GShynyQkFFxHhwMcETmduA==}
-    engines: {node: '>=14'}
-
   commander@12.1.0:
     resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
     engines: {node: '>=18'}
@@ -1849,9 +1737,6 @@ packages:
 
   computeds@0.0.1:
     resolution: {integrity: sha512-7CEBgcMjVmitjYo5q8JTJVra6X5mQ20uTThdK+0kR7UEaDrAWEQcRiBtWJzga4eRpP6afNwwLsX2SET2JhVB1Q==}
-
-  config-chain@1.1.13:
-    resolution: {integrity: sha512-qj+f8APARXHrM0hraqXYb2/bOVSV4PvJQlNZ/DVj0QrmNM2q2euizkeuVckQ57J+W0mRH6Hvi+k50M4Jul2VRQ==}
 
   cose-base@1.0.3:
     resolution: {integrity: sha512-s9whTXInMSgAp/NVXVNuVxVKzGH2qck3aQlVHxDCdAEPgtMKwc4Wq6/QKhgdEdgbLSi9rBTAcPoRa6JpiG4ksg==}
@@ -2184,11 +2069,6 @@ packages:
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
 
-  editorconfig@1.0.7:
-    resolution: {integrity: sha512-e0GOtq/aTQhVdNyDU9e02+wz9oDDM+SIOQxWME2QRjzRX5yyLAuHDE+0aE8vHb9XRC8XD37eO2u57+F09JqFhw==}
-    engines: {node: '>=14'}
-    hasBin: true
-
   elkjs@0.9.3:
     resolution: {integrity: sha512-f/ZeWvW/BCXbhGEf1Ujp29EASo/lk1FDnETgNKwJrsVvGZhUWCZyg3xLJjAsxfOmt8KjswHmI5EwCQcPMpOYhQ==}
 
@@ -2283,9 +2163,6 @@ packages:
   fs-constants@1.0.0:
     resolution: {integrity: sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==}
 
-  fs.realpath@1.0.0:
-    resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
-
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -2313,11 +2190,6 @@ packages:
 
   github-from-package@0.0.0:
     resolution: {integrity: sha512-SyHy3T1v2NUXn29OsWdxmK6RwHD+vkj3v8en8AOBZ1wBQ/hCAQ5bAQTD02kW4W9tUp/3Qh6J8r9EvntiyCmOOw==}
-
-  glob@8.1.0:
-    resolution: {integrity: sha512-r8hpEjiQEYlF2QU0df3dS+nxxSIreXQS1qRhMJM0Q5NDdR386C7jb7Hwwod8Fgiuex+k0GFjgft18yvxm5XoCQ==}
-    engines: {node: '>=12'}
-    deprecated: Glob versions prior to v9 are no longer supported
 
   google-auth-library@10.9.1:
     resolution: {integrity: sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==}
@@ -2398,19 +2270,11 @@ packages:
   import-meta-resolve@4.2.0:
     resolution: {integrity: sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg==}
 
-  inflight@1.0.6:
-    resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
-    deprecated: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
-
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
   ini@1.3.0:
     resolution: {integrity: sha512-6tyfJkFAmQV64x9Li007PNZgNxqRywig4Rv8PDfzU9kgDBmURaIvjSL2wKyx45LPSIXsvDkFGbOMqMHC1PsORA==}
-    deprecated: Please update to ini >=1.3.6 to avoid a prototype pollution issue
-
-  ini@1.3.4:
-    resolution: {integrity: sha512-VUA7WAWNCWfm6/8f9kAb8Y6iGBWnmCfgFS5dTrv2C38LLm1KUmpY388mCVCJCsMKQomvOQ1oW8/edXdChd9ZXQ==}
     deprecated: Please update to ini >=1.3.6 to avoid a prototype pollution issue
 
   internmap@1.0.1:
@@ -2436,11 +2300,6 @@ packages:
 
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
-    hasBin: true
-
-  js-beautify@1.14.9:
-    resolution: {integrity: sha512-coM7xq1syLcMyuVGyToxcj2AlzhkDjmfklL8r0JgJ7A76wyGMpJ1oA35mr4APdYNO/o/4YY8H54NQIJzhMbhBg==}
-    engines: {node: '>=12'}
     hasBin: true
 
   jsdom@30.1.1:
@@ -2625,10 +2484,6 @@ packages:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
     engines: {node: 18 || 20 || >=22}
 
-  minimatch@5.1.9:
-    resolution: {integrity: sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==}
-    engines: {node: '>=10'}
-
   minimatch@9.0.9:
     resolution: {integrity: sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==}
     engines: {node: '>=16 || 14 >=14.17'}
@@ -2665,11 +2520,6 @@ packages:
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
-
-  nopt@6.0.0:
-    resolution: {integrity: sha512-ZwLpbTgdhuZUnZzjd7nb1ZV+4DoiC6/sfiVKok72ym/4Tlf+DFdlHYmT2JPmcNNWV6Pi3SDf1kT+A4r9RTuT9g==}
-    engines: {node: ^12.13.0 || ^14.15.0 || >=16.0.0}
-    hasBin: true
 
   npm-run-path@5.3.0:
     resolution: {integrity: sha512-ppwTtiJZq0O/ai0z7yfudtBpWIoxM8yE6nHi1X47eFR2EWORqfbu6CnPlNsjeN683eT0qG6H/Pyf9fCcvjnnnQ==}
@@ -2814,9 +2664,6 @@ packages:
 
   proper-lockfile@4.1.2:
     resolution: {integrity: sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==}
-
-  proto-list@1.2.4:
-    resolution: {integrity: sha512-vtK/94akxsTMhe0/cbfpR+syPuszcuwhqVjJq26CuNDgFGj682oRBXOP5MJpv2r7JtE8MsiepGIqvvOTBwn2vA==}
 
   protobufjs@7.6.5:
     resolution: {integrity: sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==}
@@ -3163,9 +3010,6 @@ packages:
 
   vscode-uri@3.1.0:
     resolution: {integrity: sha512-/BpdSx+yCQGnCvecbyXdxHDkuk55/G3xwnC0GqY4gmQ3j+A+g8kzzgB4Nk/SINjqn6+waqw3EgbVF2QKExkRxQ==}
-
-  vue-component-type-helpers@3.3.11:
-    resolution: {integrity: sha512-LwcxzeliO9fkQcpJG0PoX8X5kmAhKmH9wkpDLxNabwzkQ9Zeib2YVHwFV4pcWmMLfXVfjr/dSV+DaJ3cIPgSNA==}
 
   vue-demi@0.14.10:
     resolution: {integrity: sha512-nMZBOwuzabUO0nLgIcc6rycZEebF6eeUfaiQx9+WSk8e29IbLvPU9feI6tqW4kTo3hvoYAJkMh8n8D0fuISphg==}
@@ -3972,8 +3816,6 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
-  '@one-ini/wasm@0.1.1': {}
-
   '@opentelemetry/api@1.9.0':
     optional: true
 
@@ -4454,18 +4296,7 @@ snapshots:
 
   '@vue/shared@3.5.41': {}
 
-  '@vue/test-utils@2.4.11(@vue/compiler-dom@3.5.41)(@vue/server-renderer@3.5.41)(vue@3.5.41(typescript@5.6.2))':
-    dependencies:
-      '@vue/compiler-dom': 3.5.41
-      js-beautify: 1.14.9
-      vue: 3.5.41(typescript@5.6.2)
-      vue-component-type-helpers: 3.3.11
-    optionalDependencies:
-      '@vue/server-renderer': 3.5.41
-
   '@wechatbot/wechatbot@2.0.1': {}
-
-  abbrev@1.0.3: {}
 
   agent-base@7.1.2:
     dependencies:
@@ -4578,8 +4409,6 @@ snapshots:
 
   color-name@1.1.4: {}
 
-  commander@10.0.0: {}
-
   commander@12.1.0: {}
 
   commander@7.0.0: {}
@@ -4587,11 +4416,6 @@ snapshots:
   commander@8.3.0: {}
 
   computeds@0.0.1: {}
-
-  config-chain@1.1.13:
-    dependencies:
-      ini: 1.3.4
-      proto-list: 1.2.4
 
   cose-base@1.0.3:
     dependencies:
@@ -4853,13 +4677,6 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  editorconfig@1.0.7:
-    dependencies:
-      '@one-ini/wasm': 0.1.1
-      commander: 10.0.0
-      minimatch: 9.0.9
-      semver: 7.8.5
-
   elkjs@0.9.3: {}
 
   emoji-regex@8.0.0: {}
@@ -5011,8 +4828,6 @@ snapshots:
 
   fs-constants@1.0.0: {}
 
-  fs.realpath@1.0.0: {}
-
   fsevents@2.3.3:
     optional: true
 
@@ -5040,14 +4855,6 @@ snapshots:
 
   github-from-package@0.0.0: {}
 
-  glob@8.1.0:
-    dependencies:
-      fs.realpath: 1.0.0
-      inflight: 1.0.6
-      inherits: 2.0.4
-      minimatch: 5.1.9
-      once: 1.4.0
-
   google-auth-library@10.9.1:
     dependencies:
       base64-js: 1.5.1
@@ -5074,6 +4881,7 @@ snapshots:
       entities: 4.5.0
       webidl-conversions: 7.0.0
       whatwg-mimetype: 3.0.0
+    optional: true
 
   he@1.2.0: {}
 
@@ -5130,16 +4938,9 @@ snapshots:
 
   import-meta-resolve@4.2.0: {}
 
-  inflight@1.0.6:
-    dependencies:
-      once: 1.4.0
-      wrappy: 1.0.2
-
   inherits@2.0.4: {}
 
   ini@1.3.0: {}
-
-  ini@1.3.4: {}
 
   internmap@1.0.1: {}
 
@@ -5154,13 +4955,6 @@ snapshots:
   isexe@2.0.0: {}
 
   jiti@2.7.0: {}
-
-  js-beautify@1.14.9:
-    dependencies:
-      config-chain: 1.1.13
-      editorconfig: 1.0.7
-      glob: 8.1.0
-      nopt: 6.0.0
 
   jsdom@30.1.1(@noble/hashes@1.8.0):
     dependencies:
@@ -5345,10 +5139,6 @@ snapshots:
     dependencies:
       brace-expansion: 5.0.12
 
-  minimatch@5.1.9:
-    dependencies:
-      brace-expansion: 2.1.4
-
   minimatch@9.0.9:
     dependencies:
       brace-expansion: 2.1.4
@@ -5376,10 +5166,6 @@ snapshots:
       data-uri-to-buffer: 4.0.0
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
-
-  nopt@6.0.0:
-    dependencies:
-      abbrev: 1.0.3
 
   npm-run-path@5.3.0:
     dependencies:
@@ -5521,8 +5307,6 @@ snapshots:
       graceful-fs: 4.2.11
       retry: 0.12.0
       signal-exit: 3.0.7
-
-  proto-list@1.2.4: {}
 
   protobufjs@7.6.5:
     dependencies:
@@ -5865,8 +5649,6 @@ snapshots:
 
   vscode-uri@3.1.0: {}
 
-  vue-component-type-helpers@3.3.11: {}
-
   vue-demi@0.14.10(vue@3.5.41(typescript@5.6.2)):
     dependencies:
       vue: 3.5.41(typescript@5.6.2)
@@ -5899,11 +5681,13 @@ snapshots:
 
   web-streams-polyfill@3.0.3: {}
 
-  webidl-conversions@7.0.0: {}
+  webidl-conversions@7.0.0:
+    optional: true
 
   webidl-conversions@8.0.1: {}
 
-  whatwg-mimetype@3.0.0: {}
+  whatwg-mimetype@3.0.0:
+    optional: true
 
   whatwg-mimetype@5.0.0: {}
 

@@ -40,14 +40,14 @@ mount 在 `apps/pi-agent-server/src/index.ts:81`，`config.isDev = nodeEnv !== '
 
 **关键点**：`stderrTail` 是 worker 子进程 `child.stderr.on('data')` 收集的最后 100 段 chunk（`worker-pool.ts:177-185`）。worker 端任何 `console.error` 都会进这里。
 
-### IM Gateway `/api/im/debug/*`（IM 渠道层）
+### IM 渠道层（`/api/im/*` 已随 im-gateway 退役；现在是插件路由）
 
 mount 在 `apps/pi-agent-server/src/im-gateway/routes/im-gateway.ts`：
 
 | 端点 | 返回 | 用途 |
 |---|---|---|
-| `GET /api/im/debug/state` | `{uptime, loadedTypes, sessions: SessionChannelMeta[], adapters: AdapterStatus[], qqNotified: string[]}` | IM gateway 完整状态：已加载渠道、活跃 session-channel 映射、各 adapter 状态、QQ 群 fast-fail 已通知列表 |
-| `GET /api/im/debug/logs` | SSE stream | 渠道日志实时流（调试群消息 routing 时用）|
+| `GET /api/p/im/connections` | `{channels[], connections[]}` | 网关聚合视图：渠道、连接、状态、绑定（原 `/api/im/debug/state` 的替代） |
+| `GET /api/p/im/events` | SSE stream | 渠道日志实时流（handler 返回标准 `Response` 透传）|
 
 ### 生产可用但承载 debug 能力的端点
 
@@ -75,12 +75,12 @@ mount 在 `apps/pi-agent-server/src/im-gateway/routes/im-gateway.ts`：
 ### 1. 端点路径：`/debug/<area>/<resource>` 格式
 
 - server 层：`/debug/<resource>`（5 个已有端点都是）
-- 子模块层：`/api/<module>/debug/<resource>`（IM gateway 用 `/api/im/debug/*`）
+- 子模块层：`/api/<module>/debug/<resource>`（IM 已下沉为插件，走 `/api/p/im/*`）
 - **不用** `/api/<resource>/debug`（会污染生产 API 命名空间）
 
 ### 2. 端点返回**完整状态**而不是分页
 
-参考 010 经验：`/api/im/debug/state` 一次性返回 session map + adapters + QQ notified set，**不让 caller 再发请求拼**。`/debug/db?sql=...` 直接返回所有 rows。
+参考 010 经验：`/api/p/im/connections` 一次性返回渠道 + 连接 + 绑定，**不让 caller 再发请求拼**。`/debug/db?sql=...` 直接返回所有 rows。
 
 **反例**：`GET /api/sessions?page=1&pageSize=20`（生产 API 该分页）。**debug 端点永远一次性返回**。
 
@@ -171,7 +171,7 @@ router.get('/<resource>', (c) => {
 
 ### IM gateway debug
 
-- `GET /api/im/debug/state`（实现于 `im-gateway/routes/im-debug.ts`）
+- `GET /api/p/im/connections`（实现于 `platform/plugins/im/server/src/routes.ts`）
 
 ### 插件运行期 / 互操作（正式端点，兼作排查入口）
 
@@ -182,7 +182,7 @@ router.get('/<resource>', (c) => {
 
 ### 生产可用但承载 debug 能力
 
-- `GET /api/im/events` (SSE，渠道日志实时流 — admin UI QR 登录的正式依赖，**全模式正式端点**，已不算 debug)
+- `GET /api/p/im/events` (SSE，渠道日志实时流 — 扫码进度的正式依赖，**全模式正式端点**，已不算 debug)
 - `GET /api/sessions/:id/context` (`systemPrompt` 字段)
 - `GET /api/sessions/:id/messages`
 - `GET /api/sessions/:id/events` (SSE)
@@ -241,13 +241,13 @@ curl -s "http://localhost:3000/debug/db?sql=SELECT%20*%20FROM%20agents%20WHERE%2
 
 ```bash
 # 1. 看已加载的渠道
-curl -s http://localhost:3000/api/im/debug/state | jq .loadedTypes
+curl -s http://localhost:3000/api/p/im/connections | jq '.channels[].providerId'
 
 # 2. 看 session-channel 映射
-curl -s http://localhost:3000/api/im/debug/state | jq .sessions
+curl -s http://localhost:3000/api/p/im/connections | jq '.connections[] | {id, status, bindings}'
 
 # 3. 看 QQ 群 fast-fail 已通知列表
-curl -s http://localhost:3000/api/im/debug/state | jq .qqNotified
+curl -s http://localhost:3000/api/p/im/bindings | jq .
 ```
 
 ### 场景 E：插件之间"说不上话"

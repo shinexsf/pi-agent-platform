@@ -59,6 +59,7 @@
 |---|---|---|---|
 | **bundled（要发布）** | `platform/plugins/` | 所有装 tgz 的人 | ✅ 进 tgz |
 | **本机自用** | 仓库根 `plugins/` | 本机打包实例（`pi-server start`） | ❌ gitignored |
+| **渠道插件** | 仓库根 `plugins/channel-<type>/` | 同上（IM 渠道：`<name>` = qq / wechat / probe） | ❌ gitignored |
 | **dev 专用** | `platform/.dev-data/plugins/` | dev（`pnpm dev:server`） | ❌ gitignored |
 | **坏插件 fixture** | `test-workspace/demo-plugins/` | dev，验证"坏插件会被拒" | ❌ gitignored |
 
@@ -66,6 +67,7 @@
 - 注册表存的是**绝对路径**：`mv` 插件目录后必须重新 `plugin add`（旧路径指向空 → 插件 degraded/消失）
 - 插件建的表在 `plugin remove` 时**不清**（CLI 会列出"留下的表"，要清自己 DROP）
 - ❌ 不要把"只在本机生效的优化"写进 `platform/plugins/`（那是发布物）；❌ 也不要为了省事把 dev 调试插件放仓库根 `plugins/`（两边实例会用不同的插件集，排查时极难分辨）
+- **渠道（IM）永远是插件，且永远不在 `platform/` 里**：网关是 bundled 插件 `platform/plugins/im/`，渠道是非 bundle 插件（`plugins/channel-<type>/`）。新渠道不进入本仓库 —— 它只提供 `<id>.channel` service 到 `im.channel` namespace，平台零改动（见 `doc/architecture/pi-agent-server_im-gateway.md`）
 - 布局与命令见 `plugins/README.md` 与 `platform/.dev-data/plugins/README.md`；写插件前读 `pi-plugin-authoring` skill
 
 ### 打包态验证走 `packaged-test` skill（只在容器里测）
@@ -112,6 +114,7 @@ pnpm stop:server       # 停止（只 kill 3000 端口那一个 PID；停其他�
 | 后端（server / channels 后端 / packages / worker） | 重启 `dev:server`（`pnpm stop:server` → `pnpm dev:server`） |
 | web 前端（`apps/pi-agent-web/src/**`、`channels/*/src/admin/**`） | `pnpm build:web` → 浏览器刷新，无需重启 server |
 | ide 前端（`apps/pi-agent-ide/src/**`） | `pnpm build:ide` → IDEA 刷新 JCEF，无需重启 server |
+| 本机插件前端（仓库根 `plugins/<id>/web-src/**`） | `pnpm build:plugins:local` → `plugin reload <id>` → 浏览器刷新（平台只消费 `web/**` 产物，源码放 `web-src/`） |
 
 注意：
 
@@ -162,6 +165,7 @@ pi-agent-platform/                      仓库根
     ├── scripts/
     │   ├── build-cli.mjs                聚合 server/worker/plugins/channels/SPA → pi-server-X.Y.Z.tgz
     │   ├── build-plugins.mjs            bundled 插件 web facet（TS → 原生 ESM）
+    │   ├── build-local-plugins.mjs      本机插件 web-src 子项目（作者自带 build → web/）
     │   ├── check-packaged.mjs           打包静态自检（产物 / manifest / 说明符 / 未声明依赖 / 插件 skills）
     │   ├── verify-plugins.mts           插件装载面断言（10 个扩展点 / 零副作用 / 热加载 / 账本）
     │   ├── verify-sdk.mts               内核断言（sessions.ensure 三态 / 系统信封 / streamingBehavior）

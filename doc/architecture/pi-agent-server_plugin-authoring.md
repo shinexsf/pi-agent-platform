@@ -48,9 +48,14 @@ plugin-authoring/
 
 - `examples/hello-plugin` —— 最小集（server + web）
 - `examples/kitchen-sink` —— 四类 facet 全景 + `bus.declare` + `services.provide` + `actions.define`
+- `examples/channel-mock` —— **渠道插件**参考实现（`im.channel` namespace + `ImUplink`/`ChannelDriver` 形状 + 探针端点），
+  对应 `im-as-plugin` 之后的"新渠道不进入本仓库"这条边界
 
 `check-packaged.mjs` 断言 `dist/server/plugins/plugin-authoring/skills/**/SKILL.md` 与示例的 `package.json`
 都在 tarball 里（目录在、文件不在时打包照样成功，只有装完才发现 `available_skills` 是空的）。
+
+`SKILL.md` 里还有两节是新渠道 / 重型前端会用的：§4.3「插件之间怎么连（依赖倒置 + `plugin.loaded`）」与
+§4.4「web facet 想要 npm 依赖怎么办（服务端做重活 / `web-src` 子项目自带构建 / 相对模块）」。
 
 ## 后续
 

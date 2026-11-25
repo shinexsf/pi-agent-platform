@@ -85,8 +85,12 @@ export default {
     // 只登记路由、不占导航项（入口在别处，例如顶栏面板里的「查看全部」）
     host.ui.page({ path: '/im/all', label: 'IM', icon: 'chat', component: 'all', nav: false });
 
-    // R9 局部挂载点：槽位名只能取平台已定义的（当前仅 chat.rail.right）
+    // R9 局部挂载点（平台空间）：槽位名由平台定义（当前仅 chat.rail.right）
     host.ui.slot({ slot: 'chat.rail.right', id: 'my-panel', title: '我的面板', component: 'panel' });
+
+    // R9' 局部挂载点（插件空间）：你**自己当宿主**时定义的点位，别的插件往里注册
+    //     命名式样 <宿主插件id>.<区域>.<动作>；平台只校验形态，不要求你声明
+    host.ui.slot({ slot: 'im.channel.create', id: 'qq-create', title: 'QQ', component: 'create' });
 
     // R10 工具卡接管
     host.ui.toolCard({ tool: 'my_tool', mode: 'replace', entry: 'card' });
@@ -186,6 +190,40 @@ export function mount(el, host) {
 - 不得 import node 内建；不得写全局 CSS 选择器、不得 teleport 到 `el` 之外
 - 所有 DOM 落在 `el` 之内；边界两侧只交换普通 JSON / 回调 / DOM 节点
 - 想用框架可以自带运行时，但**不要 bundle 一份宿主已有的框架副本**（两边不共享实例）
+
+
+### 2.6 当宿主：怎么消费别人注册的槽位
+
+你的页面想把"某块区域"交给别的插件渲染时，不需要任何新 API：
+
+```js
+// ① server 侧：如果这块区域是你的，你只声明它属于你（可选，纯文档性）
+//    真正需要的是提供方注册 —— 那是别人的事
+
+// ② web 侧：拉全局扩展点 → 过滤你的槽位名 → 用注册项自带的 url 动态装载
+const exts = await (await fetch('/api/extensions')).json();
+const mine = (exts.surfaces ?? [])
+  .filter((s) => s.slot === 'im.channel.create')
+  .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+
+for (const s of mine) {
+  try {
+    const mod = await import(s.url);            // ← url 由服务端给，别自己拼 /plugins/<id>/web/...
+    const dispose = mod.mount(container, { done(), cancel(), fail(msg) {} });
+  } catch (err) {
+    container.textContent = `组件加载失败：${err.message}`;   // ← 一个提供方崩，不能把宿主页打白
+  }
+}
+```
+
+三条硬约定：
+
+1. **装载地址只用 `url`**：`/plugins/<id>/web/<file>.js` 这条规则只许存在于服务端
+2. **失败隔离**：`try/catch` + 区块内错误文案；其余区块照常
+3. **卸载归你**：离开页面 / 弹窗关闭 / `plugin reload` 后重拉时，调 `mount` 返回的清理函数
+
+槽位名两空间（平台空间闭合 / 插件空间 `<pluginId>.<name>`，`chat` 与 `__core__` 是保留前缀）见 `plugins-runtime.md`。
+
 
 ## 3. 宿主能力面（`host`）
 
@@ -335,8 +373,45 @@ const n = await host.services.call('notifications.unread', {});
 | 卸载是否干净 | `app.unmount()` 同步清 DOM | `root.unmount()` 同样可行，effect 清理仍靠自觉 |
 | 能否复用宿主组件 | ✅ 同框架 | ❌ 只能拿 DOM 或重写 |
 
-叠加两条既有约束 —— 宿主已发 Vue（复用 0 额外字节）、本机插件的 `web` facet 要求手写原生 ESM
-（无构建步骤）—— React 在这个场景只剩生态优势，而插件作者主要是本机用户与 agent，生态权重低。
+叠加两条既有约束 —— 宿主已发 Vue（复用 0 额外字节）、`web` facet 只收**编译产物**（浏览器没有 import map，
+也不给框架运行时）—— React 在这个场景只剩生态优势，而插件作者主要是本机用户与 agent，生态权重低。
+
+### web facet 与 npm 依赖
+
+server / worker / extension facet 跑在 Node 里，可以 `import` 任意 npm 包（`plugin add` 会装进插件目录）。
+**web facet 跑在浏览器**，平台只给一个 `import()` 的加载点、没有 import map，所以产物必须是**不含裸说明符的原生 ESM**
+（`plugin check` 会拦 `web-bare-specifier` / `web-node-builtin` / `web-cjs`）。
+
+三条路线：① 重活放服务端（推荐，例：二维码在渠道 server facet 渲染成 data URL）；② 作者自带构建把依赖内联；
+③ 同目录相对模块互相引用。**平台不提供 import map** —— 那会把第三方库版本塞进平台契约。
+
+### `web-src/` 子项目：需要 npm 依赖时的标准布局
+
+非 bundle 插件把前端源码放在插件目录的 `web-src/`（它有自己的 `package.json`），产物进 `web/`：
+
+```
+plugins/<id>/
+├── package.json          ← 只写 **server 侧**依赖（plugin add 会 npm install 到这里）
+├── server/index.js
+├── web-src/              ← 源码（TS / npm 依赖随你；不要往插件根 package.json 塞构建工具）
+│   ├── package.json      ← 必须有 "build" script，把产物写进 ../web/
+│   └── src/page.ts
+└── web/page.js           ← 产物（平台只认这里；`plugin check` 递归校验、拦裸说明符）
+```
+
+```bash
+pnpm build:plugins:local              # platform/ 下；= scripts/build-local-plugins.mjs
+pnpm build:plugins:local channel-qq   # 只编一个
+```
+
+约定只有一句「`web-src/package.json` 有 `build` script 且产物落到 `../web/`」，工具链随意（esbuild / vite / rollup）。
+**平台不替第三方插件编译**（bundled 插件才由 `build-plugins.mjs` 编）：否则 esbuild 会从 devDependency 变成运行时依赖，
+还要处理别人的 tsconfig / alias / target。
+
+两个必须知道的点：
+
+- 懒加载的嵌套产物**不带**入口的 `?v=<mtime>` → 大库文件名带版本（`vendor/echarts-5.5.0.js`）
+- `plugin add` 会在插件目录里 `npm install`，所以**构建依赖别写进插件根的 `package.json`**
 
 ## 4. 类型：vendored 文件，不走 npm
 

@@ -116,37 +116,48 @@ flowchart TB
 
 ### 主包代码（src/）零渠道字面量
 
-主包 `src/` 下 MUST NOT 出现以下字面量：
+主包 `src/` 下 MUST NOT 出现以下字面量（`change: im-as-plugin` 之后它们只会出现在插件里）：
 
-| 类别 | 禁现示例 |
-|---|---|
-| 渠道表名 | `channels_wechat`, `channels_qq`, `channels_qq_routes` |
-| 渠道字段 | `storage_dir`, `storageDir`, `app_secret`, `appSecret`, `group_openid`, `groupOpenid` |
-| 渠道 SDK | `@tencent-connect/qqbot-connector`, `@wechatbot/wechatbot`, `qq-bot-sdk`, `iLinkSDK` |
-| 渠道路由字面量 | `"/api/im/wechat"`, `"/api/im/qq"`（**不在主包 src/ 出现**；主包 im-gateway 用 `router.route(\`/${type}\`, r)` 运行时按 manifest 拼接，渠道包在 `register()` 时把前缀作为参数传入）|
+| 类别 | 禁现示例 | 现在在哪里 |
+|---|---|---|
+| 渠道表名 | `channels_wechat`, `channels_qq` | **已退役**（IM 不用表） |
+| 渠道字段 | `storage_dir`, `storageDir`, `app_secret`, `appSecret`, `group_openid` | `plugins/channel-{qq,wechat}/` |
+| 渠道 SDK | `qq-bot-sdk`, `@wechatbot/wechatbot`, `@tencent-connect/qqbot-connector` | 渠道插件的 `package.json` |
+| 渠道路由字面量 | `"/api/im/wechat"` | 插件路由 `/api/p/im/*`、`/api/p/channel-*/` |
+
+### 槽位名两空间，装载地址只由服务端生成
+
+- 槽位名 MUST 属于两空间之一：平台空间（闭合枚举 `chat.rail.right`）或插件空间（`<pluginId>.<name>`，`chat` / `__core__` 为保留前缀）
+- 插件空间 MUST 只校验形态：平台 MUST NOT 校验前缀插件是否存在、MUST NOT 要求宿主先声明
+- 插件空间槽位 MUST 进全局 `GET /api/extensions` 的 `surfaces`，每项 MUST 带服务端生成的 `url`
+- 消费方 MUST 用 `url` 装载，MUST NOT 自己拼 `/plugins/<id>/web/<file>.js`（否则规则存两份，平台改路径时坏在别人仓库里）
+- 宿主 MUST 隔离装载失败（一个提供方崩不连累宿主页），并 MUST 调 `mount` 返回的清理函数
+
+### web facet 只收编译产物
+
+- 插件 `web/**/*.js` MUST 是**能直接 `import()` 的 ESM**：无裸说明符、无 Node 内建、非 CJS（`plugin check` 递归校验）
+- 源码 MUST 放在插件根的 `web-src/`（或插件目录之外），MUST NOT 放在 `web/`（`web/` 下出现 `.ts` 直接判错）
+- 平台 MUST NOT 替非 bundled 插件编译：bundled 走 `build:plugins`；本机插件走 `build:plugins:local`（作者侧 `build` script）
+- 平台 MUST NOT 提供 import map：那会把第三方库版本塞进平台契约
 
 ### 主包 package.json 零 SDK 依赖
 
-- `apps/pi-agent-server/package.json` dependencies MUST NOT 包含任何 IM SDK
-- `apps/pi-agent-web/package.json` dependencies MUST NOT 包含任何 IM SDK
-- IM SDK 依赖只能在 `platform/channels/<type>/package.json`
+- `apps/pi-agent-server/package.json` / `apps/pi-agent-web/package.json` MUST NOT 包含任何 IM SDK，也 MUST NOT 依赖 `channel-types`
+- IM SDK 依赖只能在渠道插件自己的 `package.json`（`plugins/channel-<type>/`）
 
 ### 主包 db/init.ts 零渠道 DDL
 
-- `apps/pi-agent-server/src/db/init.ts` MUST NOT 包含 `CREATE TABLE channels_*` 语句
-- 渠道表完全由渠道包 register 时通过 `host.executeMigration()` 创建
+- `apps/pi-agent-server/src/db/init.ts` MUST NOT 包含 `CREATE TABLE channels_*`
+- IM 的连接信息与绑定都在**文件**里（渠道 `config.json` / 网关 `state.json`），不经数据库
 
-### 主包 routes 零渠道路由硬编码
+### 加新渠道零改平台
 
-- `apps/pi-agent-server/src/routes/` MUST NOT 有任何针对 `/api/im/<type>/*` 的硬编码路由
-- 渠道路由由渠道包通过 `host.registerRoutes(prefix, honoRouter)` 动态挂载
+加一个渠道（如 Slack）只需要：
 
-### 加新渠道零改主包
-
-加一个渠道包（如 Slack）需要改动的位置（验证清单）：
-- `platform/channels/channel-slack/` 新增目录
-- `platform/channels/manifest.json` `channels` 数组加 `"channel-slack"`
-- 主包任何文件（MUST NOT）改动
+- `plugins/channel-slack/` 新增目录（**非 bundle**，本机自用桶）
+- 它的 server facet 提供 `services.provide('channel-slack.channel', factory, { namespace: 'im.channel' })`
+- 可选 `web/` 页面挂在 `/im` 下（`ui.page({ parent: '/im' })`）
+- 平台任何文件（MUST NOT）改动；**新渠道不进入本仓库**（`platform/` 里不许出现第二个渠道实现）
 
 ## Debug / 可观测性
 

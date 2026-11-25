@@ -1,313 +1,207 @@
 # pi-agent-server im-gateway
 
-> IM 网关模块架构。允许用户通过 QQ / 微信等 IM 平台跟 agent 对话。
-> 状态:**已实施**（QQ + 微信真实收发 / 23 条 API / 重启恢复与附件实测通过）。
+> IM 网关（bundled 插件 `platform/plugins/im/`）+ 渠道插件（非 bundle）。允许用户通过 QQ / 微信 / 自定义渠道跟 agent 对话。
+> 状态：**已实施**（`change: im-as-plugin`）。真机验证（扫码登录 + 真实收发）由用户在装了插件的实例上做。
 
-## 系统全景图
+## 一句话边界
+
+**网关不认识任何具体渠道；渠道不认识 agent 与 session。** 两边只靠 `im.channel` 这个 namespace 上的一个 service 相连，
+provider 返回的 `ChannelDriver` 形状由 im 插件发布的协议包（`channel-api.ts`）约定 —— 平台对这两者一无所知。
+
+判据：把 `im` 插件 `enabled:false` 之后，平台仍能建 agent、开会话、聊完一轮（只是没有 IM 入口）。
+
+## 全景
 
 ```mermaid
 flowchart TB
-    subgraph Channels["渠道包(workspace 独立 package,后端 + 前端一体化)"]
-        WeChat["channel-wechat<br/>iLink ClawBot SDK<br/>(HTTP long-poll)"]
-        QQ["channel-qq<br/>qq-bot-sdk WS + connector QR<br/>(WebSocket)"]
-        Slack["channel-slack<br/>⏸️ 未来"]
+    subgraph Plugins["插件（server facet，同进程）"]
+        subgraph IM["platform/plugins/im（bundled 插件）"]
+            GW["gateway.ts<br/>连接注册表 / 会话绑定 / 订阅管理 / 过滤聚合"]
+            ST["state.ts<br/>&lt;dataDir&gt;/state.json<br/>原子写 + 单写队列"]
+            RT["routes.ts<br/>/connections /bindings /events(SSE)"]
+            ACT["actions: sendFile<br/>→ 工具 sendFileToUser"]
+            PAGE["web/gateway.ts<br/>IM 一级菜单 + 网关页"]
+        end
+        subgraph CH["plugins/channel-qq · channel-wechat · channel-probe（非 bundle）"]
+            AD["adapter：连接 / 收发"]
+            CFG["config.json（连接定义）<br/>state/（动态凭据）"]
+            CPAGE["web/channels.js<br/>二级页：新增 / 删除"]
+        end
     end
 
-    subgraph HostBE["pi-agent-server(后端主包,零渠道知识)"]
-        Loader["channel-loader.ts<br/>读 manifest + dynamic import"]
-        HostImpl["channel-host-impl.ts<br/>ChannelHost 实现"]
-        Map["session-channel-map.ts<br/>Map&lt;sessionId, ChannelCtx&gt;"]
-        Routing["routing.ts<br/>3 态决策 + /new"]
-        EnsSess["ensure-session.ts<br/>A/B/B2/C 四态共享绑定流"]
-        SessReg["services/session.ts<br/>SessionRegistry 单入口（跨模块）"]
-        Reply["reply-sender.ts<br/>订阅 message_end"]
-        Slash["slash-commands.ts（src/ 根）<br/>门级 /help /new /session /hotkeys"]
-        Routes["routes/im-gateway.ts<br/>/api/im/{manifest,health,channels}"]
+    subgraph Host["宿主面（内核）"]
+        H1["services.list({namespace})"]
+        H2["__core__.plugin.loaded / unloaded"]
+        H3["sessions.ensure / call / subscribe"]
+        H4["attachments.upload"]
+        H5["dataDir"]
+        H6["http.route（可返回 Response → SSE）"]
+        H7["ui.page({ parent })"]
     end
 
-    subgraph Shared["packages/channel-types(双 target)"]
-        I1["ChannelAdapter"]
-        I2["ChannelHost"]
-        I3["ChannelPackage"]
-        I4["ChannelAdminPage"]
-        I5["ChannelAdminHost"]
-    end
-
-    subgraph HostFE["pi-agent-web(前端主包,零渠道知识)"]
-        Glob["im-gateway/index.ts<br/>import.meta.glob"]
-        ChannelsView["views/im/ChannelsView.vue<br/>master-detail 布局"]
-        Wrappers["components/<br/>横切 wrapper 集合"]
-        TopNavOuter["components/TopNav.vue<br/>数据驱动"]
-    end
-
-    subgraph AdminUI["渠道 admin 页面(Vue,渠道包自带)"]
-        WeChatAdmin["WechatChannelsPage"]
-        QQAdmin["QqChannelsPage"]
-    end
-
-    subgraph WebCommon["web 包通用组件(横切)"]
-        TopNav["TopNav.vue<br/>数据驱动顶部菜单"]
-    end
-
-    subgraph Worker["worker(session-worker,MVP 不改)"]
-        SDK["pi SDK"]
-    end
-
-    WeChat --> Loader
-    QQ --> Loader
-    Loader --> HostImpl
-    HostImpl --> Map
-    HostImpl --> Routing
-    HostImpl --> EnsSess
-    Routing --> EnsSess
-    EnsSess --> SessReg
-    SessReg --> Worker
-    SendFileTool -->|IPC| SendFile
-    Worker -->|message_end| Reply
-    Reply --> HostImpl
-    Reply --> HostImpl
-    Slash --> SessReg
-    Routes --> HostImpl
-
-    Glob --> AdminUI
-    Layout --> Glob
-    AdminUI --> I4
-    Wrappers --> I5
-
-    Channels -.->|实现| I1
-    Channels -.->|实现| I3
-    AdminUI -.->|实现| I4
+    CH -- "services.provide('&lt;id&gt;.channel', …, { namespace:'im.channel' })" --> H1
+    H2 --> GW
+    GW -- "services.call(name, { uplink })" --> CH
+    GW --> H3
+    GW --> H4
+    GW --> ST
+    GW --> RT
+    GW --> ACT
+    IM --> PAGE
+    CH --> CPAGE
 ```
 
-## 核心思想
+## 契约（gateway ↔ 渠道）
 
-IM 网关是 **pi-agent-server 进程内模块**,但代码组织上完全 workspace package 化。每个渠道是独立的 npm package,主包(后端 + 前端)零 import 渠道实现,只通过 `channel-types` 共享包里的 5 个接口通信。
+依赖倒置：**只有网关调渠道**。因为插件装载无序，"渠道启动时去 call 网关"在网关后装载时必然 `unknown service`。
 
-**关键约束**:
-- **后端 + 前端共用一份 manifest**(`platform/channels/manifest.json`),加新渠道 = 加目录 + manifest 加一行,主包零改
-- **每个渠道包同时提供后端 adapter + 前端 admin 页面**(前后端一体)
-- **5 个接口调用方向严格区分**,无循环依赖(主包↔渠道包的"调用/被调用"关系清晰)
-- **横切关注(鉴权/token/i18n)在主包 wrapper**,子页面/子工具零感知
-- **SDK 依赖归渠道包**,主包 package.json 不添加任何 IM SDK
-
-## 5 个核心接口(调用方向严格区分)
-
-```
-主包(server) ──调──> ChannelAdapter       ←──实现── 渠道包(后端)
-渠道包(后端) ──调──> ChannelHost          ←──实现── 主包(server)
-主包(web) ──调──> ChannelAdminPage       ←──实现── 渠道包(前端)
-渠道包(前端) ──调──> ChannelAdminHost    ←──实现── 主包(web)
-渠道包(后端) export default ChannelPackage ←─import─ 主包(server)
-```
-
-物理位置:5 个接口都在 `platform/packages/channel-types/` 共享包(双 target:Node + DOM)。
-
-## 加载机制(后端 vs 前端不对称)
-
-| 层面 | 机制 | 原因 |
+| 方向 | 接口 | 实现方 |
 |---|---|---|
-| 后端(server) | `await import("@pi-agent-platform/${pkgName}")`(Node 运行时真动态) | Node runtime 支持 |
-| 前端(web) | `import.meta.glob("/channels/*/src/admin/index.ts")`(Vite 静态扫描)+ manifest 运行时过滤 | Rollup 构建期无法静态分析模板字符串 import |
+| 注册 | `services.provide('<pluginId>.channel', factory, { namespace: 'im.channel' })` | 渠道 |
+| 取驱动 | `services.call(entry.name, { uplink })` → `ChannelDriver` | 网关调用 |
+| 新增连接 | `uplink.declare({ id, label })` | 网关实现（渠道触发） |
+| 删除连接 | `uplink.retire(id)` | 网关实现（渠道触发） |
+| 上行 | `uplink.onInbound({ connectionId, chatId, userId?, text, attachments? })` | 网关实现 |
+| 状态 | `uplink.onStatus({ connectionId, status, error? })` | 网关实现 |
+| 连接 / 断开 | `driver.connect(id)` / `driver.disconnect(id)` | 渠道实现 |
+| 投递 | `driver.send(id, chatId, { text })` / `driver.sendFile?(id, chatId, { filePath, caption? })` | 渠道实现 |
 
-后端 + 前端**共用同一份** `platform/channels/manifest.json`。
+四条硬约定：
 
-## 数据模型(三张表 + 渠道自管 DDL)
+1. 渠道**不传 `agentId`**（连接 → agent 的映射只在网关 state）
+2. 渠道配置里**没有 `enabled`**（启停归网关，否则两个写者改同一个开关）
+3. `driver.apiVersion` 不符 → 网关只跳过该渠道并 warn
+4. 能力用**可选方法**表达（`driver.sendFile` 存在 = 支持发文件），不占额外 namespace
 
-| 表 | 归属 | 创建方式 |
-|---|---|---|
-| `agents` | 主包(server) | `db/init.ts` 初始化 |
-| `sessions` | 主包(server) | `db/init.ts` 初始化;新增 `source TEXT` 字段标记来源(web/ide/im) |
-| `channels_wechat` | 微信渠道包 | 渠道包 `register()` 时 `host.executeMigration('wechat_channels_v1', sql)` |
-| `channels_qq` | QQ 渠道包 | 渠道包 `register()` 时 `host.executeMigration('qq_channels_v1', sql)` |
-| `channels_qq_routes` | QQ 渠道包 | 同上 |
+## 装载顺序（无序 → 两条兜底）
 
-**主包零渠道 DDL**:主包 `db/init.ts` 只写主表 DDL,IM 渠道表完全由渠道包 register 时声明。
-
-## HTTP API(23 条 = 主包 5 + 微信 9 + QQ 9)
-
-```
-主包汇总(5 条):
-  GET  /api/im/manifest          ← 启用渠道列表(给前端)
-  GET  /api/im/health            ← 渠道包加载状态 + adapter 连接状态
-  GET  /api/im/channels          ← 跨 type channels 只读列表
-  GET  /api/im/debug/state       ← dev-only:内部状态快照(session map + adapters + QQ notified)
-  GET  /api/im/events            ← SSE:渠道日志实时流(dev+prod 都挂,admin 实时事件用)
-
-微信渠道(9 条,渠道包自挂 /api/im/wechat/*):
-  GET    /channels               ← 列出
-  POST   /channels               ← 创建
-  GET    /channels/:id           ← 详情
-  PATCH  /channels/:id           ← 修改
-  DELETE /channels/:id           ← 删除
-  POST   /qr-login               ← 创建 row + auto storageDir + 返回 channelId(不启动)
-  POST   /channels/:id/start-qr  ← 触发 SDK 扫码登录,经 SSE 推 qr-url / connected
-  POST   /channels/:id/start     ← 启动(复用 stored creds,失败 fallback 到 QR)
-  POST   /channels/:id/stop      ← 停止
-
-QQ 渠道(9 条,与微信同模板,渠道包自挂 /api/im/qq/*):
-  GET    /channels, POST /channels, GET /channels/:id, PATCH /channels/:id, DELETE /channels/:id
-  POST   /qr-login               ← 后续由 connector onCredentials 回调回填 appId/appSecret
-  POST   /channels/:id/start-qr  ← 启动 QR 流
-  POST   /channels/:id/start     ← 启动(已有 credentials)
-  POST   /channels/:id/stop      ← 停止
+```js
+// 网关侧
+bus.subscribe('__core__.plugin.loaded',   () => rescan());
+bus.subscribe('__core__.plugin.unloaded', () => rescan());
+rescan();   // 初始快照：services.list({ namespace: 'im.channel' })
 ```
 
-> **MVP 简化**:**bindings 4 条路由 MVP 不暴露**(群聊 / per-chat binding 推迟到下个 change)。QQ 渠道 MVP 只走"单 channel 单 agent"模式(用 `defaultAgentId`),不暴露 bindings 子表路由。完整 11+ 条在群聊支持时再加。
-
-> **斜杠命令分层**(2026-09-30):会话级命令（`/model` `/think` `/compact` `/name`）经 `Session.executeCommand(name, args, 'zh')` 单实现（IPC + Session 缓存 + 必要时落行；文本中文）；门级命令（`/new` `/session` `/help` `/hotkeys`——决定“用哪个会话”或纯展示）留本层 `slash-commands.ts`；非 builtin 仍 fallthrough 给 agent prompt。`POST /:id/command`（HTTP 面）同一 `executeCommand`（en 文案）→ worker 二级分发。
-
-## sendFileToWorker 工具（已实施）
-
-`sendFileToUser` 工具已实施，通过 Worker→Master 反向 IPC + pi SDK `customTools` 注入。
-
-**架构**：
-- Worker 端：`createSendFileToUserTool(sessionId, callMaster)` 通过闭包捕获 sessionId
-- 反向调用：worker `callMaster('sendFileToUser', args)` → master `handleReverseCall()` → handler 分发
-- Master handler：`channel-host-impl.ts` 注册，根据 sessionId 查 `SessionMeta` → adapter → `sendImage()`/`sendFile()`
-- IDE/Web session：返回 `{ ok: true }`（no-op）
-
-**默认工具注入**：`session.ts` 的 `createSession()` 调用 `createDefaultTools(sessionId, callMaster)` 返回 `ToolDefinition[]`，传给 `createAgentSession({ customTools })`。新增默认工具只需在 `tools.ts` 的 `createDefaultTools()` 数组中追加。
-
-**文件名处理**：agent 传 `fileName`（友好名称不含后缀），master 从实际文件取后缀拼接。
-
-**渠道实现**：
-- QQ：`c2cApi.postFile()` 上传 + `postMessage({ msg_type: 7, media: { file_info } })` 发送
-- WeChat：`this.bot.send(chatId, { image/file: data, fileName })`（已有真实实现）
-
-## reply-sender(消息回复机制)
-
-worker 端 `agent_end` event 不含回复文本(`delta` 是空 sentinel),实际文本在 `message_end`。reply-sender:
-1. **累积**`message_update` 事件(按 messageId 缓存)
-2. **触发**`message_end` 时取最终文本
-3. **关联**用 `messageId.parentId` 关联到 user prompt,保证多消息排队时回复顺序正确
-
-## 附件管道(adapter → store → prompt-resolver → worker)
-
-### 数据流
-```
-adapter 收到文件
-  → host.uploadAttachment(sessionId, bytes, mime, filename)
-  → attachmentStore.upsert → 写磁盘(uuid.ext) + INSERT DB(id, sha, filename)
-  → 返回 att_id
-  → adapter 拼 <file attId="..." type="..." name="..."> 到文本
-  → routing.ts → resolvePrompt(sessionId, text)
-    → 正则匹配 <file attId>
-    → attachmentStore.lookupForPrompt(sessionId, ids)
-    → 返回 { path, mimeType, originalFilename }
-  → worker:
-    ├── isImageMimeType → base64 (resizeImage 管线)
-    └── 非图片 → <file path="..." name="原始文件名" type="mimeType"></file>
-```
-
-### attachment-store
-- **存储布局**: `~/.pi-agent-server/attachments/<sessionId>/<uuid>.<ext>`
-- **文件名**: UUID 格式（`uuid.ext`），不使用 SHA（太长）
-- **内容寻址**: SHA-256 用于 dedup（同 session 同 sha 不重复写入）
-- **MIME 白名单**: 已移除，支持所有文件类型
-- **附件 ID**: `att_<uuid-no-dashes-12chars>`（如 `att_452a8fcc9e32`）
-- **DB 新增列**: `filename TEXT NOT NULL DEFAULT ''`（存磁盘文件名）
-
-### prompt-resolver.ts（独立模块）
-统一处理：斜杠命令检查 → `<file attId>` 标签解析 → agent config 加载 → streamingBehavior 判断。HTTP 和 IM 两端都调它。
-
-### worker 分流
-- 图片（png/jpeg/gif/webp）→ `resizeImage` → base64 → multimodal
-- 非图片 → `<file path name type></file>` → agent 用 read 工具读取
-
-## IM session 管理
-
-IM session 不再有独立的空闲超时机制（已删除 im-idle-scanner）。Worker 生命周期由 worker pool 统一管理。
-
-`session-channel-map` 仍维护 `Map<sessionId, SessionMeta>`（内容 `{ agentId, channelId, chatId, lastActiveAt }`），用于：
-- reply-sender 查找 adapter
-- 重启会话恢复（B2 fallback）
-- debug state 展示
-
-## 重启会话恢复（State B2 fallback）
-
-`session-channel-map` 是内存 Map，重启即丢失。`channels_qq.current_session_id` 存了 sessionId 但没存 chatId，`seedSessionFromConfig` 传 chatId=undefined 导致 map key 不匹配（`channelId+''` vs `channelId+openId`）。
-
-**解决方案**：`ensureSession` 四态（A/B/B2/C）收进 **`im-gateway/ensure-session.ts` 共享实现**，routing.ts 与 channel-host-impl.ts 两个薄壳委托（前者失败返 null，后者 throw；State C 统一 memory+DB 持久化——旧 host 版只写内存，附件流会话重启后 B2 会丢绑定）：
-```
-ensureSessionShared(channelId, chatId, agent, deps):
-  A. map 命中 + worker 活着 → 复用
-  B. map 命中 + worker 死了 → respawn（registry.getOrCreate）
-  B2. map 没命中 + cfg.currentSessionId 有值 + session 存在 → respawn + 绑定当前 chatId
-  C. 都不满足 → 创建新 session（createFromAgent + getOrCreate）+ 持久化绑定
-```
-
-**假设**：一个 bot 对一个用户（私聊场景）。多用户场景需重新设计（加 chatId 列或独立映射表）。
-
-## 关键决策
-
-| # | 决策 | 选择 |
-|---|---|---|
-| D1 | 进程位置 | 进程内模块,workspace package 化(渠道独立) |
-| D2 | 跟 worker 通信 | 直接调 IPC,不套 HTTP |
-| D3 | 数据库 | 共用 SQLite,渠道表自管 DDL,主包零渠道 SQL |
-| D4 | 接口设计 | 5 个接口,调用方向严格区分 |
-| D5 | 群路由 key | 用 `chat_id`(防 OpenClaw #10207 bug),不用 sender user id |
-| D6 | session 状态字段 | 放渠道表(`current_session_id`),不建独立映射表 |
-| D7 | sendFileToUser | worker 薄壳 + master 统一处理,闭包捕获 sessionId |
-| D8 | 渠道指令注入 | adapter 实现 `getSystemPromptContext(channelId, chatId)` 但路由层 **⏸️ MVP 未消费**(返回值未注入 `RuntimeConfig.appendSystemPrompt`)|
-| D9 | 斜杠命令分发 | gateway 层解析(builtin → worker 二级分发);**⏸️ per-route 自定义 MVP 未落地** |
-| D10 | 路由未命中 | 返回错误消息,不自动 binding |
-| D11 | HTTP API 路径 | 主包汇总 + 渠道包自挂(`/api/im/<type>/*`) |
-| D12 | 依赖归属 | SDK 归渠道包,主包零 SDK |
-| D13 | adapter 重连 | adapter 内部指数退避,1s → 5min |
-| D14 | manifest 加载 | server dynamic import + web `import.meta.glob` |
-| D15 | web 加载机制 | `import.meta.glob`(不用模板字符串 import) |
-| D16 | IM session timeout | 30 分钟,内存 Map,kill worker 留 row |
-| D17 | web 顶部菜单 | Agents / Sessions / QQ / WeChat Channel,数据驱动(meta.navLabel) |
-| D18 | prompt-resolver 位置 | 独立文件（`src/prompt-resolver.ts`） |
-| D19 | adapter 附件处理 | adapter 下载 + host.uploadAttachment + 占位符 |
-| D20 | attachment MIME | 移除白名单,支持所有类型 |
-| D21 | 非图片附件呈现 | `<file path>` 标签,agent 主动 read |
-| D22 | attachment ID 格式 | `att_<uuid-12hex>` |
-| D23 | 磁盘文件名 | UUID 格式(`uuid.ext`) |
-| D24 | 重启会话恢复 | ensureSession B2 fallback: cfg.currentSessionId → respawn |
-| D25 | QQ 原始文件名 | 用 QQ API 的 `att.filename` 字段 |
-
-## 子模块架构索引
-
-IM 网关的子能力**不另写架构文档**,通过 OpenSpec specs 维护(工作流产物已归档,不引用路径):
-
-| Capability | Spec |
+| 顺序 | 靠什么收敛 |
 |---|---|
-| 整体框架 + manifest 加载 | `im-gateway-overview` |
-| 5 个共享接口 | `channel-types-package` |
-| ChannelAdapter 实现规范 | `im-gateway-channel-adapter` |
-| worker pool 桥接 | `im-gateway-session-bridge` |
-| 路由 + 三态 + /new | `im-gateway-routing-policy` |
-| 微信渠道实现 | `wechat-channel` |
-| QQ 渠道实现 | `qq-channel` |
-| sendFileToWorker 工具 | **已实施**（反向 IPC + customTools 注入 + QQ/WeChat 真实发送） |
-| 渠道指令注入 | `channel-system-prompt-injection` |
-| 斜杠命令 | `chat-slash-commands` |
-| Web 管理 UI | `im-gateway-admin-ui` |
+| 渠道先 | 网关初始 `list()` 快照看得见 |
+| 网关先 | 渠道装载末尾内核发的 `plugin.loaded` 触发 rescan |
+| 同批 | 两条都触发 → 按 provider pluginId 幂等去重 |
 
-## 待决项
+事件是**插件级**（一个插件一条），不是每次 `services.provide` 一条 —— 否则装载期会炸出几十条。
 
-| 项 | 状态 | 说明 |
+## 状态文件（IM 不用表）
+
+`<host.dataDir>/state.json`：
+
+```jsonc
+{
+  "connections": {
+    "probe-1": {
+      "enabled": true,
+      "agentId": "…",
+      "defaultSessionId": "…",   // 可选：未单独绑定的聊天走它
+      "status": "connected",
+      "updatedAt": 0
+    }
+  },
+  "bindings": { "probe-1|chat-1": { "sessionId": "…", "updatedAt": 0 } }
+}
+```
+
+- **原子写**（`tmp` → `rename`）+ **单写队列**；只在状态变化时写盘（不记 `lastActiveAt`，否则每条消息都落盘）
+- 读失败 → 空状态 + warn（可见后果只是"下条消息开新会话"）
+- 绑定 key 是 `<connectionId>|<chatId>`：不同连接的同名 chatId 是两个人
+
+## 回复管线（过滤 + 聚合）
+
+`prompt` 是投递，答案只能从事件流里来。订阅后必须过滤，否则用户会收到垃圾：
+
+```
+用户发消息 → sessions.call(sid,'prompt') 立即返回
+   message_update "我"                ← 累积快照，不发
+   message_update "我查一下"           ← 累积快照，不发
+   message_end    (带 toolCalls)      ← 中间话，不发
+   tool_call / tool_result
+   message_update "根据文档…"          ← 累积快照，不发
+   message_end    (纯文本)            ← ★ 只发这一条
+   agent_end      (哨兵)
+```
+
+| 规则 | 不加会怎样 |
+|---|---|
+| 只处理 `role === 'assistant'` | 用户收到自己消息的回显 / 工具结果 |
+| 跳过带 `toolCalls` 的 `message_end` | 先收到"我查一下"再收到答案；短答案时看到两个 "ok" |
+| `message_update` 只累积、`message_end` 才发 | pi 的 update 是**累积快照不是增量**，当增量拼会重复；IM 也没有"编辑消息" |
+
+## 会话订阅的回收
+
+网关维护 `sessionId → 绑定的连接集合`。任一连接 `disconnected` / `error` 时重算：
+所有引用它的连接都不在线 → `dispose` 该 session 的订阅（释放投影器）；下条入站消息再订阅。
+
+`unknown` 不算下线（渠道刚接入、状态还没回来时释放会造成"刚订阅就退订"的抖动）。
+
+**网关不做 worker 回收**：30 分钟空闲回收已移除（历史上那条策略就不该在这里；内核只回收无 DB 行的 placeholder worker）。
+
+## 端点
+
+**网关 `/api/p/im/*`**（自家网关页调用；手写 `http.route`，不用 `actions.http` —— 那是 POST + 默认关 + 面向外部系统的）
+
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| `/bind` slash command | ⏸️ 留位置,未实现 | 当前未命中路由返回错误消息 + 提示用 /bind,MVP 管理员手动通过 API 加 binding |
-| typing indicator | ⏸️ 不做 | QQ / 微信 iLink 都支持,但 MVP 不调 |
-| 主动推送 | ⏸️ 不做 | 微信 iLink 协议限制 |
-| 微信群聊 | ⏸️ 不做 | iLink 协议尚未开放 |
-| 群消息队列 | ⏸️ 不做 | 非触发消息直接丢弃 |
-| 鉴权 | ⏸️ 上线前必补 | 当前裸奔,跟 server 现有状态一致 |
-| 限流 | ⏸️ 不做 | 后续加 middleware |
-| 多 agent 路由(同一 channel 多 chat 不同 agent) | ⏸️ 不做 | 当前单 channel 一 agent(微信)或 per-chat binding(QQ) |
-| 渠道指令注入(D8) | ⏸️ adapter 接口已实装 | `getSystemPromptContext` 返回值未注入到任何 prompt |
-| per-route 自定义斜杠命令(D9) | ⏸️ MVP 未落地 | 当前仅 builtin → worker 二级分发 |
-| `qq-bot-sdk` AGPL-3.0 商用评估 | ⏸️ 待办 | ChannelAdapter 抽象允许替换 |
-| `@wechatbot/wechatbot` 成熟度验证 | ⏸️ 待办 | 新包,需早期 spike |
+| GET | `/connections` | 聚合视图：渠道 + 连接 + 状态 + 绑定 + `canRemove` |
+| PATCH | `/connections/:id` | 启停 `{ enabled }` / 改 agent `{ agentId }` / 默认会话 `{ defaultSessionId }`（`null` = 清除） |
+| DELETE | `/connections/:id` | 删除连接：先 `driver.remove` 再 retire + 清绑定；渠道无该能力 → **409** |
+| GET | `/bindings` | 绑定列表（`?connectionId=` 过滤） |
+| DELETE | `/bindings/:connectionId/:chatId` | 解绑 |
+| GET | `/events` | **SSE**：渠道日志 + 状态（handler 返回标准 `Response`，平台原样透传） |
 
-## 相关决策
+**渠道 `/api/p/channel-qq/*`、`/api/p/channel-wechat/*`**：`GET|POST /connections`、`DELETE /connections/:id`、`POST|GET /qr-login/:id`。
+状态与日志统一由网关提供；渠道**不再有自己的页面**，新增流程做成 `im.channel.create` 槽位的 web 组件。
 
-- [`doc/architecture/pi-agent-server_overview.md`](pi-agent-server_overview.md) — 系统全景（IM 渠道已实施）
-- [`doc/architecture/pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) — worker pool 调度
-- [`doc/architecture/pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) — session 状态机
-- [`doc/architecture/pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) - 渠道表归渠道包(2 张,sessions.source 字段推迟)
-- [`doc/architecture/pi-agent-server_invariants.md`](pi-agent-server_invariants.md) — 架构 hard rules（含“主包零渠道知识”硬约束，见 `## IM 网关主包零渠道知识`）
-- OpenSpec change `im-gateway`（工作流产物已归档，不引用路径）— 提案 163 行 / 设计 955 行 16 个 D / 实施任务 65 个 / 调研笔记
+## 管理页（`/im`，挂在「配置」下）
+
+一个页面把"连接的生命周期"和"会话绑定"放在一起，按**提供方分组**，每组一张可整卡折叠的卡片。
+
+| 元素 | 谁渲染 | 为什么 |
+|---|---|---|
+| 渠道卡 header（徽标 / 名字 / 插件 id / 连接数 / 折叠 / `＋新增`） | 网关 | 各渠道视觉必须一致 |
+| 连接卡（状态点 / pill / agent 摘要 / 启用停用 / 删除） | 网关 | 启停是网关状态、agent 是网关概念、删除要渠道驱动能力 |
+| 会话 chips + `编辑会话` 弹窗（agent / 默认会话 / 每 chat 的会话 / 手动加 chat） | 网关 | 渠道不认识 agent/session |
+| **新增弹窗的内容** | **渠道（槽位 `im.channel.create`）** | 流程是渠道知识：QQ 扫码或手填凭据，微信只能扫码，未来可能是 OAuth |
+
+连接行上**只有启用/停用与删除** —— 没有"重新登录"：凭据过期由渠道自己重连或把状态转 `error`，要换凭据就删了重建。
+
+宿主装载槽位的方式（也是"插件当宿主"的参考实现）：拉 `GET /api/extensions` → 过滤 `slot === 'im.channel.create'` → 按 `order` 排 → `import(surface.url)` → `mount(modalBody, { done, cancel, fail })`。装载失败只让该弹窗显示错误，不影响页面。
+
+### 绑定语义：chat 绑定 → 连接默认会话 → 自动新建
+
+- **连接级默认会话**：未单独绑定的聊天直接进它 —— 第一次绑定不必"先发一条消息把会话创建出来"
+- 走默认会话前校验该会话属于当前 agent，不匹配则 warn + 降级自动新建
+- 命中默认会话后**落一条显式绑定**，以后改默认会话不会把已经进过的聊天悄悄改道
+- 换 agent 会清空该连接的全部绑定**与**默认会话（弹窗里二次确认）
+- 默认会话为空 = 行为与改造前完全一致
+
+### 渠道凭据目录
+
+渠道的登录态与凭据一律写 `<host.dataDir>/state/<connectionId>/`（插件专属数据目录）。用户不再自选目录 —— 打包态安装目录在 `dist/`，升级即覆盖。
+
+## 菜单
+
+- `/im` 由 im 插件声明：`ui.page({ path: '/im', label: 'IM', parent: '/config' })` → 导航里是「配置 › IM」
+- 路径保持 `/im`：插件页与内置路由冲突时**不抢**（`taken.has(path)` 就跳过），占 `/config/im` 会被将来的 `/config/:tab` 静默吃掉
+- 渠道**不再注册页面**（`parent: '/im'` 那套已退役）；渠道只注册 `im.channel.create` 槽位
+
+## 迁移与退役
+
+- 旧 `apps/pi-agent-server/src/im-gateway/**`、`platform/channels/**`、`packages/channel-types`、`channels/manifest.json`、
+  `/api/im/*`、web 端 `modules/im-gateway/**` 与 `import.meta.glob('channels/*')` **全部删除**
+- 旧 `channels_qq` / `channels_wechat` 表不再读写（一次性导出脚本见变更记录）
+- 新增渠道 = 写一个**非 bundle 插件**（`plugins/<name>/server/index.js` 提供 `im.channel` service + 可选 `web/` 页面），
+  不需要改平台任何代码
+
+## 验证（无真机也能验）
+
+`plugins/channel-probe/` 是假渠道（同一个本机桶，不发真实网络请求）：`/inject` 模拟收到消息、`/outbox` 看网关投递了什么、
+`/status` 模拟上下线、`/trace` 看 `declare/connect/disconnect/send` 调用序列。
+断言脚本 `test-workspace/channel-probe/assert.sh` 覆盖 19 条：只发一条、流式不重复、附件落盘、断线释放订阅后恢复、启停、绑定持久化等。
