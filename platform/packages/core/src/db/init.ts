@@ -68,6 +68,9 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       id TEXT NOT NULL,
       mime_type TEXT NOT NULL,
       original_filename TEXT NOT NULL DEFAULT '',
+      -- 磁盘实际文件名（uuid.ext）。drizzle schema 一直有，建表语句曾漏掉：
+      -- 新建库上传附件会报 no such column: filename（2026-11-25 修）。
+      filename TEXT NOT NULL DEFAULT '',
       size_bytes INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, sha)
