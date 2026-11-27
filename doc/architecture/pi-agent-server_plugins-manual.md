@@ -229,7 +229,7 @@ for (const s of mine) {
 
 | 面 | 能用在哪 | 方法 |
 |---|---|---|
-| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` · **`ensure({ agentId, sessionId?, title? })`** · **`systemEvent({ sessionId, kind, instruction, data? })`** · 管理：`detail(id)` · `find(filter)` · `update(id, patch)` · `restart(id)` |
+| `sessions` | 全部 | `call(会话, 方法, 参数?)` · `get` · `list` · `status` · `hasRow` · `subscribe(会话, fn)` · **`ensure({ agentId, sessionId?, title? })`** · **`systemEvent({ sessionId, kind, instruction, data? })`** · 管理：`detail(id)` · `find(filter)` · `update(id, patch)` · `restart(id)` · **树与 fork：`tree(id)` · `navigate(id, entryId, { expectedLeafId? })` · `fork(id, { entryId?, position?, model?, thinkingLevel?, title? })`** |
 | `agents` | 全部 | `list` · `get` · `update(id, patch)` |
 | `db` | 全部 | `migrate(name, ddl)` · `query(sql, params?)`（读写都开放，走审计日志） |
 | `lifecycle` | 全部 | `onSessionCreated(fn)` · `onSessionDisposed(fn)` · `runtime()`（运行态快照：版本/uptime/端口/池统计，**纯数据不是句柄**） |
@@ -245,6 +245,7 @@ for (const s of mine) {
 - 每个注册 / 订阅都返回**退订函数**（平台卸载时也会统一撤，但你自己的资源要自己清）
 - `sessions.call` 是唯一调用口：`prompt` / `abort` 这类平台方法与插件正向方法形状相同；**`sessionId` 永远由你给**（平台不提供"选会话"）
 - `sessions.ensure` 是"取一个可用会话"（新建 / 懒恢复 / 目标无效抛错），`sessions.systemEvent` 是"把一条非用户消息交给会话"（信封由**内核**拼，你不要自己拼 `<system-event>`）
+- `sessions.tree` / `navigate` / `fork` 与 HTTP 路由**同一份实现**，所以失败语义也一致：`navigate` 在流式中抛错、`fork` 在"分叉点之前没有对话"时抛错。三者都跨 worker（leaf 只在 pi 内存里）与 DB（fork 建行 + 血缘 + 附件），**不要自己拼**
 - 除 `db.migrate` 建表之外，别碰平台表
 - **工具与 skill 不需要"注册到某个 agent"**：插件对该会话生效，它们就自动注入；插件的 `server` / `web` facet 是全局的，不受 agent 开关影响
 

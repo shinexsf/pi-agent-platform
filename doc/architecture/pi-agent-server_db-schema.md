@@ -85,6 +85,10 @@ CREATE TABLE sessions (
   status                TEXT    NOT NULL CHECK (status IN ('active', 'archived')),
   title                 TEXT,
 
+  -- 血缘（会话树 fork；顶层会话两列皆 NULL）
+  parent_session_id     TEXT,                 -- 分叉来源的会话行 id
+  forked_from_entry_id  TEXT,                 -- 分叉点 entry id（pi 的 entry id 在 fork 后保留）
+
   created_at            INTEGER NOT NULL,
   last_active_at        INTEGER NOT NULL
 );
@@ -92,6 +96,7 @@ CREATE TABLE sessions (
 CREATE INDEX idx_sessions_agent_id       ON sessions(agent_id);
 CREATE INDEX idx_sessions_status         ON sessions(status);
 CREATE INDEX idx_sessions_last_active_at ON sessions(last_active_at);
+CREATE INDEX idx_sessions_parent         ON sessions(parent_session_id);
 ```
 
 ## AgentConfig 接口

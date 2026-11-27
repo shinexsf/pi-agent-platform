@@ -355,3 +355,9 @@ IM 网关的细节详见 [`pi-agent-server_im-gateway.md`](pi-agent-server_im-ga
 - [`pi-agent-server_db-schema.md`](pi-agent-server_db-schema.md) —— sessions 表字段
 - [`pi-agent-server_http-api.md`](pi-agent-server_http-api.md) —— 端点定义
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— setModel 等调用的实现
+
+## 相关
+
+- **会话树（分支导航 / fork / 血缘）**：见 [`pi-agent-server_session-tree.md`](pi-agent-server_session-tree.md)。
+  要点：`leaf` 只在 pi 内存里（平台不缓存、不落库）；切分支在同一文件内移动 leaf；
+  fork 抽出一条路径成**新会话**（冷会话，不启 worker）。

@@ -356,3 +356,19 @@ sequenceDiagram
 - [`pi-agent-server_session-lifecycle.md`](pi-agent-server_session-lifecycle.md) —— session 两阶段创建 + 占位 spawn worker
 - [`pi-agent-server_worker-pool.md`](pi-agent-server_worker-pool.md) —— 进程域边界 + LRU + hasRowQuery 注入
 - [`pi-agent-server_ipc.md`](pi-agent-server_ipc.md) —— SSE event 来源
+
+## 会话树与 fork（2026-11-25，2026-11-27 收窄）
+
+> 读树的端点（`GET /api/sessions/:id/tree`）**已移除**：树的可视化搬进本机插件 `session-tree`，
+> 平台只保留下面两个页面级动作（回退一句 / 分叉一次）。内核与插件面（`host.sessions.tree`）不变。
+
+| 端点 | 语义 |
+|---|---|
+| `POST /api/sessions/:id/tree/navigate` | 在同一会话文件内移动 leaf（pi 的 `/tree`）。body `{ entryId, expectedLeafId? }`；流式中 → 409 `session_busy`；`expectedLeafId` 不匹配 → 409 `leaf_mismatch`（带当前 leaf） |
+| `POST /api/sessions/:id/fork` | 抽出一条路径成新会话。body `{ entryId?, position?, model?, thinkingLevel?, title? }`；错误码 400 `invalid_entry_for_position` / 409 `fork_has_no_conversation` / 409 `source_not_persisted` / 404 `entry_not_found` |
+
+SSE 新增具名事件 **`session_branch`**：`{ leafId, oldLeafId, reason: 'navigate' | 'worker-gone' }`。
+宿主合成（pi 的 `session_tree` 只发给扩展）；客户端收到就重拉 `/messages`。
+
+> web 的 SSE 走 SharedWorker，`workers/sseShared.worker.ts` 的 `SESSION_EVENTS` 是白名单 ——
+> 新增具名事件必须同步加进去，否则共享连接模式下会被静默丢弃。
