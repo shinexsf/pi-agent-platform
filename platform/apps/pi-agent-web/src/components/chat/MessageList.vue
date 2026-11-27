@@ -14,12 +14,16 @@ const props = defineProps<{
   loadingOlder?: boolean
   /** Live auto-retry progress (pi `auto_retry_*`); null when no retry in flight. */
   retrying?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage?: string } | null
+  /** 流式中 / 正在回退时禁用「回到这里」（pi 在跑一轮时拒绝导航）。 */
+  rewindDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
   retry: [userMessageText: string, agentId: string]
   dismissError: [messageId: string]
   loadOlder: []
+  /** 回到某条用户消息输入之前那一刻。 */
+  rewind: [entryId: string]
 }>()
 
 /**
@@ -260,6 +264,8 @@ watch(
           @retry="(text: string, agentId: string) => emit('retry', text, agentId)"
           @retry-last="retryLast"
           @dismiss-error="(id: string) => emit('dismissError', id)"
+          :rewind-disabled="rewindDisabled"
+          @rewind="(entryId: string) => emit('rewind', entryId)"
         />
         <!-- Auto-retry banner: the run is still alive, so this is progress, not an error. -->
         <div v-if="retrying" class="retry-banner">

@@ -128,6 +128,12 @@ async function openSession(session: SessionDTO) {
   window.open(url, '_blank');
 }
 
+/** 父会话标题（列表里直接显示血缘来源；找不到就退化成 id 前缀）。 */
+function parentTitle(parentId: string): string {
+  const parent = sessions.value.find((s) => s.id === parentId)
+  return parent?.title || parentId.slice(0, 8)
+}
+
 async function deleteSession(session: SessionDTO) {
   const confirmed = await confirmDelete('Session', session.title || session.id.slice(0, 8));
   if (!confirmed) return;
@@ -319,7 +325,19 @@ onMounted(() => load());
           <div class="session-row-main" @click="router.push(`/sessions/${session.id}`)">
             <span class="resource-avatar session-avatar"><AppIcon name="sessions" :size="16" /></span>
             <div class="session-info">
-              <span class="session-title">{{ session.title || `Session ${session.id.slice(0, 8)}` }}</span>
+              <span class="session-title">
+                {{ session.title || `Session ${session.id.slice(0, 8)}` }}
+                <!-- 血缘（change: session-tree-and-fork）：分叉出来的会话标明来源 -->
+                <button
+                  v-if="session.parentSessionId"
+                  class="lineage-chip"
+                  type="button"
+                  :title="`分叉自 ${parentTitle(session.parentSessionId)} · 节点 ${session.forkedFromEntryId?.slice(0, 8) ?? '?'}`"
+                  @click.stop="router.push(`/sessions/${session.parentSessionId}`)"
+                >
+                  分叉自 {{ parentTitle(session.parentSessionId) }}
+                </button>
+              </span>
               <span class="session-meta truncate">
                 {{ agentName(session.agentId) }} · {{ session.model }}
                 <span class="session-dot">·</span>
@@ -389,6 +407,19 @@ onMounted(() => load());
 </template>
 
 <style scoped>
+/* 血缘 chip（change: session-tree-and-fork）：分叉出来的会话在标题旁标明来源 */
+.lineage-chip {
+  margin-left: 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.lineage-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
 .filter-clear {
   display: grid;
   width: 18px;

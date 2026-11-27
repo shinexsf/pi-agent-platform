@@ -7,18 +7,28 @@ import { resolveToolBlock } from './tool-blocks'
 import PluginToolCard from './tool-blocks/PluginToolCard.vue'
 import { ruleFor } from './tool-blocks/pluginToolCards'
 
-const props = defineProps<{ message: MessageDTO; agentId?: string; fileAttachments?: Array<{ attId: string; name: string; type: string }> }>()
+const props = defineProps<{
+  message: MessageDTO
+  agentId?: string
+  fileAttachments?: Array<{ attId: string; name: string; type: string }>
+  /** 流式中 / 正在回退时禁用「回到这里」（pi 在跑一轮时拒绝导航）。 */
+  rewindDisabled?: boolean
+}>()
 const emit = defineEmits<{
   retry: [userMessageText: string, agentId: string]
   /** Retry the last user message — emitted by the inline provider-failure card,
    *  which does not know the preceding user text itself (siblings are MessageList's). */
   retryLast: []
   dismissError: [messageId: string]
+  /** 回到这条用户消息输入之前的那一刻（pi `/tree` 的 user-message 语义）。 */
+  rewind: [entryId: string]
 }>()
 
 const isUser = computed(() => props.message.role === 'user')
 const isError = computed(() => props.message.role === 'error')
 const showCopyBtn = ref(false)
+/** user 消息的悬停操作（回到这里）显示位。 */
+const showUserActions = ref(false)
 
 // ── Provider/API failure rendering ──
 // pi reports a failed provider call as a normal assistant message with
@@ -214,7 +224,17 @@ async function downloadFile(attId: string, fileName: string) {
   -->
 
   <!-- User 消息 -->
-  <div v-if="isUser" class="message-user">
+  <div v-if="isUser" class="message-user" @mouseenter="showUserActions = true" @mouseleave="showUserActions = false">
+    <!-- 悬停操作：回到这条消息输入之前那一刻（leaf 回退 + 文本回填输入框） -->
+    <button
+      v-show="showUserActions && !rewindDisabled"
+      class="message-rewind-btn"
+      type="button"
+      title="回到这里：撤销这之后的内容，把这句话放回输入框"
+      @click="emit('rewind', message.id)"
+    >
+      ↺ 回到这里
+    </button>
     <div class="message-user-bubble">
       <span class="message-user-text">{{ userDisplayContent }}</span>
       <!-- Render image attachments below the user bubble.
@@ -353,6 +373,26 @@ async function downloadFile(attId: string, fileName: string) {
      its content is typically one logical unit the user wants to scan as a
      block. */
   padding: 8px 0 12px;
+}
+
+.message-rewind-btn {
+  align-self: center;
+  margin-right: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.message-rewind-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .message-user-bubble {

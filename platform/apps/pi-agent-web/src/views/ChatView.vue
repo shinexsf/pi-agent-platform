@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSSE } from '../composables/useSSE'
 import { useTheme } from '../composables/useTheme'
@@ -37,6 +37,27 @@ const { theme, toggle: toggleTheme } = useTheme()
  * never hides the stop button while the worker is actually running.
  */
 const isRunning = computed(() => sse.run.running.value || sse.sending.value)
+
+/**
+ * 分支面板「改这句重发」回填的文本（change: session-tree-and-fork, 6.3）。
+ * pi 的 `/tree` 语义：选中 user 消息 → leaf 挪到它的 parent + 文本回填输入框，
+ * 用户改完发送就形成新分支。这里只负责把文本送进 InputBox 的草稿。
+ */
+const pendingEditorText = ref('')
+
+/**
+ * 跳到另一个会话（fork 之后用）。
+ *
+ * 用整页跳转而不是 `router.push`：ChatView 的 `sessionId` / `useSSE` 是**初始化时**
+ * 从路由取的（本组件不支持同一实例内换会话），push 会把旧会话的标题、消息、SSE
+ * 订阅一起带过去 —— 表现为"新会话显示的是旧会话内容"。分叉是低频操作，整页加载
+ * 换来的是状态绝对干净。
+ */
+function gotoSession(newSessionId: string): void {
+  closeDrawer()
+  const qs = agentId.value ? `?agentId=${encodeURIComponent(agentId.value)}` : ''
+  window.location.assign(`/web/chat/${newSessionId}${qs}`)
+}
 
 // User-attachment handler
 const attachments = useAttachments(
@@ -246,6 +267,116 @@ function cancelEditTitle() {
   isEditingTitle.value = false
 }
 
+// ── 会话页顶栏右侧菜单（⋯）────────────────────────────────────────────────
+//
+// **这是扩展点**：平台自己的项（分叉 / 关闭会话）和一个"未来由插件追加"的项
+// 共用同一个数组。以后要开放给插件只需求把 `headerMenuItems` 里追加的动作换成
+// 从 `plugins/host` 读到的动作声明（`listHeaderMenuActions()` 之类），模板不用动。
+const headerMenuOpen = ref(false)
+
+/** fork 失败时的提示（不打断页面，就地显示）。 */
+const headerMenuError = ref('')
+const forking = ref(false)
+
+async function forkCurrent(): Promise<void> {
+  headerMenuError.value = ''
+  forking.value = true
+  try {
+    // 不带 entryId = clone：从当前 leaf 整条路径复制成新会话（fail-closed）
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/fork`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string; id?: string; sessionId?: string }
+    const newId = body.id ?? body.sessionId
+    if (!res.ok || !newId) {
+      headerMenuError.value =
+        body.code === 'fork_has_no_conversation' ? '这个会话还没有对话内容，无法分叉' : (body.error ?? `分叉失败 (${res.status})`)
+      return
+    }
+    headerMenuOpen.value = false
+    gotoSession(newId)
+  } catch (err) {
+    headerMenuError.value = `分叉失败：${(err as Error).message}`
+  } finally {
+    forking.value = false
+  }
+}
+
+/**
+ * 回退：把 leaf 挪回到某条 user 消息**输入之前**那一刻，并把它的文本放回输入框。
+ *
+ * pi 的语义（`navigateTree(userMessage)`）：`newLeaf = target.parentId` +
+ * `editorText = 文本`，用户改完发送就形成新分支。这是树能力里唯一保留到页面上的
+ * 功能 —— 不做任意节点跳转。
+ */
+const rewinding = ref(false)
+
+async function rewindTo(entryId: string): Promise<void> {
+  if (isRunning.value || rewinding.value) return
+  rewinding.value = true
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId.value)}/tree/navigate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ entryId }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string; editorText?: string }
+    if (!res.ok) {
+      console.warn('[rewind] failed', body.code, body.error)
+      return
+    }
+    // 历史由 `session_branch` 事件重载（导航成功宿主会广播），这里只负责回填草稿。
+    // 先清空再赋值：InputBox 是 `watch(draft)`，两次回到同一句话（文本相同）时
+    // 值没变 → watcher 不触发 → 输入框看起来"没反应"。
+    if (body.editorText) {
+      pendingEditorText.value = ''
+      await nextTick()
+      pendingEditorText.value = body.editorText
+    }
+  } catch (err) {
+    console.warn('[rewind] failed', err)
+  } finally {
+    rewinding.value = false
+  }
+}
+
+/**
+ * 插件想把文本塞进输入框时发这个事件（如 session-tree 面板的「回到这句」）。
+ *
+ * 插件拿不到输入框，宿主目前也没有给"写草稿"的宿主 API —— 先走一个约定事件，
+ * 等哪天开正式 API（`host.chat.setDraft`）再换掉这里。
+ */
+/**
+ * 会话内容/分支变化 → 通知插件（如 session-tree 面板要重读树）。
+ *
+ * 插件拿不到宿主 SSE，也没有"订阅会话事件"的宿主 API —— 先走约定事件；
+ * 面板据此重载，避免"发了新消息但图还停在旧状态"。
+ */
+let chatChangedTimer: ReturnType<typeof setTimeout> | null = null
+
+function notifyPluginsChatChanged(): void {
+  if (chatChangedTimer) clearTimeout(chatChangedTimer)
+  chatChangedTimer = setTimeout(() => {
+    chatChangedTimer = null
+    window.dispatchEvent(new CustomEvent('pi:chat-changed'))
+  }, 300)
+}
+
+function onEditorDraftEvent(ev: Event): void {
+  const text = (ev as CustomEvent<{ text?: unknown }>).detail?.text
+  if (typeof text === 'string' && text) pendingEditorText.value = text
+}
+
+/** 点菜单外面收起（挂 window 监听，模板里不塞遮罩层）。 */
+function onDocClick(ev: MouseEvent): void {
+  if (!headerMenuOpen.value) return
+  const el = ev.target as HTMLElement | null
+  if (el?.closest('.header-menu-wrap')) return
+  headerMenuOpen.value = false
+}
+
 // 关闭session
 async function closeSession() {
   if (!confirm('确定要关闭这个会话吗？Worker将被停止。')) {
@@ -273,7 +404,14 @@ async function handleSend(
   await sse.send(agentId.value, message, attachedImages)
 }
 
+watch(
+  [() => sse.branchRevision.value, () => sse.messages.value.length],
+  () => notifyPluginsChatChanged(),
+)
+
 onMounted(async () => {
+  window.addEventListener('click', onDocClick)
+  window.addEventListener('pi:editor-draft', onEditorDraftEvent)
   void loadRailPlugins()
   await loadSessionInfo()
   sse.subscribe()
@@ -283,6 +421,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (chatChangedTimer) clearTimeout(chatChangedTimer)
+  window.removeEventListener('click', onDocClick)
+  window.removeEventListener('pi:editor-draft', onEditorDraftEvent)
   sse.unsubscribe()
 })
 </script>
@@ -349,12 +490,41 @@ onUnmounted(() => {
         </button>
         <!-- 连接状态 -->
         <span :class="['status-dot', sse.connected.value ? 'connected' : 'disconnected']"></span>
-        <!-- 关闭按钮 -->
-        <button class="close-btn" title="关闭会话" @click="closeSession">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <!-- 会话动作菜单（⋯）：分叉 / 关闭会话 —— 以后插件也往这里追加项 -->
+        <div class="header-menu-wrap">
+          <button
+            class="close-btn"
+            type="button"
+            title="更多操作"
+            :aria-expanded="headerMenuOpen"
+            @click.stop="headerMenuOpen = !headerMenuOpen"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <circle cx="5" cy="12" r="1.7" />
+              <circle cx="12" cy="12" r="1.7" />
+              <circle cx="19" cy="12" r="1.7" />
+            </svg>
+          </button>
+          <div v-if="headerMenuOpen" class="header-menu" role="menu">
+            <button class="header-menu-item" type="button" role="menuitem" :disabled="forking" @click="forkCurrent">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="6" cy="6" r="2" />
+                <circle cx="6" cy="18" r="2" />
+                <circle cx="18" cy="12" r="2" />
+                <path d="M6 8v8" />
+                <path d="M8 6h4a4 4 0 0 1 4 4v0" />
+              </svg>
+              <span>{{ forking ? '分叉中…' : '分叉' }}</span>
+            </button>
+            <button class="header-menu-item danger" type="button" role="menuitem" @click="closeSession">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+              <span>关闭会话</span>
+            </button>
+            <div v-if="headerMenuError" class="header-menu-error">{{ headerMenuError }}</div>
+          </div>
+        </div>
       </div>
      </div>
     </header>
@@ -521,6 +691,8 @@ onUnmounted(() => {
         :agent-id="agentId"
         :file-attachments-by-msg="sse.fileAttachmentsByMsg.value"
         :has-more="sse.historyHasMore.value"
+        :rewind-disabled="isRunning || rewinding"
+        @rewind="rewindTo"
         :loading-older="sse.loadingOlder.value"
         :retrying="sse.retryStatus.value"
         @load-older="sse.loadOlder"
@@ -538,6 +710,7 @@ onUnmounted(() => {
           :disabled="!sse.connected.value"
           :sending="isRunning"
           :usage="lastUsage"
+          :draft="pendingEditorText"
           :attachments-uploader="attachments"
           @send="handleSend"
           @abort="sse.abort"
@@ -589,25 +762,6 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-}
-
-.theme-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.theme-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
 }
 
 /* 会话内容区 —— 全宽（不再限宽居中）：滚动条属于窗口，紧贴右缘。
@@ -948,8 +1102,84 @@ onUnmounted(() => {
 }
 
 .close-btn:hover {
-  background: var(--danger-soft, #fee2e2);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.theme-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ── 顶栏动作菜单（⋯）────────────────────────────────────────────────── */
+.header-menu-wrap {
+  position: relative;
+}
+
+.header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised, 0 10px 28px rgb(0 0 0 / 0.18));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.header-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.header-menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.header-menu-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.header-menu-item.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.header-menu-error {
+  padding: 6px 9px 4px;
   color: var(--danger, #ef4444);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 768px) {

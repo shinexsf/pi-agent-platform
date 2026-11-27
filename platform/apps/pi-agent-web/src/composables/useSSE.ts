@@ -489,6 +489,31 @@ export function useSSE(options: UseSSEOptions) {
       }
     })
 
+    /**
+     * 分支变化（宿主合成）：所有订阅者都要重载历史。
+     *
+     * pi 的 `session_tree` 只发给扩展，订阅者收不到；宿主在"导航成功"和
+     * "worker 消失"两种情况下自己发这条。客户端只做一件事：重新拉一次历史
+     * （事件本身不带消息列表，避免两条真相）。
+     */
+    eventSource.addEventListener('session_branch', (e) => {
+      try {
+        const payload = JSON.parse((e as MessageEvent).data) as {
+          leafId?: string | null
+          oldLeafId?: string | null
+          reason?: 'navigate' | 'worker-gone'
+        }
+        console.info('[SSE] session_branch', payload.reason, payload.leafId, '→ reload history')
+        branchRevision.value += 1
+        lastBranchChange.value = payload
+        // worker 消失：这一轮不可能还在跑，清掉 sending 免得输入框一直转。
+        if (payload.reason === 'worker-gone') sending.value = false
+        void loadHistory()
+      } catch (err) {
+        console.warn('[SSE] failed to parse session_branch:', err)
+      }
+    })
+
     eventSource.addEventListener('agent_end', () => {
       sending.value = false
       // Refresh context so the InputBox's context-usage ring shows the new
@@ -584,6 +609,10 @@ export function useSSE(options: UseSSEOptions) {
 
   // ---------- history paging (change: session-streaming-runtime, group 10) ----------
   /** Cursor for the next (older) page; `null` when the first page is everything. */
+  /** 每次收到 `session_branch` 自增：树面板据此刷新（历史由 loadHistory 自己重载）。 */
+  const branchRevision = ref(0)
+  /** 最近一次分支变化载荷（树面板/滚动策略可读）。 */
+  const lastBranchChange = ref<{ leafId?: string | null; oldLeafId?: string | null; reason?: string } | null>(null)
   const historyCursor = ref<number | null>(null)
   const historyHasMore = ref(false)
   const loadingOlder = ref(false)
@@ -937,6 +966,9 @@ export function useSSE(options: UseSSEOptions) {
     retryStatus,
     historyHasMore,
     loadingOlder,
+    /** 分支变化序号 / 载荷（树面板用）。 */
+    branchRevision,
+    lastBranchChange,
     // methods
     subscribe,
     unsubscribe,

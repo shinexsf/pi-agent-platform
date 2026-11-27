@@ -412,6 +412,18 @@ function workerUptime(ms: number): string {
               <div class="sd-readonly mono">{{ session.piSessionPath }}</div>
             </div>
 
+            <!-- 血缘（change: session-tree-and-fork）：只有分叉出来的会话才有 -->
+            <div v-if="session.parentSessionId" class="sd-field sd-field-span-2">
+              <span class="sd-label">来源</span>
+              <div class="sd-readonly">
+                分叉自
+                <router-link :to="`/sessions/${session.parentSessionId}`" class="mono">
+                  {{ session.parentSessionId }}
+                </router-link>
+                <span class="mono"> · 节点 {{ session.forkedFromEntryId?.slice(0, 8) ?? '—' }}</span>
+              </div>
+            </div>
+
             <div class="sd-field">
               <span class="sd-label">Model</span>
               <template v-if="isView">

@@ -19,7 +19,7 @@
  *   - on send(): emit text (with markers) + cache snapshot
  */
 
-import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
 import type { SlashCommand, ModelInfo } from '../../composables/useSSE'
 import { useSSE } from '../../composables/useSSE'
 import type { MessageUsageDTO } from '@pi-agent-platform/shared-types'
@@ -55,6 +55,11 @@ const props = defineProps<{
    * history replay carries no usage, so the chip simply does not exist there.
    */
   usage?: MessageUsageDTO | null
+  /**
+   * 外部草稿（change: session-tree-and-fork）。分支面板「改这句重发」把文本塞进来，
+   * 用户改完再发 —— 这就是 pi `/tree` 的语义（leaf 已挪到该消息的 parent）。
+   */
+  draft?: string
   /** Per-tab attachment handler injected by App.vue (Option A — cache 直传). */
   attachmentsUploader: {
     uploadImage: (file: File) => Promise<UploadedAttachment | null>
@@ -411,6 +416,23 @@ function onGlobalClick(e: MouseEvent) {
 // up text + lose the size cap); the pill above is the visual representation,
 // the marker is the protocol handle.
 const input = ref('')
+
+// 外部草稿 → 输入框（并聚焦）。用 watch 而不是初始值：面板是异步回填的。
+watch(
+  () => props.draft,
+  (text) => {
+    if (!text) return
+    input.value = text
+    nextTick(() => {
+      const el = textareaEl.value
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(text.length, text.length)
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    })
+  },
+)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const wrapperEl = ref<HTMLElement | null>(null)
 

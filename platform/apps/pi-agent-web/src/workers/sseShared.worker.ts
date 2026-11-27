@@ -35,6 +35,8 @@ const SESSION_EVENTS = [
   // 注意：**新增具名 SSE 事件时必须同步加到这里**，否则共享连接模式下会被静默丢弃
   // （直连 EventSource 没有这个白名单，两边行为会不一致）。
   'plugin',
+  // 分支变化（change: session-tree-and-fork）：宿主合成，pi 的 `session_tree` 只发扩展。
+  'session_branch',
 ] as const
 
 /** 静默超过这个时间的 port 视为已被浏览器回收（标签页崩溃 / 冻结后不再唤醒）。 */
