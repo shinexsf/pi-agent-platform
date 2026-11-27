@@ -64,7 +64,11 @@ export type WorkerMethod =
   | 'getContextUsage'
   | 'getSystemPrompt'
   | 'getSessionResources'
-  | 'setSessionName';
+  | 'setSessionName'
+  // 会话树（change: session-tree-and-fork）：leaf 只在 pi 内存里，master 按需来问。
+  | 'getLeafId'
+  | 'getSessionTree'
+  | 'navigateSessionTree';
 // NOTE: there is deliberately no `pluginEmit` method. A plugin's downlink is its OWN
 // registered method (`<pluginId>.emit`), so "who can receive this" is answered
 // by the registry instead of by a special-cased platform method.
@@ -104,6 +108,8 @@ export type WorkerEventKind = string;
 /** Reserved: the only platform-owned event names (everything else is pi's). */
 export const PLATFORM_EVENT_READY = 'ready';
 export const PLATFORM_EVENT_PLUGIN = 'plugin_event';
+/** 宿主合成的分支变化事件（pi 的 `session_tree` 只发给扩展，订阅者收不到）。 */
+export const PLATFORM_EVENT_SESSION_BRANCH = 'session_branch';
 
 /** Envelope every worker → host event uses. */
 export interface WorkerEvent {

@@ -23,6 +23,7 @@ import type { SessionRepo } from '../repos/session.repo.js';
 import { renameSession as renameSessionOp } from './session-ops.js';
 import { childLogger } from '../logger.js';
 import type { SessionRunState } from '@pi-agent-platform/shared-types';
+import { readSessionFileTail } from './session-file.js';
 import type { WorkerPluginSpec } from '@pi-agent-platform/ipc-protocol';
 import { coreConfig } from '../config.js';
 import { extractExtensionNames, readSettings } from './extension-utils.js';
@@ -114,6 +115,8 @@ interface CreateSessionResult {
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | null;
   /** pi-native session display name (session-title-sync heal input). */
   sessionName?: string;
+  /** 当前分支末端（pi 的 leaf，只在内存里）。仅用于响应，平台不缓存、不落库。 */
+  leafId?: string | null;
 }
 
 /** Phase 1: spawn placeholder worker + createSession (no DB row yet). */
@@ -527,6 +530,100 @@ export class Session {
     slot.draining = false;
   }
 
+  // ── 会话树（change: session-tree-and-fork）─────────────────────────────────
+  //
+  // leaf 只有一份，在 pi 的 SessionManager 里。平台**不缓存、不落库**：
+  // `leafId()` 在 worker 存活时问 pi，不在时按 pi 自己的 open 规则取文件末尾。
+
+  /**
+   * 当前分支末端。worker 存活 → `__core__.getLeafId`；否则 → 文件最后一条 entry。
+   *
+   * 失败面：worker 刚好退出时 IPC 会抛错，此时回落到文件末尾并 warn（不让请求失败）。
+   */
+  async leafId(): Promise<string | null> {
+    if (this.alive) {
+      try {
+        const r = await this.deps.workerPool.call<{ leafId: string | null }>(this.id, 'getLeafId', []);
+        return r?.leafId ?? null;
+      } catch (err) {
+        logger.warn({ err, sessionId: this.id }, 'getLeafId failed (worker just exited?); falling back to file tail');
+      }
+    }
+    return this.fileTail();
+  }
+
+  /** 文件最后一条 entry 的 id（冷会话的 leaf，与 pi 的 `SessionManager.open()` 一致）。 */
+  private fileTail(): string | null {
+    if (!this.piSessionPath) return null;
+    try {
+      return readSessionFileTail(this.piSessionPath);
+    } catch (err) {
+      logger.warn({ err, sessionId: this.id, path: this.piSessionPath }, 'read session file tail failed');
+      return null;
+    }
+  }
+
+  /** 整棵会话树（含被放弃的分支）+ 当前 leaf。需要 worker 存活。 */
+  async getTree(): Promise<{ leafId: string | null; tree: unknown[] }> {
+    if (!this.alive) throw Object.assign(new Error('session worker is not running'), { code: 'worker_not_running' });
+    return this.deps.workerPool.call<{ leafId: string | null; tree: unknown[] }>(this.id, 'getSessionTree', []);
+  }
+
+  /**
+   * 在当前会话文件内移动 leaf（pi 的 `/tree`）。
+   *
+   * 成功后**必须广播**：pi 的 `session_tree` 只发给扩展，订阅者收不到，所以宿主自己
+   * 合成 `session_branch` 发给所有订阅者（多窗口靠它重载历史）。
+   */
+  async navigateTree(entryId: string): Promise<{ leafId: string | null; editorText?: string }> {
+    if (!this.alive) throw Object.assign(new Error('session worker is not running'), { code: 'worker_not_running' });
+    const oldLeafId = await this.leafId();
+    const result = await this.deps.workerPool.call<{ leafId: string | null; editorText?: string }>(
+      this.id,
+      'navigateSessionTree',
+      [entryId],
+    );
+    this.announceBranchChange({ leafId: result?.leafId ?? null, oldLeafId, reason: 'navigate' });
+    return { leafId: result?.leafId ?? null, editorText: result?.editorText };
+  }
+
+  /**
+   * 广播分支变化。
+   *
+   * 走正常的 `deliver()` 队列（与 pi 事件保序），前端收到就重载历史；事件本身不携带
+   * 消息列表——客户端只靠"重新拉一次 /messages"恢复一致视图。
+   */
+  announceBranchChange(payload: {
+    leafId: string | null;
+    oldLeafId: string | null;
+    reason: 'navigate' | 'worker-gone';
+  }): void {
+    this.deliver({ kind: 'event', event: 'session_branch', data: payload });
+  }
+
+  /**
+   * worker 消失前的最后一条通知：leaf 事实随进程一起消失，回落到文件末尾。
+   *
+   * 用**同步**投递（不进队列）：紧接着 `notifyDisposed()` 会清空订阅者，排队的事件
+   * 会被丢掉（`drain` 见到 `disposed` 直接 break）。
+   */
+  announceWorkerGone(): void {
+    if (this.disposed) return;
+    const leafId = this.fileTail();
+    const event: WorkerEvent = {
+      kind: 'event',
+      event: 'session_branch',
+      data: { leafId, oldLeafId: null, reason: 'worker-gone' },
+    };
+    for (const slot of this.listeners.keys()) {
+      try {
+        slot.listener(event);
+      } catch (err) {
+        logger.warn({ err, sessionId: this.id }, 'session_branch (worker-gone) listener threw');
+      }
+    }
+  }
+
   /** Fold lifecycle events into `run` (see SessionRunState). */
   private trackRunState(event: WorkerEvent): void {
     switch (event.event) {
@@ -711,6 +808,14 @@ export class SessionRegistry {
     // Every worker death → object terminal (notify subscribers → SSE closes →
     // client auto-reconnects → re-subscribes to the next object).
     deps.workerPool.on('crash', (sessionId: string) => {
+      // 分支事实随 worker 一起消失（leaf 只在内存里）→ 先同步广播回落到文件末尾，
+      // 再 dispose（dispose 会清空订阅者，之后发就没人收到了）。
+      const session = this.sessions.get(sessionId);
+      try {
+        session?.announceWorkerGone();
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'announce worker-gone failed');
+      }
       this.dispose(sessionId, 'worker-death');
     });
   }
@@ -818,11 +923,18 @@ export class SessionRegistry {
   }
 
   /** Get-or-create a WORKERLESS session object (subscription anchor for SSE /
-   *  repo-only commands). Never spawns. */
-  track(sessionId: string): Session {
+   *  repo-only commands). Never spawns.
+   *
+   *  `opts.piSessionPath` 让冷会话也能回答 `leafId()`（读文件末尾，= pi 的 open 规则）。 */
+  track(sessionId: string, opts?: { piSessionPath?: string }): Session {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (!existing.piSessionPath && opts?.piSessionPath) existing.piSessionPath = opts.piSessionPath;
+      return existing;
+    }
     const session = new Session(sessionId, this.deps);
+    // 冷会话的 leaf 要读文件末尾 —— 记录路径，不 spawn。
+    if (opts?.piSessionPath) session.piSessionPath = opts.piSessionPath;
     session.onOrphaned = () => {
       // Last subscriber left a workerless object → nothing anchors it.
       if (this.sessions.get(sessionId) === session && !session.alive) {

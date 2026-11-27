@@ -33,6 +33,10 @@ export * from './session-timeout-scanner.js';
 export * from './services/session.js';
 export * from './services/session-ops.js';
 export * from './services/attachment-store.js';
+export * from './services/session-file.js';
+export * from './services/session-tree.js';
+// 注：会话 fork 在 `apps/pi-agent-server/src/services/session-fork.ts` —— 它要用 pi 的
+// `SessionManager`，core 故意不依赖 pi（pi 只出现在 worker 与 server 入口）。
 export * from './services/extension-utils.js';
 export * from './services/plugins.js';
 export * from './prompt-resolver.js';

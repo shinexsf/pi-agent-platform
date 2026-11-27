@@ -15,11 +15,14 @@ import {
   childLogger,
   createPluginBus,
   createPluginServices,
+  navigateSessionTree,
+  readSessionTree,
   renameSession,
   pluginActions as pluginActionsSingleton,
   sessionRegistry,
   systemEventPromptOptions,
 } from '@pi-agent-platform/core';
+import { forkSession } from './services/session-fork.js';
 import type Database from 'better-sqlite3';
 
 const logger = childLogger('host-api');
@@ -120,6 +123,16 @@ export function pluginInteropSnapshot(): { topics: ReturnType<typeof pluginBus.t
 }
 
 export function createHostApi(deps: HostApiDeps): HostApi {
+  /**
+   * 树/导航要求 worker 存活（pi 的 leaf 只在进程内存里）。冷会话先懒恢复；
+   * 起不来就让服务层抛 `worker_not_running`（路由映射 409）。
+   */
+  async function reviveForTree(sessionId: string, agentId: string): Promise<void> {
+    if (deps.workerPool.has(sessionId)) return;
+    const agent = deps.agentRepo.get(agentId);
+    if (agent) await sessionRegistry().getOrCreate(sessionId, agent);
+  }
+
   return {
     db: {
       migrate(name, ddl) {
@@ -272,6 +285,46 @@ export function createHostApi(deps: HostApiDeps): HostApi {
         await sessionRegistry().getOrCreate(sessionId, agent);
         const newEntry = deps.workerPool.get(sessionId);
         return { restarted: true as const, workerPid: newEntry?.workerPid ?? -1, historyRestored: true as const };
+      },
+
+      // ── 会话树与 fork（change: session-tree-and-fork）──
+      // 与 HTTP 路由**同一份实现**：这三件事都跨 worker（pi 内存里的 leaf）与 DB 两处，
+      // 插件只有 db.query，自己拼必然漏一半。
+      async tree(sessionId) {
+        const row = deps.sessionRepo.get(sessionId);
+        if (!row) throw Object.assign(new Error(`Session not found: ${sessionId}`), { name: 'NotFoundError' });
+        await reviveForTree(sessionId, row.agentId);
+        return readSessionTree(
+          { workerPool: deps.workerPool, sessionRepo: deps.sessionRepo, sessionRegistry: sessionRegistry() },
+          sessionId,
+        );
+      },
+      async navigate(sessionId, entryId, opts) {
+        const row = deps.sessionRepo.get(sessionId);
+        if (!row) throw Object.assign(new Error(`Session not found: ${sessionId}`), { name: 'NotFoundError' });
+        await reviveForTree(sessionId, row.agentId);
+        return navigateSessionTree(
+          { workerPool: deps.workerPool, sessionRepo: deps.sessionRepo, sessionRegistry: sessionRegistry() },
+          sessionId,
+          entryId,
+          opts,
+        );
+      },
+      async fork(sessionId, opts) {
+        const row = deps.sessionRepo.get(sessionId);
+        if (!row) throw Object.assign(new Error(`Session not found: ${sessionId}`), { name: 'NotFoundError' });
+        const tracked = sessionRegistry().track(sessionId, { piSessionPath: row.piSessionPath });
+        const result = await forkSession(
+          {
+            sessionRepo: deps.sessionRepo,
+            agentRepo: deps.agentRepo,
+            attachmentStore: deps.attachmentStore,
+            resolveLeafId: () => tracked.leafId(),
+          },
+          sessionId,
+          opts ?? {},
+        );
+        return { ...result.session, workerAlive: false };
       },
     },
 

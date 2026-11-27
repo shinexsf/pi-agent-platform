@@ -267,6 +267,13 @@ export interface SessionDTO {
   createdAt: number;
   lastActiveAt: number;
 
+  /**
+   * 血缘（change: session-tree-and-fork）。fork 出的会话才有：
+   * 父会话行 id + 分叉点 entry id（pi 的 entry id 在 fork 后保留，可精确定位）。
+   */
+  parentSessionId?: string;
+  forkedFromEntryId?: string;
+
   /** Runtime worker state (null when no worker is currently running for this session). */
   worker: WorkerSummary | null;
   /** Runtime model provider (e.g. "anthropic"). Together with `model`, fully identifies the runtime model. */

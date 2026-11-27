@@ -53,6 +53,9 @@ interface RawEvent {
   errorMessage?: string;
   success?: boolean;
   finalError?: string;
+  /** 平台合成 `session_branch`：当前 / 之前的分支末端。 */
+  leafId?: string | null;
+  oldLeafId?: string | null;
   /** pi `compaction_*`。 */
   reason?: string;
   tokensBefore?: number;
@@ -337,6 +340,17 @@ export function createSessionProjector(): SessionProjector {
               ...(raw.reason ? { reason: raw.reason } : {}),
               ...(typeof raw.tokensBefore === 'number' ? { tokensBefore: raw.tokensBefore } : {}),
               ...(typeof raw.tokensAfter === 'number' ? { tokensAfter: raw.tokensAfter } : {}),
+            },
+          };
+
+        // 分支变化（宿主合成）：客户端据此重载历史，事件本身不带消息列表。
+        case 'session_branch':
+          return {
+            name: 'session_branch',
+            data: {
+              leafId: typeof raw.leafId === 'string' ? raw.leafId : null,
+              oldLeafId: typeof raw.oldLeafId === 'string' ? raw.oldLeafId : null,
+              reason: raw.reason === 'worker-gone' ? 'worker-gone' : 'navigate',
             },
           };
 

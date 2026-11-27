@@ -43,9 +43,13 @@ export function initDb(databasePath: string): { db: DB; raw: Database.Database }
       pi_session_path TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
       title TEXT,
+      parent_session_id TEXT,
+      forked_from_entry_id TEXT,
       created_at INTEGER NOT NULL,
       last_active_at INTEGER NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 
     -- 插件迁移台账：谁登记过哪些表。plugin remove 用它提示「留下的表」（不自动删）。
     CREATE TABLE IF NOT EXISTS plugin_migrations (

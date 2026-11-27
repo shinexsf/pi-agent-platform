@@ -17,7 +17,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile, unlink, rm, readdir } from 'node:fs/promises';
+import { copyFile, link, mkdir, writeFile, unlink, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DB } from '../db/index.js';
@@ -284,6 +284,57 @@ export class AttachmentStore {
       );
     }
     return { rowsDeleted: result.changes };
+  }
+
+  /**
+   * 把一个会话的附件搬到另一个会话（change: session-tree-and-fork）。
+   *
+   * 行：以新 `sessionId` 复制（`attId` 是内容哈希、跨会话不变，所以 JSONL 里的
+   * `<file att_xxx>` 在新会话里原样命中）。
+   * 文件：`fs.link`（hardlink，零字节复制；删任一方只 unlink 自己的目录项）。
+   * `EXDEV` / `EPERM` / `ENOTSUP`（跨卷 / FAT32 / exFAT）退化为 `copyFile`。
+   *
+   * 返回复制的行数。源会话没有附件时返回 0（不建目录）。
+   */
+  async cloneBySession(fromSessionId: string, toSessionId: string): Promise<{ rowsCopied: number; linked: number; copied: number }> {
+    const rows = this.db.select().from(attachments).where(eq(attachments.sessionId, fromSessionId)).all();
+    if (rows.length === 0) return { rowsCopied: 0, linked: 0, copied: 0 };
+
+    const fromDir = path.join(this.attachmentsDir, fromSessionId);
+    const toDir = path.join(this.attachmentsDir, toSessionId);
+    await mkdir(toDir, { recursive: true });
+
+    let linked = 0;
+    let copied = 0;
+    for (const row of rows) {
+      const src = path.join(fromDir, row.filename);
+      const dst = path.join(toDir, row.filename);
+      try {
+        await link(src, dst);
+        linked += 1;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') {
+          linked += 1; // 目标已存在（同一 sha 之前复制过）—— 视为成功
+          continue;
+        }
+        // 跨卷 / 不支持硬链接的文件系统 → 退化为复制
+        try {
+          await copyFile(src, dst);
+          copied += 1;
+          logger.warn({ err, src, dst, code }, 'hardlink failed; fell back to copyFile');
+        } catch (copyErr) {
+          // 单个文件失败不能让分叉整体失败：行照样复制，读的时候会 404（可诊断）。
+          logger.warn({ err: copyErr, src, dst }, 'attachment file clone failed; row still copied');
+        }
+      }
+      this.db
+        .insert(attachments)
+        .values({ ...row, sessionId: toSessionId })
+        .run();
+    }
+
+    return { rowsCopied: rows.length, linked, copied };
   }
 
   /** Look up a single attachment by ID within a session. Returns null if not found. */

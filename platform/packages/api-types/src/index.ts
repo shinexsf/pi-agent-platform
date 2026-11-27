@@ -531,3 +531,54 @@ export interface NotificationListResponse {
   items: NotificationDTO[];
   unreadCount: number;
 }
+
+// ---------- Session tree（change: session-tree-and-fork）----------
+
+/**
+ * 会话树的一个节点 —— pi 的 JSONL entry 裁剪后的客户端形状。
+ *
+ * `id` / `parentId` MUST 原样保留（前端要用它做"当前分支"判定与定位）；
+ * 其余字段是为了渲染：`preview` 是文本前若干字符，`label` 来自 pi 的 label entry。
+ */
+export interface SessionTreeNodeDTO {
+  id: string;
+  parentId: string | null;
+  /** pi entry 类型：`message` / `custom_message` / `compaction` / `model_change` / … */
+  type: string;
+  /** `type==='message'` 时的 role。 */
+  role?: 'user' | 'assistant' | 'toolResult' | string;
+  /** 一行预览（消息取正文前 N 字，其它类型给个简短描述）。 */
+  preview: string;
+  /** pi 的 label（书签），没有则缺省。 */
+  label?: string;
+  timestamp?: string;
+  /** 子节点数量（前端决定是否画展开箭头）。 */
+  childCount: number;
+  /** 是否当前分支末端。 */
+  isLeaf: boolean;
+  children: SessionTreeNodeDTO[];
+}
+
+/** `GET /api/sessions/:id/tree`。 */
+export interface SessionTreeResponse {
+  sessionId: string;
+  /** 当前分支末端（空会话为 null）。 */
+  leafId: string | null;
+  tree: SessionTreeNodeDTO[];
+}
+
+/** `POST /api/sessions/:id/tree/navigate` 请求体。 */
+export interface SessionNavigateRequest {
+  /** 目标 entry id。 */
+  entryId: string;
+  /** 乐观并发校验：与当前 leaf 不一致时 409（防止多窗口"最后导航赢"静默错位）。 */
+  expectedLeafId?: string;
+}
+
+/** `POST /api/sessions/:id/tree/navigate` 响应。 */
+export interface SessionNavigateResponse {
+  ok: true;
+  leafId: string | null;
+  /** 目标 entry 是 user/custom message 时的文本（"放回输入框"语义）。 */
+  editorText?: string;
+}

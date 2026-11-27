@@ -26,6 +26,8 @@ function rowToDTO(row: typeof sessions.$inferSelect): SessionDTO {
     /** @deprecated — see SessionStatus. Status is no longer mutated; use worker state. */
     status: row.status as SessionStatus,
     title: row.title ?? undefined,
+    ...(row.parentSessionId ? { parentSessionId: row.parentSessionId } : {}),
+    ...(row.forkedFromEntryId ? { forkedFromEntryId: row.forkedFromEntryId } : {}),
     createdAt: row.createdAt,
     lastActiveAt: row.lastActiveAt,
     worker: null, // overwritten by routes via workerPool.toSummary()
@@ -112,6 +114,13 @@ export function createSessionRepo(db: DB) {
       title?: string;
       /** Override agent.model with the worker's resolved actual model (e.g. "deepseek/deepseek-v4-flash"). */
       modelOverride?: string;
+      /**
+       * 血缘（fork）：父会话行 id + 分叉点 entry id。
+       * 给了 snapshot 时，model / thinkingLevel / config 取**父会话行的快照**，
+       * 不再从 agent 复制 —— 分叉出来的会话不该因为 agent 后来改配置而变样。
+       */
+      lineage?: { parentSessionId: string; forkedFromEntryId: string };
+      snapshot?: { model?: string; thinkingLevel?: string | null; config?: AgentConfig };
     }): SessionDTO | undefined {
       const agent = db.select().from(agents).where(eq(agents.id, input.agentId)).get();
       if (!agent) return undefined;
@@ -120,12 +129,19 @@ export function createSessionRepo(db: DB) {
       const row = {
         id: input.sessionId,
         agentId: agent.id,
-        model: input.modelOverride ?? agent.model,
-        thinkingLevel: agent.thinkingLevel ?? null,
-        config: agent.config ?? null,
+        model: input.modelOverride ?? input.snapshot?.model ?? agent.model,
+        thinkingLevel:
+          input.snapshot?.thinkingLevel !== undefined
+            ? input.snapshot.thinkingLevel
+            : (agent.thinkingLevel ?? null),
+        config: input.snapshot?.config
+          ? JSON.stringify(input.snapshot.config)
+          : (agent.config ?? null),
         piSessionPath: input.piSessionPath,
         status: 'active' as const,
         title: input.title ?? null,
+        parentSessionId: input.lineage?.parentSessionId ?? null,
+        forkedFromEntryId: input.lineage?.forkedFromEntryId ?? null,
         createdAt: now,
         lastActiveAt: now,
       };

@@ -38,6 +38,12 @@ export const sessions = sqliteTable(
     status: text('status', { enum: ['active', 'archived'] }).notNull(),
     title: text('title'),
 
+    // ── 血缘（change: session-tree-and-fork）──
+    // fork 出的会话：父会话行 id + 分叉点 entry id（pi 的 entry id 在 fork 后保留，
+    // 所以能精确指到"从哪个节点分的"）。顶层会话两者皆 null。
+    parentSessionId: text('parent_session_id'),
+    forkedFromEntryId: text('forked_from_entry_id'),
+
     createdAt: integer('created_at').notNull(),
     lastActiveAt: integer('last_active_at').notNull(),
   },

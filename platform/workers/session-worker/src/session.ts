@@ -846,7 +846,28 @@ interface AgentSessionLike {
   getActiveToolNames(): string[];
   sendUserMessage(content: string): Promise<void>;
   setSessionName(name: string): void;
-  sessionManager: { getSessionFile(): string | undefined; getSessionName?(): string | undefined };
+  sessionManager: {
+    getSessionFile(): string | undefined;
+    getSessionName?(): string | undefined;
+    /** 当前分支末端（空会话为 null）。pi 的 leaf 只在内存里，不落盘。 */
+    getLeafId(): string | null;
+    /** 会话树（含被放弃的分支）：raw entry 原样透传，master 侧再裁成 DTO。 */
+    getTree(): PiSessionTreeNode[];
+    getLabel(id: string): string | undefined;
+  };
+  /** pi 的 `/tree`：在当前文件内移动 leaf（会同时刷新模型上下文与工具集）。 */
+  navigateTree(
+    targetId: string,
+    options?: { summarize?: boolean },
+  ): Promise<{ cancelled?: boolean; editorText?: string } | undefined>;
+}
+
+/** pi 的树节点形状（`sessionManager.getTree()`）。entry 是原始 JSONL entry。 */
+export interface PiSessionTreeNode {
+  entry: { id: string; parentId: string | null; type: string; timestamp?: string } & Record<string, unknown>;
+  children: PiSessionTreeNode[];
+  label?: string;
+  labelTimestamp?: string;
 }
 
 import type { Model } from '@earendil-works/pi-ai';
@@ -923,6 +944,52 @@ export class PiSessionAdapter {
    *  the jsonl and emits `session_info_changed` (sync, before any IPC response). */
   setSessionName(name: string): void {
     this.real.setSessionName(name);
+  }
+
+  // ── 会话树（change: session-tree-and-fork）────────────────────────────────
+  //
+  // leaf 只有一份：在 pi 的 SessionManager 里（append 无条件 `leafId = entry.id`）。
+  // master 需要时通过这三个方法跨进程读/写，**不缓存**。
+
+  /** 当前分支末端。空会话为 null。master 唯一允许读 leaf 的入口。 */
+  getLeafId(): string | null {
+    return this.real.sessionManager.getLeafId();
+  }
+
+  /** 整棵会话树（含被放弃的分支）+ 当前 leaf。 */
+  getSessionTree(): { leafId: string | null; tree: PiSessionTreeNode[] } {
+    const sm = this.real.sessionManager;
+    const tree = sm.getTree();
+    // getTree() 已经把 labels 挂到节点上了；这里不再二次遍历。
+    return { leafId: sm.getLeafId(), tree };
+  }
+
+  /**
+   * 在当前 pi 会话文件内移动 leaf（pi 的 `/tree`）。
+   *
+   * 必须走 `AgentSession.navigateTree()`：它会刷新 `agent.state.messages`（模型上下文）
+   * 与工具集；直接调 `sessionManager.branch()` 会留下"上下文与分支脱节"的会话。
+   *
+   * 流式中 / 压缩中 pi 会抛错 —— 原样抛出，由 master 映射成 409。
+   */
+  async navigateSessionTree(entryId: string): Promise<{ leafId: string | null; editorText?: string }> {
+    const from = this.real.sessionManager.getLeafId();
+    let result: { cancelled?: boolean; editorText?: string } | undefined;
+    try {
+      result = await this.real.navigateTree(entryId);
+    } catch (err) {
+      logger.warn({ err, entryId, from }, 'navigateTree refused');
+      throw err;
+    }
+    if (result?.cancelled) {
+      throw new Error('tree navigation cancelled by an extension (session_before_tree)');
+    }
+    const leafId = this.real.sessionManager.getLeafId();
+    logger.info(
+      { entryId, from, to: leafId, hasEditorText: !!result?.editorText },
+      'session tree navigated (leaf moved in memory; file untouched until next append)',
+    );
+    return { leafId, editorText: result?.editorText };
   }
 
   async setTools(tools: string[]): Promise<void> {

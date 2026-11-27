@@ -24,7 +24,13 @@ import { resolvePrompt } from '@pi-agent-platform/core';
 import { normalizePath } from '@pi-agent-platform/core';
 import { normalizeAgentConfig } from '@pi-agent-platform/shared-types';
 import { collectConfigIssues } from '../services/config-issues.js';
-import { childLogger } from '@pi-agent-platform/core';
+import {
+  branchEntryIds,
+  childLogger,
+  indexSessionFile,
+  navigateSessionTree,
+} from '@pi-agent-platform/core';
+import { ForkError, forkSession } from '../services/session-fork.js';
 
 const logger = childLogger('session-info');
 
@@ -219,6 +225,23 @@ export function createSessionsRouter(
       const content = await fs.readFile(session.piSessionPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
+      // ---------- branch filter (change: session-tree-and-fork, design D5) ----------
+      // 会话文件是树：一个文件里可能躺着多条（被放弃的）分支。历史 MUST 只返回
+      // 当前分支（root → leaf）上的消息，否则 /tree 一用，废弃分支就混进线性列表。
+      //
+      // leaf 只有一个来源：worker 存活问 pi（`__core__.getLeafId`），否则取文件最后
+      // 一条 entry（= pi `SessionManager.open()` 的规则）。平台不缓存、不落库。
+      const leafSession = sessionRegistry().track(id, { piSessionPath: session.piSessionPath });
+      const leafId = await leafSession.leafId();
+      const fileIndex = indexSessionFile(content);
+      // leafId 缺失（空会话 / 读不到）时不过滤，保持改造前的行为。
+      const branchIds = leafId ? branchEntryIds(fileIndex, leafId) : null;
+      const onBranch = (lineIdx: number): boolean => {
+        if (!branchIds) return true;
+        const entryId = fileIndex.idByLine.get(lineIdx);
+        return entryId !== undefined && branchIds.has(entryId);
+      };
+
       // ---------- paging (change: session-streaming-runtime, group 10) ----------
       // `limit` alone  → tail window (the LAST `limit` entries + page-start alignment)
       // `before=<idx>` → the window ending at that cursor (scroll-up paging)
@@ -245,7 +268,7 @@ export function createSessionsRouter(
         let i = endExclusive - 1;
         for (; i >= 0; i -= 1) {
           const line = lines[i];
-          if (line === undefined || !isMessageLine(line)) continue;
+          if (line === undefined || !isMessageLine(line) || !onBranch(i)) continue;
           collected += 1;
           if (collected >= limit) break;
         }
@@ -256,16 +279,36 @@ export function createSessionsRouter(
         let aligned = -1;
         for (let j = startIdx - 1; j >= 0; j -= 1) {
           const line = lines[j];
-          if (line !== undefined && isMessageLine(line) && line.includes('"role":"user"')) {
+          if (line !== undefined && isMessageLine(line) && onBranch(j) && line.includes('"role":"user"')) {
             aligned = j;
             break;
           }
         }
         if (aligned >= 0) startIdx = aligned;
-        hasMore = startIdx > 0;
+        // hasMore 必须按**当前分支**判断：startIdx > 0 会被"窗口前面全是别的分支"
+        // 或"header / 非消息 entry"骗到，让客户端以为还有更多。
+        hasMore = false;
+        for (let j = startIdx - 1; j >= 0; j -= 1) {
+          const line = lines[j];
+          if (line !== undefined && isMessageLine(line) && onBranch(j)) {
+            hasMore = true;
+            break;
+          }
+        }
       }
 
-      const windowLines = paging ? lines.slice(startIdx, endExclusive) : lines;
+      // 窗口内容必须按分支过滤 —— **分页和非分页都过滤**。
+      // 只过滤"起点扫描"是不够的：startIdx 是按分支消息算出来的，但从 startIdx 到窗口末尾
+      // 之间仍可能夹着别的分支的行（文件是 append 顺序，不是分支顺序）。
+      // 漏了这一条的症状：web 永远带 `?limit=50`（分页路径）→ 切分支后聊天区看起来没变。
+      const windowEntries: Array<{ line: string; idx: number }> = [];
+      for (let i = startIdx; i < (paging ? endExclusive : lines.length); i += 1) {
+        const line = lines[i];
+        if (line === undefined) continue;
+        if (!onBranch(i)) continue;
+        windowEntries.push({ line, idx: i });
+      }
+      const windowLines = windowEntries.map((e) => e.line);
 
       const messages: Array<{
         id: string;
@@ -425,7 +468,9 @@ export function createSessionsRouter(
 
       return c.json({
         sessionId: id,
-        messageCount: paging ? windowLines.filter(isMessageLine).length : messages.length,
+        messageCount: paging
+          ? windowEntries.filter((e) => isMessageLine(e.line)).length
+          : messages.length,
         messages,
         // Paging metadata: `hasMore` + the cursor to pass as `before` for the
         // next (older) page. Absent on full responses so old clients are unaffected.
@@ -477,6 +522,112 @@ export function createSessionsRouter(
         return c.json({ error: 'Server at worker capacity. Please close some tabs.', code: 'capacity_exceeded' }, 503);
       }
       throw err;
+    }
+  });
+
+  // ── 会话树（change: session-tree-and-fork）────────────────────────────────
+  //
+  // 两个端点都要求 worker 存活：pi 的 leaf 只在进程内存里。冷会话先懒恢复
+  // （与 `/prompt` 同一条路径），失败才报错。
+
+  /** 懒恢复：冷会话起 worker（复用行快照），已经活着就直接返回。 */
+  /**
+   * 保证会话可用（worker 存在**且** pi session 已建好）。
+   *
+   * 不能只看 `workerPool.has()`：worker 进程起来到 `createSession` 跑完之间有一个窗口，
+   * 这期间调用内核方法会报 `no active session`（冷会话首次打开分支面板就会踩到）。
+   * 走 `getOrCreate` 可以蹭到同一 id 的 inflight promise（D4：并发首发共享一次 spawn），
+   * 已经在跑就直接等它跑完；会话本来就热时它的快速路径是同步返回，成本可忽略。
+   */
+  async function ensureWorker(id: string): Promise<boolean> {
+    const row = sessionRepo.get(id);
+    const agent = row ? agentRepo.get(row.agentId) : undefined;
+    if (!row || !agent) return false;
+    try {
+      const session = await sessionRegistry().getOrCreate(id, agent);
+      return !!session && workerPool.has(id);
+    } catch (err) {
+      logger.warn({ err, sessionId: id }, 'lazy revive failed');
+      return false;
+    }
+  }
+
+  // 会话树**不再有 HTTP 读端点**（2026-11-27）：树的可视化搬进本机插件
+  // `session-tree`（待转正），平台侧只保留「回退到某条用户消息」这一个动作
+  // （`POST /:id/tree/navigate`）与 `POST /:id/fork`。
+  // 读树的内部面全部保留：`host.sessions.tree()`（插件用）+ worker `getSessionTree`。
+
+  // POST /api/sessions/:id/tree/navigate — 移动 leaf（pi 的 /tree）
+  router.post('/:id/tree/navigate', async (c) => {
+    const id = c.req.param('id');
+    if (!sessionRepo.get(id)) return c.json({ error: 'Session not found' }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { entryId?: string; expectedLeafId?: string };
+    if (!body.entryId) return c.json({ error: 'Missing entryId' }, 400);
+    if (!(await ensureWorker(id))) {
+      return c.json({ error: 'Session worker is not running', code: 'worker_not_running' }, 409);
+    }
+    try {
+      const result = await navigateSessionTree(
+        { workerPool, sessionRepo, sessionRegistry: sessionRegistry() },
+        id,
+        body.entryId,
+        body.expectedLeafId !== undefined ? { expectedLeafId: body.expectedLeafId } : undefined,
+      );
+      return c.json({ ok: true, ...result });
+    } catch (err) {
+      const e = err as { code?: string; message?: string; currentLeafId?: string | null };
+      if (e.code === 'leaf_mismatch') {
+        return c.json({ error: e.message, code: 'leaf_mismatch', leafId: e.currentLeafId ?? null }, 409);
+      }
+      if (e.code === 'entry_not_found') return c.json({ error: e.message, code: 'entry_not_found' }, 404);
+      // 流式中 / 压缩中：pi 抛的是普通 Error（文案固定），映射成 409 让客户端能重试。
+      const msg = e.message ?? 'navigate failed';
+      if (/wait for the current/i.test(msg)) {
+        return c.json({ error: msg, code: 'session_busy' }, 409);
+      }
+      logger.warn({ err, sessionId: id, entryId: body.entryId }, 'navigate session tree failed');
+      return c.json({ error: msg }, 500);
+    }
+  });
+
+  // POST /api/sessions/:id/fork — 抽出一条路径成新会话（fail-closed，不启 worker）
+  router.post('/:id/fork', async (c) => {
+    const id = c.req.param('id');
+    if (!sessionRepo.get(id)) return c.json({ error: 'Session not found' }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      entryId?: string;
+      position?: 'before' | 'at';
+      model?: string;
+      thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
+      title?: string;
+    };
+    // 省略 entryId（clone）需要当前 leaf —— worker 活着问 pi，否则文件末尾。
+    const leafSession = sessionRegistry().track(id, { piSessionPath: sessionRepo.get(id)!.piSessionPath });
+    try {
+      const result = await forkSession(
+        {
+          sessionRepo,
+          agentRepo,
+          attachmentStore,
+          resolveLeafId: () => leafSession.leafId(),
+        },
+        id,
+        body,
+      );
+      return c.json({
+        sessionId: result.session.id,
+        session: result.session,
+        piSessionPath: result.session.piSessionPath,
+        parentSessionId: id,
+        forkedFromEntryId: result.forkedFromEntryId,
+        ...(result.selectedText !== undefined ? { selectedText: result.selectedText } : {}),
+      });
+    } catch (err) {
+      if (err instanceof ForkError) {
+        return c.json({ error: err.message, code: err.code, ...(err.extra ?? {}) }, err.status);
+      }
+      logger.warn({ err, sessionId: id }, 'fork failed');
+      return c.json({ error: `Fork failed: ${(err as Error).message}` }, 500);
     }
   });
 

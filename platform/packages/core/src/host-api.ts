@@ -18,6 +18,7 @@
  */
 
 import type { AgentDTO } from '@pi-agent-platform/shared-types';
+import type { SessionTreeResponse } from '@pi-agent-platform/api-types';
 import type { WorkerEvent } from '@pi-agent-platform/ipc-protocol';
 
 /** 数据面：迁移登记 + 查询。读写都开放（插件完全可信，每次 query 进审计日志）。 */
@@ -92,6 +93,41 @@ export interface HostSessionsApi {
   ): Promise<SessionDTO & { workerAlive: boolean }>;
   /** 优雅 kill → 立即重建并复用 `piSessionPath`。busy 时抛错（不 kill）。 */
   restart(sessionId: string): Promise<{ restarted: true; workerPid: number; historyRestored: true }>;
+
+  // ── 会话树与 fork（change: session-tree-and-fork）──
+  //
+  // 与 HTTP 路由同一份实现。三者都跨 worker（pi 内存里的 leaf）与 DB 两处：
+  // 插件只有 `db.query`，自己拼必然漏一半（读不到 leaf / 忘了血缘与附件）。
+
+  /** 读整棵会话树（含被放弃的分支）+ 当前 leaf。冷会话会先懒恢复 worker。 */
+  tree(sessionId: string): Promise<SessionTreeResponse>;
+  /**
+   * 在当前会话文件内移动 leaf（pi 的 `/tree`）。
+   *
+   * `expectedLeafId` 是乐观并发校验：与当前 leaf 不一致时抛 `leaf_mismatch`
+   * （多窗口"最后导航赢"会让另一个窗口静默错位）。
+   */
+  navigate(
+    sessionId: string,
+    entryId: string,
+    opts?: { expectedLeafId?: string },
+  ): Promise<{ leafId: string | null; editorText?: string }>;
+  /**
+   * 抽出一条路径成新会话（fail-closed；**不启 worker**）。
+   *
+   * 失败语义与 HTTP 一致：`session_not_found` / `entry_not_found` /
+   * `fork_before_first_message` / `source_not_persisted` / `invalid_entry_for_position`。
+   */
+  fork(
+    sessionId: string,
+    opts?: {
+      entryId?: string;
+      position?: 'before' | 'at';
+      model?: string;
+      thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
+      title?: string;
+    },
+  ): Promise<SessionDTO & { workerAlive: boolean }>;
 }
 
 /** `sessions.ensure` 入参。 */

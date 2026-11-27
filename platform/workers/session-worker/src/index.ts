@@ -132,6 +132,8 @@ const forwardHandlers: Record<WorkerMethod, (args: unknown[]) => Promise<unknown
       model: handle.model,
       thinkingLevel: handle.thinkingLevel,
       sessionName: handle.sessionName,
+      // leaf 只在内存里（pi 不落盘）：master 拿到后仅用于响应，不缓存。
+      leafId: session.getLeafId(),
     };
   },
 
@@ -288,6 +290,24 @@ const forwardHandlers: Record<WorkerMethod, (args: unknown[]) => Promise<unknown
     if (!currentSession) throw new Error('no active session');
     return currentSession.getSessionResources();
   },
+
+  // ── 会话树（change: session-tree-and-fork）──
+  // leaf 只在 pi 的 SessionManager 里；master 不缓存，需要时来问。
+  getLeafId: async () => {
+    if (!currentSession) throw new Error('no active session');
+    return { leafId: currentSession.getLeafId() };
+  },
+
+  getSessionTree: async () => {
+    if (!currentSession) throw new Error('no active session');
+    return currentSession.getSessionTree();
+  },
+
+  navigateSessionTree: async (args) => {
+    if (!currentSession) throw new Error('no active session');
+    const [entryId] = args as [string];
+    return currentSession.navigateSessionTree(entryId);
+  },
 };
 
 /** `mirror` = 1:1 pi AgentSession method; `platform` = our own lifecycle method. */
@@ -309,6 +329,9 @@ const FORWARD_METHOD_DESCRIPTIONS: Partial<Record<WorkerMethod, string>> = {
   getContextUsage: '读取上下文用量，pi-native',
   getSystemPrompt: '读取系统提示词，pi-native',
   getSessionResources: '读取会话资源清单，pi-native',
+  getLeafId: '读取当前分支末端（pi 的 leaf，只在内存里），pi-native',
+  getSessionTree: '读取整棵会话树（含被放弃的分支）+ 当前 leaf，pi-native',
+  navigateSessionTree: '在当前会话文件内移动 leaf（= pi 的 /tree），会刷新模型上下文与工具集',
 };
 
 /** Worker-side forward registry is shared with the plugin layer (see methods.ts). */
