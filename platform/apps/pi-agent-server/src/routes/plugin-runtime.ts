@@ -159,6 +159,8 @@ export function createPluginDispatcherRouter(deps: PluginRuntimeRouterDeps): Hon
           query: Object.fromEntries(new URL(c.req.url).searchParams.entries()),
           body: c.req.method === 'GET' || c.req.method === 'HEAD' ? '' : await c.req.text(),
           headers: c.req.raw.headers,
+          // 客户端断开时触发：流式（SSE）插件靠它清理监听器/定时器
+          signal: c.req.raw.signal,
         },
         isEnabled,
       );

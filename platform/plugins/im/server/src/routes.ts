@@ -103,33 +103,66 @@ export function registerRoutes(http: Http, gateway: Gateway): void {
   http({
     method: 'GET',
     path: '/events',
-    handler: () => {
+    handler: (req) => {
       const encoder = new TextEncoder();
       let unsubscribe: (() => void) | undefined;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let closed = false;
+      /** 幂等收尾：撤监听 + 清定时器。 */
+      const cleanup = (): void => {
+        if (closed) return;
+        closed = true;
+        unsubscribe?.();
+        unsubscribe = undefined;
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = undefined;
+      };
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
+          /**
+           * 往流里写一条。
+           *
+           * 三件事都要处理，缺一个就会"客户端走了但服务端还在缓冲"：
+           * 1. `closed`：自己已经收尾了就别再写
+           * 2. enqueue 抛错（流已 cancel/close）→ 收尾
+           * 3. **背压**：客户端不读时 `desiredSize` 会越来越负。继续 enqueue 就是往内存里堆
+           *    （每个渠道日志一条），必须有上限 —— 超了就主动收尾关流，让浏览器自己重连。
+           *    这条**与渠道在线状态无关**：buffer 只取决于"这一侧读不读得动"。
+           */
           const write = (event: string, data: unknown): void => {
+            if (closed) return;
+            const queued = controller.desiredSize;
+            if (queued !== null && queued < -256) {
+              cleanup();
+              try {
+                controller.close();
+              } catch {
+                /* 已经关了 */
+              }
+              return;
+            }
             try {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
             } catch {
-              /* 客户端已断开：下一次 enqueue 会再次抛，交给 cancel 收尾 */
+              cleanup();
             }
           };
+          // 客户端断开：`cancel()` 不一定被调用（浏览器直接关页/断网），必须听 abort。
+          req.signal?.addEventListener('abort', cleanup, { once: true });
           // 先补一份近期日志，页面一打开就不是空白。
           for (const entry of gateway.recentLogs()) write('channel-log', entry);
           unsubscribe = gateway.onLog((entry) => write('channel-log', entry));
           heartbeat = setInterval(() => {
+            if (closed) return;
             try {
               controller.enqueue(encoder.encode(': ping\n\n'));
             } catch {
-              /* ignore */
+              cleanup();
             }
           }, 15_000);
         },
         cancel() {
-          unsubscribe?.();
-          if (heartbeat) clearInterval(heartbeat);
+          cleanup();
         },
       });
       return new Response(stream, {

@@ -644,6 +644,12 @@ function buildHost(plugin: LoadedPlugin, phase: 'register' | 'init'): PluginHost
           ReturnType<PluginSessionsApi['update']>
         >,
       restart: (sessionId) => host.sessions.restart(sessionId),
+      // 会话树 / fork：同上，与路由同一实现；DTO 在插件契约里是宽松形状。
+      tree: async (sessionId) =>
+        host.sessions.tree(sessionId) as unknown as Awaited<ReturnType<PluginSessionsApi['tree']>>,
+      navigate: (sessionId, entryId, opts) => host.sessions.navigate(sessionId, entryId, opts),
+      fork: async (sessionId, opts) =>
+        host.sessions.fork(sessionId, opts) as unknown as Awaited<ReturnType<PluginSessionsApi['fork']>>,
     },
     agents: {
       list: async () => host.agents.list().map((a) => ({ ...a })),
@@ -1236,6 +1242,8 @@ export interface DispatchContext {
   query: Record<string, string>;
   body: string;
   headers: Headers;
+  /** 客户端连接的取消信号（透传给插件，流式响应靠它收尾）。 */
+  signal?: AbortSignal;
 }
 
 /** 已登记的插件 id（含未启用的：用于把「没启用」与「没这条路由」区分开）。 */
@@ -1289,6 +1297,7 @@ export async function dispatchPluginRoute(
     query: ctx.query,
     body: ctx.body,
     header: (name) => ctx.headers.get(name) ?? undefined,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
   };
   const handler = matched.route.handler as PluginRouteHandler;
   const result = await handler(request);

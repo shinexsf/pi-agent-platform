@@ -229,6 +229,14 @@ export interface PluginRouteRequest {
   /** 原始 body 文本（JSON 需插件自行 `JSON.parse`，平台不做猜测）。 */
   body: string;
   header(name: string): string | undefined;
+  /**
+   * 客户端连接的取消信号（HTTP 请求 abort / SSE 客户端断开时触发）。
+   *
+   * **流式响应的插件必须监听它**：`ReadableStream` 的 `cancel()` 在"客户端掉线但没走正常
+   * cancel 路径"（浏览器直接关页、网络断）时**不一定**会被调用，只靠 `cancel()` 清理会
+   * 留下永不释放的监听器和定时器，之后每次写都往一个没人读的流里缓冲。
+   */
+  signal?: AbortSignal;
 }
 
 /** 插件 HTTP 端点的响应。缺省为 200 + JSON 空对象。 */
@@ -449,6 +457,45 @@ export interface PluginSessionsApi {
     patch: { title?: string; model?: string; thinkingLevel?: 'off' | 'low' | 'medium' | 'high'; config?: unknown },
   ): Promise<Record<string, unknown> & { workerAlive: boolean }>;
   restart(sessionId: string): Promise<{ restarted: true; workerPid: number; historyRestored: true }>;
+
+  // ── 会话树与 fork（与 HTTP 路由同一份实现）──
+  /** 读整棵会话树（含被放弃的分支）+ 当前 leaf。冷会话会先懒恢复 worker。 */
+  tree(sessionId: string): Promise<{ sessionId: string; leafId: string | null; tree: PluginSessionTreeNode[] }>;
+  /** 在当前会话文件内移动 leaf（pi 的 `/tree`）。流式中会抛错（映射自 pi 的拒绝）。 */
+  navigate(
+    sessionId: string,
+    entryId: string,
+    opts?: { expectedLeafId?: string },
+  ): Promise<{ leafId: string | null; editorText?: string }>;
+  /**
+   * 抽出一条路径成新会话（fail-closed；**不启 worker**）。
+   * 失败码：`session_not_found` / `entry_not_found` / `invalid_entry_for_position` /
+   * `fork_has_no_conversation` / `source_not_persisted`。
+   */
+  fork(
+    sessionId: string,
+    opts?: {
+      entryId?: string;
+      position?: 'before' | 'at';
+      model?: string;
+      thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
+      title?: string;
+    },
+  ): Promise<Record<string, unknown> & { workerAlive: boolean }>;
+}
+
+/** 会话树节点（插件面形状；与 `api-types` 的 `SessionTreeNodeDTO` 同构）。 */
+export interface PluginSessionTreeNode {
+  id: string;
+  parentId: string | null;
+  type: string;
+  role?: string;
+  preview: string;
+  label?: string;
+  timestamp?: string;
+  childCount: number;
+  isLeaf: boolean;
+  children: PluginSessionTreeNode[];
 }
 
 /** 会话摘要（与内核 `HostSessionSummary` 同形，契约包不依赖内核所以单列一份）。 */
